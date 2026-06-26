@@ -92,8 +92,8 @@ async function start() {
   client.on("ready", () => {
     console.log("✅ Bot ready — listening for messages and scheduling nightly stats");
 
-    // Midnight IST = 18:30 UTC
-    cron.schedule("30 18 * * *", async () => {
+    // 8 PM IST = 14:30 UTC
+    cron.schedule("30 14 * * *", async () => {
       try {
         const stats = await fetchStats();
         await Promise.all(
