@@ -25,10 +25,13 @@ To add more groups, append their IDs to the `GROUP_IDS` array in `bot.js`.
 | Word     | Action                            |
 |----------|-----------------------------------|
 | `!stats` | Replies with current PBCTF stats  |
+| `!sticker` | Sends the saved custom sticker  |
 
 Type `!stats` (exact word) in any configured group to get an on-demand stats snapshot.
 
-To add new triggers or actions, update `TRIGGER_WORDS` and the corresponding handler in the `message` event inside `bot.js`.
+Place one or more sticker files in `stickers/`. When a sticker trigger word is used, the bot randomly picks one file from that folder and sends it as a sticker. Supported file types are `.webp`, `.png`, `.jpg`, and `.jpeg`. To change the sticker trigger words, edit `STICKER_TRIGGER_WORDS` in `bot.js`.
+
+To add new triggers or actions, update the trigger word arrays and the corresponding handler in the `message` event inside `bot.js`.
 
 ## Scheduled Broadcast
 

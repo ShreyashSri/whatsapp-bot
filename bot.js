@@ -1,5 +1,7 @@
 require("dotenv").config();
-const { Client, LocalAuth } = require("whatsapp-web.js");
+const fs = require("fs");
+const path = require("path");
+const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const { MongoClient } = require("mongodb");
 const cron = require("node-cron");
@@ -17,6 +19,39 @@ const GROUP_IDS = [GROUP_ID];
 
 // Trigger words that fetch and display current stats
 const TRIGGER_WORDS = ["!stats"];
+
+// Trigger words that send the saved custom sticker
+const STICKER_TRIGGER_WORDS = ["!sticker", "shreyash", "shreyansh"];
+const STICKER_DIR_PATH = path.join(__dirname, "stickers");
+const STICKER_FILE_EXTENSIONS = new Set([".webp", ".png", ".jpg", ".jpeg"]);
+
+function hasTriggerWord(words, triggerWords) {
+  return triggerWords.some((word) => words.includes(word.toLowerCase()));
+}
+
+async function sendCustomSticker(client, chatId) {
+  if (!fs.existsSync(STICKER_DIR_PATH)) {
+    throw new Error(`Sticker folder not found at ${STICKER_DIR_PATH}`);
+  }
+
+  const stickerFiles = fs
+    .readdirSync(STICKER_DIR_PATH)
+    .filter((file) => STICKER_FILE_EXTENSIONS.has(path.extname(file).toLowerCase()));
+
+  if (stickerFiles.length === 0) {
+    throw new Error(`No sticker files found in ${STICKER_DIR_PATH}`);
+  }
+
+  const randomStickerFile = stickerFiles[Math.floor(Math.random() * stickerFiles.length)];
+  const randomStickerPath = path.join(STICKER_DIR_PATH, randomStickerFile);
+  const sticker = MessageMedia.fromFilePath(randomStickerPath);
+
+  await client.sendMessage(chatId, sticker, {
+    sendMediaAsSticker: true,
+    stickerName: "PBCTF",
+    stickerAuthor: "PointBlank",
+  });
+}
 
 async function fetchStats() {
   const mongo = new MongoClient(MONGO_URI);
@@ -126,7 +161,14 @@ async function start() {
       } catch (err) {
         console.error("❌ Reply error:", err.message);
       }
-    } else if (TRIGGER_WORDS.some((word) => words.includes(word))) {
+    } else if (hasTriggerWord(words, STICKER_TRIGGER_WORDS)) {
+      try {
+        await sendCustomSticker(client, msg.from);
+        console.log(`✅ Custom sticker sent (requested by ${msg.author})`);
+      } catch (err) {
+        console.error("❌ Custom sticker error:", err.message);
+      }
+    } else if (hasTriggerWord(words, TRIGGER_WORDS)) {
       try {
         const stats = await fetchStats();
         await msg.reply(buildMessage(stats, "Current Stats"));
