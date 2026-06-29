@@ -10,6 +10,20 @@
 const CARD_W = 1080;
 const CARD_H = 1350;
 
+// Load the PB logo once at module init and embed it as a data URL in every
+// render. Keeping it as a file (rather than re-fetching a URL per render)
+// makes the renderer self-contained and avoids a network round trip per card.
+const PB_LOGO_PATH = require("path").join(__dirname, "assets", "pb-logo.png");
+const PB_LOGO_DATA_URL = (() => {
+  try {
+    const buf = require("fs").readFileSync(PB_LOGO_PATH);
+    return `data:image/png;base64,${buf.toString("base64")}`;
+  } catch (err) {
+    console.warn(`⚠️ PB logo asset missing at ${PB_LOGO_PATH}: ${err.message}`);
+    return null;
+  }
+})();
+
 // Each preset can carry a default logoUrl. When set, that image is fetched
 // at render time and embedded inside the bottom pill (replacing the `pill`
 // text). The user can still pass their own logoUrl as the 4th part of the
@@ -146,8 +160,13 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     font-weight: 700;
     letter-spacing: 0.05em;
   }
-  .pb-logo .bracket { font-size: 56px; color: #2ed573; line-height: 1; }
-  .pb-logo .row { font-size: 32px; margin-top: 4px; }
+  .pb-logo .mark {
+    width: 220px;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+  }
+  .pb-logo .row { font-size: 32px; margin-top: 6px; }
   .pb-logo .point { color: #2ed573; }
   .pb-logo .blank { color: #fff; }
 
@@ -231,7 +250,9 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
   </svg>
 
   <div class="pb-logo">
-    <div class="bracket">&lt;.&gt;</div>
+    ${PB_LOGO_DATA_URL
+      ? `<img class="mark" src="${PB_LOGO_DATA_URL}" alt="Point Blank mark" />`
+      : `<div style="font-size:56px;color:#2ed573;line-height:1;">&lt;.&gt;</div>`}
     <div class="row"><span class="point">Point</span> <span class="blank">Blank</span></div>
   </div>
 
