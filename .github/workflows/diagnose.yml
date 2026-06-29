@@ -17,14 +17,15 @@ jobs:
           command_timeout: 2m
           script: |
             set +e
+            cd ~/whatsapp-bot
             echo "=== PM2 list ==="
-            pm2 list
+            npx pm2 list
             echo
             echo "=== PM2 info ==="
-            pm2 info whatsapp-bot
+            npx pm2 info whatsapp-bot
             echo
             echo "=== Last 200 log lines ==="
-            pm2 logs whatsapp-bot --lines 200 --nostream
+            npx pm2 logs whatsapp-bot --lines 200 --nostream
             echo
             echo "=== Last 100 error lines ==="
-            pm2 logs whatsapp-bot --err --lines 100 --nostream
+            npx pm2 logs whatsapp-bot --err --lines 100 --nostream
