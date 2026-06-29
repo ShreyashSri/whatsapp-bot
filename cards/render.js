@@ -165,12 +165,28 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
 </html>`;
 }
 
-async function renderCard({ type, name, text, photoBuffer, photoMime = "image/jpeg", logoUrl }) {
+// Returns { png?, pdf? } depending on `formats`.
+// Doing both formats reuses a single Puppeteer page, so adding PDF
+// only adds ~200ms on top of the PNG render.
+async function renderCard({
+  type,
+  name,
+  text,
+  photoBuffer,
+  photoMime = "image/jpeg",
+  logoUrl,
+  formats = ["png"],
+}) {
   if (!photoBuffer || !photoBuffer.length) {
     throw new Error("Missing profile photo");
   }
   if (!TYPES[type]) {
     throw new Error(`Unknown card type "${type}". Use one of: ${Object.keys(TYPES).join(", ")}`);
+  }
+  const wantPng = formats.includes("png");
+  const wantPdf = formats.includes("pdf");
+  if (!wantPng && !wantPdf) {
+    throw new Error("renderCard: at least one format (png|pdf) required");
   }
 
   let logoDataUrl = null;
@@ -202,9 +218,22 @@ async function renderCard({ type, name, text, photoBuffer, photoMime = "image/jp
     await page.setViewport({ width: CARD_W, height: CARD_H, deviceScaleFactor: 1 });
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30_000 });
     await new Promise((r) => setTimeout(r, 300));
-    const buf = await page.screenshot({ type: "png" });
+
+    const out = {};
+    if (wantPng) {
+      out.png = await page.screenshot({ type: "png" });
+    }
+    if (wantPdf) {
+      out.pdf = await page.pdf({
+        width: `${CARD_W}px`,
+        height: `${CARD_H}px`,
+        printBackground: true,
+        margin: { top: 0, right: 0, bottom: 0, left: 0 },
+        preferCSSPageSize: false,
+      });
+    }
     await page.close();
-    return buf;
+    return out;
   } finally {
     await browser.close();
   }

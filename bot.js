@@ -208,6 +208,7 @@ const HELP_TEXT =
   `\`!unposted <id> <stage>\` — un-mark a stage\n` +
   `\`!posted-list\` — list fully posted entries\n` +
   `\`!card <type> | <name> | <text>\` — generate a Congratulations card (attach a photo)\n` +
+  `\`!card-pdf <type> | <name> | <text>\` — same, plus an editable PDF\n` +
   `\`!help [command]\` — this message, or details for one command\n\n` +
   `Type \`!help <command>\` (e.g. \`!help card\`) for full usage.\n\n` +
   `_Stages:_ design • instagram • linkedin • twitter\n` +
@@ -255,7 +256,8 @@ const COMMAND_HELP = {
     `Lists entries that have all four stages marked.`,
 
   card:
-    `*!card <type> | <name> | <text>* (\\| <logoUrl>)\n\n` +
+    `*!card <type> | <name> | <text>* (\\| <logoUrl>)\n` +
+    `*!card-pdf <type> | <name> | <text>* — same as !card, plus an editable PDF\n\n` +
     `Generates a Congratulations card. Attach a profile photo to the *same* message.\n\n` +
     `The *type* controls only the accent color and the bottom pill — the text is yours. ` +
     `Wrap any phrase in [brackets] to highlight it in the accent color.\n\n` +
@@ -269,12 +271,68 @@ const COMMAND_HELP = {
     `• \`custom\` — white, no pill. Also accepts a logo URL.\n\n` +
     `*Examples:*\n` +
     `\`!card gsoc | Manas Hejmadi | For getting selected as mentor in [Google Summer of Code] 2026 with [API Dash]\`\n\n` +
-    `\`!card internship | Priya | Joining [Anthropic] as a Software Engineer Intern | https://example.com/anthropic.png\``,
+    `\`!card-pdf lfx | Shubhang Sinha | For being a [LiFT Scholarship] holder for 2026\`\n\n` +
+    `\`!card internship | Priya | Joining [Anthropic] as a Software Engineer Intern | https://example.com/anthropic.png\`\n\n` +
+    `_PDFs are rendered with text-as-text, so they can be edited in Illustrator, Inkscape, or Figma._`,
 
   "set-media":
     `*!set-media*\n\n` +
     `Self-command sent by this bot's own WhatsApp number inside the target group, to register that group as the media-team group. The group id is saved on the server and persists across restarts. Send it again in another group to switch.`,
 };
+
+async function handleCardCommand(msg, body, cmdPrefix, { withPdf }) {
+  const rest = body.slice(cmdPrefix.length).trim();
+  const parts = rest.includes("\n")
+    ? rest.split("\n").map((s) => s.trim())
+    : rest.split("|").map((s) => s.trim());
+  const [rawType, name, text, logoUrl] = parts;
+
+  if (!rawType || !name || !text) {
+    await msg.reply(COMMAND_HELP.card);
+    return;
+  }
+  const type = rawType.toLowerCase();
+  if (!CARD_TYPES.includes(type)) {
+    await msg.reply(`⚠️ Unknown card type "${rawType}". Use one of: ${CARD_TYPES.join(", ")}\n\nSee \`!help card\` for details.`);
+    return;
+  }
+  if (!msg.hasMedia) {
+    await msg.reply(`⚠️ Attach a profile photo to the same message as the \`${cmdPrefix}\` command.\n\nSee \`!help card\` for details.`);
+    return;
+  }
+
+  try {
+    await msg.reply(`🎨 Rendering ${type} card for ${name}${withPdf ? " (PNG + PDF)" : ""}...`);
+    const media = await msg.downloadMedia();
+    if (!media || !media.data) {
+      await msg.reply("❌ Couldn't download the attached media.");
+      return;
+    }
+    const photoBuffer = Buffer.from(media.data, "base64");
+    const formats = withPdf ? ["png", "pdf"] : ["png"];
+    const out = await renderCard({
+      type, name, text,
+      photoBuffer,
+      photoMime: media.mimetype || "image/jpeg",
+      logoUrl: logoUrl || undefined,
+      formats,
+    });
+    const safeName = name.replace(/[^a-zA-Z0-9-_]+/g, "-").slice(0, 60) || "card";
+
+    if (out.png) {
+      const pngMedia = new MessageMedia("image/png", out.png.toString("base64"), `${safeName}-card.png`);
+      await msg.reply(pngMedia, undefined, { caption: `🎉 ${name}` });
+    }
+    if (out.pdf) {
+      const pdfMedia = new MessageMedia("application/pdf", out.pdf.toString("base64"), `${safeName}-card.pdf`);
+      await msg.reply(pdfMedia, undefined, { caption: `📄 ${name} — editable PDF` });
+    }
+    console.log(`✅ Card rendered: type=${type} name="${name}" formats=${formats.join("+")}`);
+  } catch (err) {
+    console.error("❌ Card render error:", err);
+    await msg.reply(`❌ Card render failed: ${err.message}`);
+  }
+}
 
 async function handleMediaCommand(msg) {
   const body = msg.body.trim();
@@ -288,7 +346,7 @@ async function handleMediaCommand(msg) {
   }
   if (lower.startsWith("!help ")) {
     const cmd = lower.slice(6).trim().replace(/^!/, "");
-    const aliases = { todo: "todo", "to-do": "todo" };
+    const aliases = { todo: "todo", "to-do": "todo", "card-pdf": "card" };
     const key = aliases[cmd] ?? cmd;
     const detail = COMMAND_HELP[key];
     if (!detail) {
@@ -416,53 +474,12 @@ async function handleMediaCommand(msg) {
     return;
   }
 
+  if (lower === "!card-pdf" || lower.startsWith("!card-pdf ") || lower.startsWith("!card-pdf\n")) {
+    await handleCardCommand(msg, body, "!card-pdf", { withPdf: true });
+    return;
+  }
   if (lower === "!card" || lower.startsWith("!card ") || lower.startsWith("!card\n")) {
-    const rest = body.slice(5).trim();
-    // Allow multi-line OR pipe-separated. Don't filter empties so an empty 4th
-    // slot (no logoUrl) stays at index 3 only if the user actually wrote it.
-    const parts = rest.includes("\n")
-      ? rest.split("\n").map((s) => s.trim())
-      : rest.split("|").map((s) => s.trim());
-    const [rawType, name, text, logoUrl] = parts;
-
-    if (!rawType || !name || !text) {
-      await msg.reply(COMMAND_HELP.card);
-      return;
-    }
-    const type = rawType.toLowerCase();
-    if (!CARD_TYPES.includes(type)) {
-      await msg.reply(`⚠️ Unknown card type "${rawType}". Use one of: ${CARD_TYPES.join(", ")}\n\nSee \`!help card\` for details.`);
-      return;
-    }
-    if (!msg.hasMedia) {
-      await msg.reply("⚠️ Attach a profile photo to the same message as the `!card` command.\n\nSee `!help card` for details.");
-      return;
-    }
-
-    try {
-      await msg.reply(`🎨 Rendering ${type} card for ${name}...`);
-      const media = await msg.downloadMedia();
-      if (!media || !media.data) {
-        await msg.reply("❌ Couldn't download the attached media.");
-        return;
-      }
-      const photoBuffer = Buffer.from(media.data, "base64");
-      const pngBuffer = await renderCard({
-        type,
-        name,
-        text,
-        photoBuffer,
-        photoMime: media.mimetype || "image/jpeg",
-        logoUrl: logoUrl || undefined,
-      });
-      const safeName = name.replace(/[^a-zA-Z0-9-_]+/g, "-").slice(0, 60) || "card";
-      const cardMedia = new MessageMedia("image/png", pngBuffer.toString("base64"), `${safeName}-card.png`);
-      await msg.reply(cardMedia, undefined, { caption: `🎉 ${name}` });
-      console.log(`✅ Card rendered: type=${type} name="${name}"`);
-    } catch (err) {
-      console.error("❌ Card render error:", err);
-      await msg.reply(`❌ Card render failed: ${err.message}`);
-    }
+    await handleCardCommand(msg, body, "!card", { withPdf: false });
     return;
   }
 
