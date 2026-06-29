@@ -134,22 +134,37 @@ function writeMediaGroupId(groupId) {
 })();
 
 const POSTS_FILE = path.join(__dirname, "posts.json");
-const PLATFORMS = ["instagram", "linkedin", "twitter"];
+// `design` is a pre-posting checkbox (the creative is ready); the other three
+// are the destinations. All four must flip true for an entry to move to posted.
+const PLATFORMS = ["design", "instagram", "linkedin", "twitter"];
 const PLATFORM_ALIASES = {
+  design: "design", d: "design", des: "design",
   insta: "instagram", instagram: "instagram", ig: "instagram",
   linkedin: "linkedin", li: "linkedin",
   twitter: "twitter", x: "twitter", tw: "twitter",
 };
+function emptyPlatformFlags() {
+  return PLATFORMS.reduce((acc, p) => { acc[p] = false; return acc; }, {});
+}
+function normalizeEntryFlags(entry) {
+  // Old entries (pre-design) won't have every key — fill missing as false.
+  const next = emptyPlatformFlags();
+  if (entry.platforms) {
+    for (const p of PLATFORMS) {
+      if (typeof entry.platforms[p] === "boolean") next[p] = entry.platforms[p];
+    }
+  }
+  entry.platforms = next;
+  return entry;
+}
 
 function readPosts() {
   if (!fs.existsSync(POSTS_FILE)) return { nextId: 1, todo: [], posted: [] };
   try {
     const data = JSON.parse(fs.readFileSync(POSTS_FILE, "utf8"));
-    return {
-      nextId: data.nextId ?? 1,
-      todo: Array.isArray(data.todo) ? data.todo : [],
-      posted: Array.isArray(data.posted) ? data.posted : [],
-    };
+    const todo = Array.isArray(data.todo) ? data.todo.map(normalizeEntryFlags) : [];
+    const posted = Array.isArray(data.posted) ? data.posted.map(normalizeEntryFlags) : [];
+    return { nextId: data.nextId ?? 1, todo, posted };
   } catch (err) {
     console.error("❌ posts.json corrupt, starting fresh:", err.message);
     return { nextId: 1, todo: [], posted: [] };
@@ -189,15 +204,15 @@ const HELP_TEXT =
   `\`!add <text>\` — add a new post to the to-do list\n` +
   `\`!remove <id>\` — remove a post by id (works on both to-do and posted)\n` +
   `\`!to-do\` — list all pending posts with platform status\n` +
-  `\`!posted <id> <platform>\` — mark a post posted on one platform. ` +
-  `Once all three are marked, it moves to posted.\n` +
-  `\`!unposted <id> <platform>\` — un-mark one platform. ` +
-  `If the post was fully posted, it moves back to to-do.\n` +
+  `\`!posted <id> <stage>\` — mark a stage done. ` +
+  `Once all four are marked, the post moves to posted.\n` +
+  `\`!unposted <id> <stage>\` — un-mark a stage. ` +
+  `If the post was already fully done, it moves back to to-do.\n` +
   `\`!posted-list\` — list all fully posted entries\n` +
   `\`!card <type> | <name> | <details>\` — generate a Congratulations card. ` +
   `Attach a profile photo to the same message.\n` +
   `\`!help\` — this message\n\n` +
-  `_Platforms:_ instagram (insta / ig) • linkedin (li) • twitter (x / tw)\n` +
+  `_Stages:_ design (d / des) • instagram (insta / ig) • linkedin (li) • twitter (x / tw)\n` +
   `_Card types:_ ${CARD_TYPES.join(", ")}`;
 
 async function handleMediaCommand(msg) {
@@ -245,7 +260,7 @@ async function handleMediaCommand(msg) {
       text,
       createdAt: new Date().toISOString(),
       createdBy: msg.author ?? msg.from,
-      platforms: { instagram: false, linkedin: false, twitter: false },
+      platforms: emptyPlatformFlags(),
     };
     state.todo.push(entry);
     state.nextId += 1;
@@ -284,18 +299,18 @@ async function handleMediaCommand(msg) {
   if (lower === "!posted" || lower.startsWith("!posted ")) {
     const args = body.slice(7).trim().split(/\s+/).filter(Boolean);
     if (args.length < 2) {
-      await msg.reply("⚠️ Usage: `!posted <id> <platform>` (platform: insta / linkedin / twitter)");
+      await msg.reply("⚠️ Usage: `!posted <id> <stage>` (stage: design / insta / linkedin / twitter)");
       return;
     }
     const id = parseInt(args[0].replace(/^#/, ""), 10);
     if (!Number.isInteger(id)) {
-      await msg.reply("⚠️ Id must be a number. Usage: `!posted <id> <platform>`");
+      await msg.reply("⚠️ Id must be a number. Usage: `!posted <id> <stage>`");
       return;
     }
     const platform = normalizePlatform(args[1]);
     if (!platform) {
       await msg.reply(
-        `⚠️ Unknown platform "${args[1]}". Use one of: instagram (insta / ig), linkedin (li), twitter (x / tw).`
+        `⚠️ Unknown stage "${args[1]}". Use one of: design (d), instagram (insta / ig), linkedin (li), twitter (x / tw).`
       );
       return;
     }
@@ -321,7 +336,7 @@ async function handleMediaCommand(msg) {
     const header = wasAlready
       ? `ℹ️ *#${id}* was already marked on ${platform}.`
       : `✅ *#${id}* marked posted on ${platform}.`;
-    const footer = allDone ? `\n\n🎉 All platforms done — moved to posted.` : "";
+    const footer = allDone ? `\n\n🎉 All stages done — moved to posted.` : "";
     await msg.reply(`${header}\n${platformStatusLine(entry)}${footer}`);
     return;
   }
@@ -388,18 +403,18 @@ async function handleMediaCommand(msg) {
   if (lower === "!unposted" || lower.startsWith("!unposted ")) {
     const args = body.slice(9).trim().split(/\s+/).filter(Boolean);
     if (args.length < 2) {
-      await msg.reply("⚠️ Usage: `!unposted <id> <platform>` (platform: insta / linkedin / twitter)");
+      await msg.reply("⚠️ Usage: `!unposted <id> <stage>` (stage: design / insta / linkedin / twitter)");
       return;
     }
     const id = parseInt(args[0].replace(/^#/, ""), 10);
     if (!Number.isInteger(id)) {
-      await msg.reply("⚠️ Id must be a number. Usage: `!unposted <id> <platform>`");
+      await msg.reply("⚠️ Id must be a number. Usage: `!unposted <id> <stage>`");
       return;
     }
     const platform = normalizePlatform(args[1]);
     if (!platform) {
       await msg.reply(
-        `⚠️ Unknown platform "${args[1]}". Use one of: instagram (insta / ig), linkedin (li), twitter (x / tw).`
+        `⚠️ Unknown stage "${args[1]}". Use one of: design (d), instagram (insta / ig), linkedin (li), twitter (x / tw).`
       );
       return;
     }
