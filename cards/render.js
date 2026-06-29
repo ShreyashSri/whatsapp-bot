@@ -166,8 +166,9 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     display: block;
     margin: 0 auto;
   }
-  .pb-logo .row { font-size: 32px; margin-top: 6px; }
-  .pb-logo .point { color: #2ed573; }
+  /* Match the PB neon lime sampled from the logo PNG (#48F80D). */
+  .pb-logo .row { font-size: 32px; margin-top: 20px; }
+  .pb-logo .point { color: #48F80D; }
   .pb-logo .blank { color: #fff; }
 
   .title {
@@ -252,7 +253,7 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
   <div class="pb-logo">
     ${PB_LOGO_DATA_URL
       ? `<img class="mark" src="${PB_LOGO_DATA_URL}" alt="Point Blank mark" />`
-      : `<div style="font-size:56px;color:#2ed573;line-height:1;">&lt;.&gt;</div>`}
+      : `<div style="font-size:56px;color:#48F80D;line-height:1;">&lt;.&gt;</div>`}
     <div class="row"><span class="point">Point</span> <span class="blank">Blank</span></div>
   </div>
 
