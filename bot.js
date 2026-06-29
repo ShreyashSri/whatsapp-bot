@@ -319,14 +319,13 @@ async function handleCardCommand(msg, body, cmdPrefix, { withPdf }) {
     });
     const safeName = name.replace(/[^a-zA-Z0-9-_]+/g, "-").slice(0, 60) || "card";
 
+    // out.png / out.pdf are already base64 strings from render.js.
     if (out.png) {
-      const b64 = Buffer.from(out.png).toString("base64");
-      const pngMedia = new MessageMedia("image/png", b64, `${safeName}-card.png`);
+      const pngMedia = new MessageMedia("image/png", out.png, `${safeName}-card.png`);
       await msg.reply(pngMedia, undefined, { caption: `🎉 ${name}` });
     }
     if (out.pdf) {
-      const b64 = Buffer.from(out.pdf).toString("base64");
-      const pdfMedia = new MessageMedia("application/pdf", b64, `${safeName}-card.pdf`);
+      const pdfMedia = new MessageMedia("application/pdf", out.pdf, `${safeName}-card.pdf`);
       await msg.reply(pdfMedia, undefined, { caption: `📄 ${name} — editable PDF` });
     }
     console.log(`✅ Card rendered: type=${type} name="${name}" formats=${formats.join("+")}`);

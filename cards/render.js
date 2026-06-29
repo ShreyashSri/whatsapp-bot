@@ -236,11 +236,13 @@ async function renderCard({
     await new Promise((r) => setTimeout(r, 300));
 
     const out = {};
+    // Return base64 strings directly so the caller doesn't have to deal with
+    // Buffer vs Uint8Array differences between Puppeteer versions.
     if (wantPng) {
-      // Puppeteer 21+ returns Uint8Array, not Buffer. Normalize so
-      // .toString("base64") on the consumer side actually produces base64.
-      const data = await page.screenshot({ type: "png" });
-      out.png = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      // Puppeteer's encoding:"base64" gives us a clean base64 string —
+      // skipping the Buffer round-trip avoids the atob-rejected output we
+      // were seeing when wrapping the screenshot Uint8Array via Buffer.from().
+      out.png = await page.screenshot({ type: "png", encoding: "base64" });
     }
     if (wantPdf) {
       const data = await page.pdf({
@@ -250,7 +252,11 @@ async function renderCard({
         margin: { top: 0, right: 0, bottom: 0, left: 0 },
         preferCSSPageSize: false,
       });
-      out.pdf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      // page.pdf() has no encoding option, so do the explicit ArrayBuffer
+      // view → Buffer conversion (rather than Buffer.from(typedArray), which
+      // copies but apparently misreads under this Puppeteer build).
+      const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+      out.pdf = buf.toString("base64");
     }
     await page.close();
     return out;
