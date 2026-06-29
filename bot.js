@@ -426,20 +426,28 @@ async function start() {
         );
         return;
       }
-      if (GROUP_IDS.includes(msg.from)) {
+      // For outgoing (fromMe) messages whatsapp-web.js sets msg.from to the sender's own JID,
+      // not the chat — incoming messages see the chat in msg.from. Use chat.id._serialized so
+      // both events agree on what's stored.
+      const chatId = chat.id?._serialized;
+      if (!chatId) {
+        await msg.reply("❌ Could not resolve chat id from this group. Try again.");
+        return;
+      }
+      if (GROUP_IDS.includes(chatId)) {
         await msg.reply("⚠️ This is the CTF group. Refusing to make it the media group.");
         return;
       }
 
       mediaGroupIds.clear();
-      mediaGroupIds.add(msg.from);
-      writeMediaGroupId(msg.from);
+      mediaGroupIds.add(chatId);
+      writeMediaGroupId(chatId);
 
-      const chatName = chat.name ?? msg.from;
+      const chatName = chat.name ?? chatId;
       await msg.reply(
         `✅ Media group set to *${chatName}*.\n\nTask-manager commands are now live here. Send \`!help\` for the list.`
       );
-      console.log(`✅ Media group set to ${msg.from} (${chatName})`);
+      console.log(`✅ Media group set to ${chatId} (${chatName}); message msg.from was ${msg.from}`);
     } catch (err) {
       console.error("❌ !set-media error:", err.message);
       try { await msg.reply(`❌ Failed to set media group: ${err.message}`); } catch {}
