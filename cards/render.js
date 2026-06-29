@@ -50,8 +50,8 @@ function processHighlights(escapedText) {
 function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
   const cfg = TYPES[type] ?? TYPES.custom;
   const sentenceHtml = processHighlights(escapeHtml(text));
-  const accentSoft = hexToRgba(cfg.accent, 0.07);
-  const titleGlow = hexToRgba(cfg.accent, 0.28);
+  const accentSoft = hexToRgba(cfg.accent, 0.08);
+  const titleGlow = hexToRgba(cfg.accent, 0.18);
   let pillHtml = "";
   if (logoDataUrl) {
     pillHtml = `<div class="pill logo-pill"><img src="${logoDataUrl}" alt="logo" /></div>`;
@@ -74,10 +74,13 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     width: ${CARD_W}px;
     height: ${CARD_H}px;
     background: #07070d;
+    /* Grid layers go LAST in the list so they render on top of the radial
+       gradient. Otherwise the title's text-shadow halo (overlaid on the
+       gradient) washed out the lines around the top half of the card. */
     background-image:
-      radial-gradient(ellipse 70% 50% at 50% 50%, ${accentSoft} 0%, transparent 70%),
-      repeating-linear-gradient(0deg, transparent 0 51px, rgba(80,90,120,0.22) 51px 52px),
-      repeating-linear-gradient(90deg, transparent 0 51px, rgba(80,90,120,0.22) 51px 52px);
+      repeating-linear-gradient(0deg, transparent 0 51px, rgba(150,160,190,0.32) 51px 52px),
+      repeating-linear-gradient(90deg, transparent 0 51px, rgba(150,160,190,0.32) 51px 52px),
+      radial-gradient(ellipse 70% 50% at 50% 50%, ${accentSoft} 0%, transparent 70%);
     font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
     color: #fff;
     position: relative;
@@ -104,7 +107,8 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     font-size: 86px;
     font-weight: 800;
     letter-spacing: -0.02em;
-    text-shadow: 0 0 32px ${titleGlow};
+    /* Smaller blur so the halo doesn't wash out the grid behind the title. */
+    text-shadow: 0 0 18px ${titleGlow};
   }
 
   .avatar {
