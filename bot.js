@@ -412,8 +412,18 @@ async function start() {
     if (body !== "!set-media") return;
 
     try {
-      if (!msg.from.endsWith("@g.us")) {
-        await msg.reply("⚠️ `!set-media` only works inside a group chat.");
+      let chat = null;
+      try {
+        chat = await msg.getChat();
+      } catch (err) {
+        console.error("❌ getChat failed:", err.message);
+      }
+
+      if (!chat?.isGroup) {
+        console.warn(`⚠️ !set-media in non-group chat. from=${msg.from} isGroup=${chat?.isGroup}`);
+        await msg.reply(
+          `⚠️ \`!set-media\` only works inside a group chat.\n(chat id: \`${msg.from}\`)`
+        );
         return;
       }
       if (GROUP_IDS.includes(msg.from)) {
@@ -425,12 +435,7 @@ async function start() {
       mediaGroupIds.add(msg.from);
       writeMediaGroupId(msg.from);
 
-      let chatName = msg.from;
-      try {
-        const chat = await msg.getChat();
-        chatName = chat?.name ?? msg.from;
-      } catch {}
-
+      const chatName = chat.name ?? msg.from;
       await msg.reply(
         `✅ Media group set to *${chatName}*.\n\nTask-manager commands are now live here. Send \`!help\` for the list.`
       );
