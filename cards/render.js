@@ -10,13 +10,25 @@
 const CARD_W = 1080;
 const CARD_H = 1350;
 
+// Each preset can carry a default logoUrl. When set, that image is fetched
+// at render time and embedded inside the bottom pill (replacing the `pill`
+// text). The user can still pass their own logoUrl as the 4th part of the
+// !card command to override it.
 const TYPES = {
-  gsoc:        { accent: "#FBBC04", pill: "Google Summer of Code" },
-  lfx:         { accent: "#5C9BD6", pill: "The Linux Foundation" },
+  gsoc: {
+    accent: "#FBBC04",
+    pill: "Google Summer of Code",
+    logoUrl: "https://developers.google.com/open-source/gsoc/resources/downloads/GSoC-Horizontal.png",
+  },
+  lfx: {
+    accent: "#5C9BD6",
+    pill: "The Linux Foundation",
+    logoUrl: "https://lfx.linuxfoundation.org/wp-content/uploads/2023/01/logo_lfx_nopad.svg",
+  },
   hackathon:   { accent: "#A855F7", pill: "Hackathon Winner" },
   competitive: { accent: "#2ED573", pill: "Competitive Programming" },
   acm:         { accent: "#F5A623", pill: "ACM Summer / Winter School" },
-  internship:  { accent: "#00BCD4", pill: null }, // logo can be provided via logoUrl
+  internship:  { accent: "#00BCD4", pill: null }, // logo provided via logoUrl
   custom:      { accent: "#FFFFFF", pill: null },
 };
 
@@ -45,6 +57,30 @@ function hexToRgba(hex, alpha) {
 // Convert [phrase] markers in already-escaped text to highlighted spans.
 function processHighlights(escapedText) {
   return escapedText.replace(/\[([^\[\]\n]+)\]/g, '<span class="highlight">$1</span>');
+}
+
+// Fetch an image URL and return a base64 data: URL.
+// Falls back to URL-extension sniffing when the server returns a
+// non-image/* content-type (e.g. some CDNs serve SVG as text/xml).
+async function fetchImageAsDataUrl(url) {
+  const res = await fetch(url, { redirect: "follow" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const ctMime = (res.headers.get("content-type") || "").toLowerCase().split(";")[0].trim();
+  const ext = url.split(/[?#]/)[0].split(".").pop().toLowerCase();
+  const inferred = {
+    svg: "image/svg+xml",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+  }[ext];
+  const mime = ctMime.startsWith("image/") ? ctMime : inferred;
+  if (!mime) {
+    throw new Error(`Couldn't determine image type (content-type: ${ctMime || "unknown"})`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  return `data:${mime};base64,${buf.toString("base64")}`;
 }
 
 function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
@@ -210,18 +246,19 @@ async function renderCard({
   }
 
   let logoDataUrl = null;
-  if (logoUrl) {
+  const cfg = TYPES[type];
+  const effectiveLogoUrl = logoUrl || cfg.logoUrl;
+  if (effectiveLogoUrl) {
     try {
-      const res = await fetch(logoUrl, { redirect: "follow" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const mime = (res.headers.get("content-type") || "").toLowerCase().split(";")[0].trim();
-      if (!mime.startsWith("image/")) {
-        throw new Error(`URL is not an image (content-type: ${mime || "unknown"})`);
-      }
-      const buf = Buffer.from(await res.arrayBuffer());
-      logoDataUrl = `data:${mime};base64,${buf.toString("base64")}`;
+      logoDataUrl = await fetchImageAsDataUrl(effectiveLogoUrl);
     } catch (err) {
-      throw new Error(`Couldn't fetch logo URL: ${err.message}`);
+      if (logoUrl) {
+        // User-supplied URL — fail loudly so they fix it.
+        throw new Error(`Couldn't fetch logo URL: ${err.message}`);
+      }
+      // Preset default failed — fall back to the text pill rather than the
+      // whole render bombing. Log so we can see it in PM2 output.
+      console.warn(`⚠️ Preset logo fetch failed for ${type}: ${err.message} (${effectiveLogoUrl})`);
     }
   }
 
