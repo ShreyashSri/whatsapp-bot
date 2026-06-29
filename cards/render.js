@@ -97,11 +97,78 @@ async function fetchImageAsDataUrl(url) {
   return `data:${mime};base64,${buf.toString("base64")}`;
 }
 
+// Build the decorative SVG layer: corner ornaments, sparkles, accent ring
+// around the avatar. Lives below the foreground content (z-index 1) and
+// above the grid (z-index 0). All colors derive from the type's accent.
+function buildDecoSvg(accentHex) {
+  const stroke = hexToRgba(accentHex, 0.65);
+  const strokeSoft = hexToRgba(accentHex, 0.35);
+  const dotFill = hexToRgba(accentHex, 0.75);
+  const dotFillSoft = hexToRgba(accentHex, 0.45);
+
+  // Sparkles — hand-placed so they read as scattered, not gridded. Mix of
+  // small dots and tiny "+" marks. Coordinates are in the 1080x1350 viewBox.
+  const dots = [
+    [150, 240, 3.5], [930, 260, 3], [220, 180, 2.5], [880, 195, 2.5],
+    [85, 365, 3], [1000, 395, 3.5], [120, 880, 3], [965, 905, 3.5],
+    [70, 1090, 2.5], [1015, 1075, 3], [180, 1180, 3.5], [905, 1175, 2.5],
+    [250, 765, 2], [840, 770, 2.5], [430, 175, 2], [665, 165, 2.5],
+  ];
+  const plusMarks = [
+    [110, 305], [980, 320], [60, 700], [1025, 720],
+    [200, 1010], [890, 1010], [330, 220], [770, 230],
+  ];
+  const dotSvg = dots
+    .map(([x, y, r], i) =>
+      `<circle cx="${x}" cy="${y}" r="${r}" fill="${i % 3 === 0 ? dotFill : dotFillSoft}"/>`
+    )
+    .join("");
+  const plusSvg = plusMarks
+    .map(([x, y]) =>
+      `<g stroke="${strokeSoft}" stroke-width="2" stroke-linecap="round">` +
+      `<line x1="${x - 8}" y1="${y}" x2="${x + 8}" y2="${y}"/>` +
+      `<line x1="${x}" y1="${y - 8}" x2="${x}" y2="${y + 8}"/>` +
+      `</g>`
+    )
+    .join("");
+
+  // L-shaped corner brackets. Stroke width 3 reads at this size.
+  const corners =
+    // top-left
+    `<path d="M 60 140 L 60 60 L 140 60" stroke="${stroke}" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
+    `<circle cx="78" cy="78" r="3" fill="${dotFill}"/>` +
+    // top-right
+    `<path d="M 940 60 L 1020 60 L 1020 140" stroke="${stroke}" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
+    `<circle cx="1002" cy="78" r="3" fill="${dotFill}"/>` +
+    // bottom-left
+    `<path d="M 60 1210 L 60 1290 L 140 1290" stroke="${stroke}" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
+    `<circle cx="78" cy="1272" r="3" fill="${dotFill}"/>` +
+    // bottom-right
+    `<path d="M 940 1290 L 1020 1290 L 1020 1210" stroke="${stroke}" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
+    `<circle cx="1002" cy="1272" r="3" fill="${dotFill}"/>`;
+
+  // A pair of concentric soft accent rings around the avatar (the white ring
+  // sits at radius 170; these go just outside, faded out).
+  const avatarRings =
+    `<circle cx="540" cy="550" r="178" fill="none" stroke="${hexToRgba(accentHex, 0.4)}" stroke-width="2"/>` +
+    `<circle cx="540" cy="550" r="194" fill="none" stroke="${hexToRgba(accentHex, 0.18)}" stroke-width="2" stroke-dasharray="6 10"/>`;
+
+  return (
+    `<svg class="deco" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CARD_W} ${CARD_H}" width="${CARD_W}" height="${CARD_H}" aria-hidden="true">` +
+    corners +
+    dotSvg +
+    plusSvg +
+    avatarRings +
+    `</svg>`
+  );
+}
+
 function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
   const cfg = TYPES[type] ?? TYPES.custom;
   const sentenceHtml = processHighlights(escapeHtml(text));
   const accentSoft = hexToRgba(cfg.accent, 0.08);
   const titleGlow = hexToRgba(cfg.accent, 0.18);
+  const decoSvg = buildDecoSvg(cfg.accent);
   let pillHtml = "";
   if (logoDataUrl) {
     pillHtml = `<div class="pill logo-pill"><img src="${logoDataUrl}" alt="logo" /></div>`;
@@ -142,14 +209,15 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     overflow: hidden;
   }
 
-  .grid-bg {
+  .grid-bg, .deco {
     position: absolute;
     top: 0; left: 0;
     width: ${CARD_W}px;
     height: ${CARD_H}px;
-    z-index: 0;
     pointer-events: none;
   }
+  .grid-bg { z-index: 0; }
+  .deco { z-index: 1; }
 
   .pb-logo {
     position: absolute;
@@ -249,6 +317,8 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     </defs>
     <rect width="${CARD_W}" height="${CARD_H}" fill="url(#grid-pattern)"/>
   </svg>
+
+  ${decoSvg}
 
   <div class="pb-logo">
     ${PB_LOGO_DATA_URL
