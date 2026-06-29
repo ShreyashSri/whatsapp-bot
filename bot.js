@@ -201,19 +201,80 @@ function formatPostedEntry(entry) {
 
 const HELP_TEXT =
   `*📋 Task Manager Commands*\n\n` +
-  `\`!add <text>\` — add a new post to the to-do list\n` +
-  `\`!remove <id>\` — remove a post by id (works on both to-do and posted)\n` +
-  `\`!to-do\` — list all pending posts with platform status\n` +
-  `\`!posted <id> <stage>\` — mark a stage done. ` +
-  `Once all four are marked, the post moves to posted.\n` +
-  `\`!unposted <id> <stage>\` — un-mark a stage. ` +
-  `If the post was already fully done, it moves back to to-do.\n` +
-  `\`!posted-list\` — list all fully posted entries\n` +
-  `\`!card <type> | <name> | <details>\` — generate a Congratulations card. ` +
-  `Attach a profile photo to the same message.\n` +
-  `\`!help\` — this message\n\n` +
-  `_Stages:_ design (d / des) • instagram (insta / ig) • linkedin (li) • twitter (x / tw)\n` +
+  `\`!add <text>\` — add a post to to-do\n` +
+  `\`!remove <id>\` — remove a post (works on both lists)\n` +
+  `\`!to-do\` — list pending posts\n` +
+  `\`!posted <id> <stage>\` — mark a stage done\n` +
+  `\`!unposted <id> <stage>\` — un-mark a stage\n` +
+  `\`!posted-list\` — list fully posted entries\n` +
+  `\`!card <type> | <name> | <text>\` — generate a Congratulations card (attach a photo)\n` +
+  `\`!help [command]\` — this message, or details for one command\n\n` +
+  `Type \`!help <command>\` (e.g. \`!help card\`) for full usage.\n\n` +
+  `_Stages:_ design • instagram • linkedin • twitter\n` +
   `_Card types:_ ${CARD_TYPES.join(", ")}`;
+
+const COMMAND_HELP = {
+  help:
+    `*!help [command]*\n\n` +
+    `Without args, shows the command list. Pass a command name for detailed usage:\n` +
+    `\`!help card\`, \`!help posted\`, \`!help add\`, etc.`,
+
+  add:
+    `*!add <text>*\n\n` +
+    `Adds a post to the to-do list. The bot replies with the assigned id (#1, #2, ...). ` +
+    `The text can be anything you want to track — a topic, a draft idea, a link.\n\n` +
+    `*Example:*\n\`!add Post about Shubhang's LFX selection\``,
+
+  remove:
+    `*!remove <id>*\n\n` +
+    `Removes an entry by id. Searches both the to-do list and the posted list, so you can clean up either.\n\n` +
+    `*Example:*\n\`!remove 3\``,
+
+  todo:
+    `*!to-do*\n\n` +
+    `Lists every pending post with its stage checkboxes (design, instagram, linkedin, twitter). ` +
+    `Alias: \`!todo\`.`,
+
+  posted:
+    `*!posted <id> <stage>*\n\n` +
+    `Marks one stage as done for a post. When all four stages are marked, the entry auto-moves to posted.\n\n` +
+    `*Stages and aliases:*\n` +
+    `• design — \`d\`, \`des\`\n` +
+    `• instagram — \`insta\`, \`ig\`\n` +
+    `• linkedin — \`li\`\n` +
+    `• twitter — \`x\`, \`tw\`\n\n` +
+    `*Example:*\n\`!posted 3 insta\``,
+
+  unposted:
+    `*!unposted <id> <stage>*\n\n` +
+    `Un-marks one stage. If the entry was already fully posted, it moves back to to-do so the workflow can resume.\n\n` +
+    `*Example:*\n\`!unposted 3 insta\``,
+
+  "posted-list":
+    `*!posted-list*\n\n` +
+    `Lists entries that have all four stages marked.`,
+
+  card:
+    `*!card <type> | <name> | <text>* (\\| <logoUrl>)\n\n` +
+    `Generates a Congratulations card. Attach a profile photo to the *same* message.\n\n` +
+    `The *type* controls only the accent color and the bottom pill — the text is yours. ` +
+    `Wrap any phrase in [brackets] to highlight it in the accent color.\n\n` +
+    `*Types:*\n` +
+    `• \`gsoc\` — gold, "Google Summer of Code" pill\n` +
+    `• \`lfx\` — blue, "The Linux Foundation" pill\n` +
+    `• \`hackathon\` — purple, "Hackathon Winner" pill\n` +
+    `• \`competitive\` — green, "Competitive Programming" pill\n` +
+    `• \`acm\` — orange, "ACM Summer / Winter School" pill\n` +
+    `• \`internship\` — cyan, no pill by default. Pass a logo URL as a 4th part to put the company logo in the pill.\n` +
+    `• \`custom\` — white, no pill. Also accepts a logo URL.\n\n` +
+    `*Examples:*\n` +
+    `\`!card gsoc | Manas Hejmadi | For getting selected as mentor in [Google Summer of Code] 2026 with [API Dash]\`\n\n` +
+    `\`!card internship | Priya | Joining [Anthropic] as a Software Engineer Intern | https://example.com/anthropic.png\``,
+
+  "set-media":
+    `*!set-media*\n\n` +
+    `Self-command sent by this bot's own WhatsApp number inside the target group, to register that group as the media-team group. The group id is saved on the server and persists across restarts. Send it again in another group to switch.`,
+};
 
 async function handleMediaCommand(msg) {
   const body = msg.body.trim();
@@ -223,6 +284,20 @@ async function handleMediaCommand(msg) {
 
   if (lower === "!help") {
     await msg.reply(HELP_TEXT);
+    return;
+  }
+  if (lower.startsWith("!help ")) {
+    const cmd = lower.slice(6).trim().replace(/^!/, "");
+    const aliases = { todo: "todo", "to-do": "todo" };
+    const key = aliases[cmd] ?? cmd;
+    const detail = COMMAND_HELP[key];
+    if (!detail) {
+      await msg.reply(
+        `⚠️ No detailed help for "${cmd}".\nKnown: ${Object.keys(COMMAND_HELP).map((k) => "`!" + k + "`").join(", ")}`
+      );
+      return;
+    }
+    await msg.reply(detail);
     return;
   }
 
@@ -343,39 +418,29 @@ async function handleMediaCommand(msg) {
 
   if (lower === "!card" || lower.startsWith("!card ") || lower.startsWith("!card\n")) {
     const rest = body.slice(5).trim();
-    let parts;
-    if (rest.includes("\n")) {
-      parts = rest.split("\n").map((s) => s.trim()).filter(Boolean);
-    } else {
-      parts = rest.split("|").map((s) => s.trim()).filter(Boolean);
-    }
-    const [rawType, name, details] = parts;
-    const usage =
-      `⚠️ Usage:\n` +
-      `\`!card <type> | <name> | <details>\`\n` +
-      `(attach a profile photo to the same message)\n\n` +
-      `_Types:_ ${CARD_TYPES.join(", ")}\n\n` +
-      `*Examples:*\n` +
-      `\`!card lfx | Shubhang Sinha | 2026 at Talent Angels\`\n` +
-      `\`!card gsoc | Jane Doe | '25 at Keploy\`\n` +
-      `\`!card hackathon | John Roe | SIH '25\``;
+    // Allow multi-line OR pipe-separated. Don't filter empties so an empty 4th
+    // slot (no logoUrl) stays at index 3 only if the user actually wrote it.
+    const parts = rest.includes("\n")
+      ? rest.split("\n").map((s) => s.trim())
+      : rest.split("|").map((s) => s.trim());
+    const [rawType, name, text, logoUrl] = parts;
 
-    if (!rawType || !name || !details) {
-      await msg.reply(usage);
+    if (!rawType || !name || !text) {
+      await msg.reply(COMMAND_HELP.card);
       return;
     }
     const type = rawType.toLowerCase();
     if (!CARD_TYPES.includes(type)) {
-      await msg.reply(`⚠️ Unknown card type "${rawType}". Use one of: ${CARD_TYPES.join(", ")}`);
+      await msg.reply(`⚠️ Unknown card type "${rawType}". Use one of: ${CARD_TYPES.join(", ")}\n\nSee \`!help card\` for details.`);
       return;
     }
     if (!msg.hasMedia) {
-      await msg.reply("⚠️ Attach a profile photo to the same message as the `!card` command.");
+      await msg.reply("⚠️ Attach a profile photo to the same message as the `!card` command.\n\nSee `!help card` for details.");
       return;
     }
 
     try {
-      await msg.reply(`🎨 Rendering ${type} card for ${name}... (10s)`);
+      await msg.reply(`🎨 Rendering ${type} card for ${name}...`);
       const media = await msg.downloadMedia();
       if (!media || !media.data) {
         await msg.reply("❌ Couldn't download the attached media.");
@@ -385,9 +450,10 @@ async function handleMediaCommand(msg) {
       const pngBuffer = await renderCard({
         type,
         name,
-        details,
+        text,
         photoBuffer,
         photoMime: media.mimetype || "image/jpeg",
+        logoUrl: logoUrl || undefined,
       });
       const safeName = name.replace(/[^a-zA-Z0-9-_]+/g, "-").slice(0, 60) || "card";
       const cardMedia = new MessageMedia("image/png", pngBuffer.toString("base64"), `${safeName}-card.png`);
