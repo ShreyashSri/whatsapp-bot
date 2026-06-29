@@ -186,10 +186,12 @@ function formatPostedEntry(entry) {
 const HELP_TEXT =
   `*📋 Task Manager Commands*\n\n` +
   `\`!add <text>\` — add a new post to the to-do list\n` +
-  `\`!remove <id>\` — remove a to-do post by id\n` +
+  `\`!remove <id>\` — remove a post by id (works on both to-do and posted)\n` +
   `\`!to-do\` — list all pending posts with platform status\n` +
   `\`!posted <id> <platform>\` — mark a post posted on one platform. ` +
   `Once all three are marked, it moves to posted.\n` +
+  `\`!unposted <id> <platform>\` — un-mark one platform. ` +
+  `If the post was fully posted, it moves back to to-do.\n` +
   `\`!posted-list\` — list all fully posted entries\n` +
   `\`!help\` — this message\n\n` +
   `_Platforms:_ instagram (insta / ig) • linkedin (li) • twitter (x / tw)`;
@@ -256,14 +258,22 @@ async function handleMediaCommand(msg) {
       return;
     }
     const state = readPosts();
-    const idx = state.todo.findIndex((e) => e.id === id);
-    if (idx === -1) {
-      await msg.reply(`❌ No to-do entry with id *#${id}*.`);
+    const todoIdx = state.todo.findIndex((e) => e.id === id);
+    const postedIdx = state.posted.findIndex((e) => e.id === id);
+    let removed;
+    let where;
+    if (todoIdx !== -1) {
+      [removed] = state.todo.splice(todoIdx, 1);
+      where = "to-do";
+    } else if (postedIdx !== -1) {
+      [removed] = state.posted.splice(postedIdx, 1);
+      where = "posted";
+    } else {
+      await msg.reply(`❌ No entry with id *#${id}*.`);
       return;
     }
-    const [removed] = state.todo.splice(idx, 1);
     writePosts(state);
-    await msg.reply(`🗑️ Removed *#${removed.id}* — ${removed.text}`);
+    await msg.reply(`🗑️ Removed *#${removed.id}* from ${where} — ${removed.text}`);
     return;
   }
 
@@ -308,6 +318,53 @@ async function handleMediaCommand(msg) {
       ? `ℹ️ *#${id}* was already marked on ${platform}.`
       : `✅ *#${id}* marked posted on ${platform}.`;
     const footer = allDone ? `\n\n🎉 All platforms done — moved to posted.` : "";
+    await msg.reply(`${header}\n${platformStatusLine(entry)}${footer}`);
+    return;
+  }
+
+  if (lower === "!unposted" || lower.startsWith("!unposted ")) {
+    const args = body.slice(9).trim().split(/\s+/).filter(Boolean);
+    if (args.length < 2) {
+      await msg.reply("⚠️ Usage: `!unposted <id> <platform>` (platform: insta / linkedin / twitter)");
+      return;
+    }
+    const id = parseInt(args[0].replace(/^#/, ""), 10);
+    if (!Number.isInteger(id)) {
+      await msg.reply("⚠️ Id must be a number. Usage: `!unposted <id> <platform>`");
+      return;
+    }
+    const platform = normalizePlatform(args[1]);
+    if (!platform) {
+      await msg.reply(
+        `⚠️ Unknown platform "${args[1]}". Use one of: instagram (insta / ig), linkedin (li), twitter (x / tw).`
+      );
+      return;
+    }
+    const state = readPosts();
+    let entry = state.todo.find((e) => e.id === id);
+    let movedBackFromPosted = false;
+    if (!entry) {
+      const postedIdx = state.posted.findIndex((e) => e.id === id);
+      if (postedIdx !== -1) {
+        entry = state.posted[postedIdx];
+        state.posted.splice(postedIdx, 1);
+        delete entry.postedAt;
+        state.todo.push(entry);
+        movedBackFromPosted = true;
+      }
+    }
+    if (!entry) {
+      await msg.reply(`❌ No entry with id *#${id}*.`);
+      return;
+    }
+    const wasMarked = entry.platforms[platform];
+    entry.platforms[platform] = false;
+    writePosts(state);
+
+    const header = wasMarked
+      ? `↩️ *#${id}* un-marked on ${platform}.`
+      : `ℹ️ *#${id}* was not marked on ${platform}.`;
+    const footer = movedBackFromPosted ? `\n\n📋 Moved back to to-do.` : "";
     await msg.reply(`${header}\n${platformStatusLine(entry)}${footer}`);
     return;
   }
