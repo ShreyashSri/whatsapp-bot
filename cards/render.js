@@ -29,6 +29,19 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
+// Convert a #RRGGBB hex to rgba() with the given alpha.
+// We use explicit rgba (instead of CSS color-mix) because Chrome's PDF
+// renderer is unreliable with color-mix in box/text-shadow values.
+function hexToRgba(hex, alpha) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return `rgba(255,255,255,${alpha})`;
+  const v = m[1];
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 // Convert [phrase] markers in already-escaped text to highlighted spans.
 function processHighlights(escapedText) {
   return escapedText.replace(/\[([^\[\]\n]+)\]/g, '<span class="highlight">$1</span>');
@@ -37,6 +50,8 @@ function processHighlights(escapedText) {
 function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
   const cfg = TYPES[type] ?? TYPES.custom;
   const sentenceHtml = processHighlights(escapeHtml(text));
+  const accentSoft = hexToRgba(cfg.accent, 0.07);
+  const titleGlow = hexToRgba(cfg.accent, 0.28);
   let pillHtml = "";
   if (logoDataUrl) {
     pillHtml = `<div class="pill logo-pill"><img src="${logoDataUrl}" alt="logo" /></div>`;
@@ -60,7 +75,7 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     height: ${CARD_H}px;
     background: #07070d;
     background-image:
-      radial-gradient(ellipse 70% 50% at 50% 50%, color-mix(in srgb, var(--accent) 7%, transparent) 0%, transparent 70%),
+      radial-gradient(ellipse 70% 50% at 50% 50%, ${accentSoft} 0%, transparent 70%),
       repeating-linear-gradient(0deg, transparent 0 51px, rgba(80,90,120,0.22) 51px 52px),
       repeating-linear-gradient(90deg, transparent 0 51px, rgba(80,90,120,0.22) 51px 52px);
     font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
@@ -89,7 +104,7 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     font-size: 86px;
     font-weight: 800;
     letter-spacing: -0.02em;
-    text-shadow: 0 0 32px color-mix(in srgb, var(--accent) 30%, transparent);
+    text-shadow: 0 0 32px ${titleGlow};
   }
 
   .avatar {
@@ -100,9 +115,10 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     border-radius: 50%;
     overflow: hidden;
     background: #1a1a2e;
-    box-shadow:
-      0 0 0 6px rgba(255,255,255,0.6),
-      0 0 60px color-mix(in srgb, var(--accent) 30%, transparent);
+    /* The accent-color blur shadow renders as a hard rounded square in
+       Chrome's PDF engine on circular elements, so we keep only the
+       hard white ring here. */
+    box-shadow: 0 0 0 6px rgba(255,255,255,0.6);
   }
   .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
