@@ -106,16 +106,21 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
   :root { --accent: ${cfg.accent}; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
+  /* Force Chrome to preserve background images (including SVG data URLs) when
+     rendering to PDF. Without this, page.pdf() drops the grid layer entirely. */
+  html, body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
   body {
     width: ${CARD_W}px;
     height: ${CARD_H}px;
     background: #07070d;
-    /* Grid layers go LAST in the list so they render on top of the radial
-       gradient. Otherwise the title's text-shadow halo (overlaid on the
-       gradient) washed out the lines around the top half of the card. */
+    /* Accent radial overlay only — the grid is now an inline SVG element
+       below, because Chrome's PDF rendering ghosts repeating-linear-gradient
+       and drops SVG data-URL backgrounds even with print-color-adjust. An
+       inline <svg> with <pattern> renders reliably in both PNG and PDF. */
     background-image:
-      repeating-linear-gradient(0deg, transparent 0 51px, rgba(150,160,190,0.32) 51px 52px),
-      repeating-linear-gradient(90deg, transparent 0 51px, rgba(150,160,190,0.32) 51px 52px),
       radial-gradient(ellipse 70% 50% at 50% 50%, ${accentSoft} 0%, transparent 70%);
     font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
     color: #fff;
@@ -123,10 +128,20 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     overflow: hidden;
   }
 
+  .grid-bg {
+    position: absolute;
+    top: 0; left: 0;
+    width: ${CARD_W}px;
+    height: ${CARD_H}px;
+    z-index: 0;
+    pointer-events: none;
+  }
+
   .pb-logo {
     position: absolute;
     top: 70px; left: 0; right: 0;
     text-align: center;
+    z-index: 2;
     font-family: 'JetBrains Mono', monospace;
     font-weight: 700;
     letter-spacing: 0.05em;
@@ -145,6 +160,7 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
     letter-spacing: -0.02em;
     /* Smaller blur so the halo doesn't wash out the grid behind the title. */
     text-shadow: 0 0 18px ${titleGlow};
+    z-index: 2;
   }
 
   .avatar {
@@ -205,6 +221,15 @@ function buildHtml({ type, name, text, photoDataUrl, logoDataUrl }) {
 </style>
 </head>
 <body>
+  <svg class="grid-bg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CARD_W} ${CARD_H}" width="${CARD_W}" height="${CARD_H}" aria-hidden="true">
+    <defs>
+      <pattern id="grid-pattern" width="52" height="52" patternUnits="userSpaceOnUse">
+        <path d="M 52 0 L 0 0 0 52" fill="none" stroke="#969FBE" stroke-opacity="0.34" stroke-width="1"/>
+      </pattern>
+    </defs>
+    <rect width="${CARD_W}" height="${CARD_H}" fill="url(#grid-pattern)"/>
+  </svg>
+
   <div class="pb-logo">
     <div class="bracket">&lt;.&gt;</div>
     <div class="row"><span class="point">Point</span> <span class="blank">Blank</span></div>
@@ -273,8 +298,13 @@ async function renderCard({
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: CARD_W, height: CARD_H, deviceScaleFactor: 1 });
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: 30_000 });
-    await new Promise((r) => setTimeout(r, 300));
+    // Use "load" rather than "networkidle0" — Google Fonts keep-alive can keep
+    // a TCP socket open forever, never letting networkidle0 fire. Then wait
+    // explicitly for document.fonts.ready so we don't screenshot before glyphs
+    // are painted.
+    await page.setContent(html, { waitUntil: "load", timeout: 30_000 });
+    await page.evaluate(() => document.fonts && document.fonts.ready);
+    await new Promise((r) => setTimeout(r, 150));
 
     const out = {};
     // Return base64 strings directly so the caller doesn't have to deal with
