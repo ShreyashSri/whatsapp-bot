@@ -221,16 +221,20 @@ async function renderCard({
 
     const out = {};
     if (wantPng) {
-      out.png = await page.screenshot({ type: "png" });
+      // Puppeteer 21+ returns Uint8Array, not Buffer. Normalize so
+      // .toString("base64") on the consumer side actually produces base64.
+      const data = await page.screenshot({ type: "png" });
+      out.png = Buffer.isBuffer(data) ? data : Buffer.from(data);
     }
     if (wantPdf) {
-      out.pdf = await page.pdf({
+      const data = await page.pdf({
         width: `${CARD_W}px`,
         height: `${CARD_H}px`,
         printBackground: true,
         margin: { top: 0, right: 0, bottom: 0, left: 0 },
         preferCSSPageSize: false,
       });
+      out.pdf = Buffer.isBuffer(data) ? data : Buffer.from(data);
     }
     await page.close();
     return out;
