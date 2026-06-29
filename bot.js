@@ -5,6 +5,7 @@ const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const { MongoClient } = require("mongodb");
 const cron = require("node-cron");
+const { renderCard, CARD_TYPES } = require("./cards/render.js");
 
 const MONGO_URI = process.env.MONGO_URI;
 const GROUP_ID = process.env.GROUP_ID;
@@ -193,8 +194,11 @@ const HELP_TEXT =
   `\`!unposted <id> <platform>\` — un-mark one platform. ` +
   `If the post was fully posted, it moves back to to-do.\n` +
   `\`!posted-list\` — list all fully posted entries\n` +
+  `\`!card <type> | <name> | <details>\` — generate a Congratulations card. ` +
+  `Attach a profile photo to the same message.\n` +
   `\`!help\` — this message\n\n` +
-  `_Platforms:_ instagram (insta / ig) • linkedin (li) • twitter (x / tw)`;
+  `_Platforms:_ instagram (insta / ig) • linkedin (li) • twitter (x / tw)\n` +
+  `_Card types:_ ${CARD_TYPES.join(", ")}`;
 
 async function handleMediaCommand(msg) {
   const body = msg.body.trim();
@@ -319,6 +323,65 @@ async function handleMediaCommand(msg) {
       : `✅ *#${id}* marked posted on ${platform}.`;
     const footer = allDone ? `\n\n🎉 All platforms done — moved to posted.` : "";
     await msg.reply(`${header}\n${platformStatusLine(entry)}${footer}`);
+    return;
+  }
+
+  if (lower === "!card" || lower.startsWith("!card ") || lower.startsWith("!card\n")) {
+    const rest = body.slice(5).trim();
+    let parts;
+    if (rest.includes("\n")) {
+      parts = rest.split("\n").map((s) => s.trim()).filter(Boolean);
+    } else {
+      parts = rest.split("|").map((s) => s.trim()).filter(Boolean);
+    }
+    const [rawType, name, details] = parts;
+    const usage =
+      `⚠️ Usage:\n` +
+      `\`!card <type> | <name> | <details>\`\n` +
+      `(attach a profile photo to the same message)\n\n` +
+      `_Types:_ ${CARD_TYPES.join(", ")}\n\n` +
+      `*Examples:*\n` +
+      `\`!card lfx | Shubhang Sinha | 2026 at Talent Angels\`\n` +
+      `\`!card gsoc | Jane Doe | '25 at Keploy\`\n` +
+      `\`!card hackathon | John Roe | SIH '25\``;
+
+    if (!rawType || !name || !details) {
+      await msg.reply(usage);
+      return;
+    }
+    const type = rawType.toLowerCase();
+    if (!CARD_TYPES.includes(type)) {
+      await msg.reply(`⚠️ Unknown card type "${rawType}". Use one of: ${CARD_TYPES.join(", ")}`);
+      return;
+    }
+    if (!msg.hasMedia) {
+      await msg.reply("⚠️ Attach a profile photo to the same message as the `!card` command.");
+      return;
+    }
+
+    try {
+      await msg.reply(`🎨 Rendering ${type} card for ${name}... (10s)`);
+      const media = await msg.downloadMedia();
+      if (!media || !media.data) {
+        await msg.reply("❌ Couldn't download the attached media.");
+        return;
+      }
+      const photoBuffer = Buffer.from(media.data, "base64");
+      const pngBuffer = await renderCard({
+        type,
+        name,
+        details,
+        photoBuffer,
+        photoMime: media.mimetype || "image/jpeg",
+      });
+      const safeName = name.replace(/[^a-zA-Z0-9-_]+/g, "-").slice(0, 60) || "card";
+      const cardMedia = new MessageMedia("image/png", pngBuffer.toString("base64"), `${safeName}-card.png`);
+      await msg.reply(cardMedia, undefined, { caption: `🎉 ${name}` });
+      console.log(`✅ Card rendered: type=${type} name="${name}"`);
+    } catch (err) {
+      console.error("❌ Card render error:", err);
+      await msg.reply(`❌ Card render failed: ${err.message}`);
+    }
     return;
   }
 
