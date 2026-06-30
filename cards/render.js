@@ -41,7 +41,11 @@ const TYPES = {
   },
   hackathon:   { accent: "#A855F7", pill: "Hackathon Winner" },
   competitive: { accent: "#2ED573", pill: "Competitive Programming" },
-  acm:         { accent: "#F5A623", pill: "ACM Summer / Winter School" },
+  acm: {
+    accent: "#F5A623",
+    pill: "ACM Summer / Winter School",
+    logoUrl: "https://www.acm.org/binaries/content/gallery/global/top-menu/acm_logo_tablet.svg",
+  },
   internship:  { accent: "#00BCD4", pill: null }, // logo provided via logoUrl
   custom:      { accent: "#FFFFFF", pill: null },
 };
