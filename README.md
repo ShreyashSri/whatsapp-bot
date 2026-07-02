@@ -11,14 +11,19 @@ A WhatsApp bot for [PBCTF](https://pbctf.pointblank.club) that posts registratio
 
 ## Configuration
 
-| Variable    | Description                        |
-|-------------|------------------------------------|
-| `MONGO_URI` | MongoDB connection string          |
-| `GROUP_ID`  | WhatsApp group ID to post stats to |
+| Variable    | Description                                      |
+|-------------|--------------------------------------------------|
+| `MONGO_URI` | MongoDB connection string                        |
+| `GROUP_ID`  | WhatsApp group ID to post stats to               |
+| `GROUP_IDS` | Optional comma-separated group IDs for more groups |
 
-Both are required. Set these in a `.env` file on the server (copy from `.env.example`). The `.env` is never committed or overwritten by CI.
+`MONGO_URI` and at least one group ID are required. Existing single-group setups can keep using `GROUP_ID`. To add one more group while keeping `GROUP_ID`, set `GROUP_IDS` in `.env` with the extra group ID:
 
-To add more groups, append their IDs to the `GROUP_IDS` array in `bot.js`.
+```bash
+GROUP_IDS=<new-group-id>@g.us
+```
+
+Set these in a `.env` file on the server (copy from `.env.example`). The `.env` is never committed or overwritten by CI.
 
 ## Trigger Words
 

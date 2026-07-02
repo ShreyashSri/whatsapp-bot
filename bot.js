@@ -8,15 +8,26 @@ const cron = require("node-cron");
 const { renderCard, CARD_TYPES } = require("./cards/render.js");
 
 const MONGO_URI = process.env.MONGO_URI;
-const GROUP_ID = process.env.GROUP_ID;
 
-if (!MONGO_URI || !GROUP_ID) {
-  console.error("❌ Missing required env vars: MONGO_URI, GROUP_ID. Copy .env.example to .env and fill in values.");
+function parseGroupIds(value) {
+  return (value ?? "")
+    .split(",")
+    .map((groupId) => groupId.trim())
+    .filter(Boolean);
+}
+
+// add comma-separated extras
+const GROUP_IDS = Array.from(new Set([
+  ...parseGroupIds(process.env.GROUP_ID),
+  ...parseGroupIds(process.env.GROUP_IDS),
+]));
+
+if (!MONGO_URI || GROUP_IDS.length === 0) {
+  console.error("❌ Missing required env vars: MONGO_URI and at least one of GROUP_ID or GROUP_IDS. Copy .env.example to .env and fill in values.");
   process.exit(1);
 }
 
 // CTF groups — stats, easter eggs, stickers
-const GROUP_IDS = [GROUP_ID];
 
 // Media-team group — task manager (!add / !remove / !to-do / !posted / !posted-list / !help).
 // Configured at runtime by sending `!set-media` from this bot's own WhatsApp number
