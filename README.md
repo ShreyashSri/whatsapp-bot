@@ -30,11 +30,11 @@ Set these in a `.env` file on the server (copy from `.env.example`). The `.env` 
 | Word     | Action                            |
 |----------|-----------------------------------|
 | `!stats` | Replies with current PBCTF stats  |
-| `!sticker` | Sends the saved custom sticker  |
+| `!sticker` | Sends the saved custom sticker when enabled in `bot.js` |
 
 Type `!stats` (exact word) in any configured group to get an on-demand stats snapshot.
 
-Place one or more sticker files in `stickers/`. When a sticker trigger word is used, the bot randomly picks one file from that folder and sends it as a sticker. Supported file types are `.webp`, `.png`, `.jpg`, and `.jpeg`. To change the sticker trigger words, edit `STICKER_TRIGGER_WORDS` in `bot.js`.
+Sticker replies are off by default. Set `STICKERS_ENABLED` to `true` in `bot.js` to turn them on. Place one or more sticker files in `stickers/`. When enabled and a sticker trigger word is used, the bot randomly picks one file from that folder and sends it as a sticker. Supported file types are `.webp`, `.png`, `.jpg`, and `.jpeg`. To change the sticker trigger words, edit `STICKER_TRIGGER_WORDS` in `bot.js`.
 
 To add new triggers or actions, update the trigger word arrays and the corresponding handler in the `message` event inside `bot.js`.
 
