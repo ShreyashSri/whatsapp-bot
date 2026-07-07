@@ -1,13 +1,17 @@
 require("dotenv").config();
 const fs = require("fs");
+const fsp = require("fs/promises");
 const path = require("path");
 const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const { MongoClient } = require("mongodb");
 const cron = require("node-cron");
+const express = require("express");
 const { renderCard, CARD_TYPES } = require("./cards/render.js");
 
 const MONGO_URI = process.env.MONGO_URI;
+const INCIDENT_GROUP_ID = process.env.INCIDENT_GROUP_ID;
+const INCIDENT_PORT = process.env.INCIDENT_PORT || 8081;
 
 function parseGroupIds(value) {
   return (value ?? "")
@@ -551,13 +555,13 @@ function createClient() {
     authStrategy: new LocalAuth({ dataPath: "./.wwebjs_auth" }),
     puppeteer: {
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote"]
     },
   });
 }
 
 async function start() {
-  const client = createClient();
+  client = createClient();
 
   client.on("qr", (qr) => {
     console.log("\n📱 Scan QR with WhatsApp → ⋮ → Linked Devices → Link a Device\n");
@@ -692,3 +696,87 @@ process.on("uncaughtException", (err) => console.error("Uncaught:", err));
 process.on("unhandledRejection", (err) => console.error("Unhandled rejection:", err));
 
 start().catch((err) => { console.error("Fatal:", err); process.exit(1); });
+
+// ---------- Incident alert webhook ----------
+const STATE_FILE = path.join(__dirname, "incident_state.json"); 
+
+async function loadState() {
+  try {
+    const data = await fsp.readFile(STATE_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch { return {}; }
+}
+async function saveState(state) {
+  await fsp.writeFile(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+if (!INCIDENT_GROUP_ID) {
+  console.warn("⚠️ INCIDENT_GROUP_ID not set — skipping incident webhook server.");
+} else {
+  const incidentApp = express();
+  incidentApp.use(express.json());
+  incidentApp.post("/alert", async (req, res) => {
+    try {
+      console.log("📦 Incoming payload:", JSON.stringify(req.body, null, 2));
+
+      const { data } = req.body;
+      if (!Array.isArray(data)) {
+        return res.status(400).json({ error: "missing or invalid 'data' array" });
+      }
+      // Filter for URLs with status code >= 400
+      const currentFailing = data
+        .map((r) => ({ url: r.metric.instance, code: Math.round(parseFloat(r.value[1])) }))
+        .filter((r) => r.code >= 400);
+
+      console.log("🔍 Currently failing:", JSON.stringify(currentFailing, null, 2));
+
+      // Load previous state from disk
+      const activeIncidents = await loadState();
+      const currentFailingUrls = new Set(currentFailing.map(f => f.url));
+      let newAlerts = [];
+      let resolvedAlerts = [];
+      // Check for NEW incidents
+      for (const { url, code } of currentFailing) {
+        if (!activeIncidents[url]) {
+          activeIncidents[url] = code;
+          newAlerts.push({ url, code });
+        }
+      }
+      // Check for RESOLVED incidents
+      for (const url of Object.keys(activeIncidents)) {
+        if (!currentFailingUrls.has(url)) {
+          resolvedAlerts.push(url);
+          delete activeIncidents[url]; // Remove from state
+        }
+      }
+      // Save state back to disk
+      await saveState(activeIncidents);
+      // Format and send the WhatsApp Message (Only if there are changes!)
+      if (newAlerts.length > 0 || resolvedAlerts.length > 0) {
+        let text = "";
+        if (newAlerts.length > 0) {
+          newAlerts.forEach(({ url, code }) => {
+            text += `${url} faat gaya 💥📉 (Error: ${code})\n`;
+          });
+        }
+        if (resolvedAlerts.length > 0) {
+          resolvedAlerts.forEach((url) => {
+            text += `${url} bolne lagi 🚀✨\n`;
+          });
+        }
+        // Send the plain text without mentions
+        await client.sendMessage(INCIDENT_GROUP_ID, text.trim());
+        console.log(`✅ Sent incident update to WhatsApp.`);
+      } else {
+        console.log(`💤 No state changes. Suppressing WhatsApp spam.`);
+      }
+      res.sendStatus(200);
+    } catch (err) {
+      console.error("❌ Incident webhook send error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+  incidentApp.listen(INCIDENT_PORT, () => {
+    console.log(`🚨 Smart Incident webhook listening on :${INCIDENT_PORT}/alert`);
+  });
+}
