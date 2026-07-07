@@ -756,7 +756,7 @@ if (!INCIDENT_GROUP_ID) {
         let text = "";
         if (newAlerts.length > 0) {
           newAlerts.forEach(({ url, code }) => {
-            text += `${url} faat gaya 💥📉 (Error: ${code})\n`;
+            text += `FAT GAYA 💥\n\nError: ${code}\nMessage : HemangBSDK\n`;
           });
         }
         if (resolvedAlerts.length > 0) {
