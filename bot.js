@@ -726,7 +726,7 @@ if (!INCIDENT_GROUP_ID) {
       // Filter for URLs with status code >= 400
       const currentFailing = data
         .map((r) => ({ url: r.metric.instance, code: Math.round(parseFloat(r.value[1])) }))
-        .filter((r) => r.code >= 400);
+        .filter((r) => r.code >= 400 || r.code== 0);
 
       console.log("🔍 Currently failing:", JSON.stringify(currentFailing, null, 2));
 
