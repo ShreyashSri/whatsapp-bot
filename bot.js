@@ -737,10 +737,10 @@ if (!INCIDENT_GROUP_ID) {
       let resolvedAlerts = [];
       // Check for NEW incidents
       for (const { url, code } of currentFailing) {
-        if (!activeIncidents[url]) {
-          activeIncidents[url] = code;
-          newAlerts.push({ url, code });
-        }
+        if (!Object.prototype.hasOwnProperty.call(activeIncidents, url)) {
+            activeIncidents[url] = code;
+            newAlerts.push({ url, code });
+          }
       }
       // Check for RESOLVED incidents
       for (const url of Object.keys(activeIncidents)) {
@@ -756,7 +756,11 @@ if (!INCIDENT_GROUP_ID) {
         let text = "";
         if (newAlerts.length > 0) {
           newAlerts.forEach(({ url, code }) => {
-            text += `FAT GAYA 💥\n\nError: ${code}\nMessage : HemangBSDK\n`;
+          if (code === 0) {
+              text += `${url} DNS/CONNECTION FAILURE 🌐💥\n\nError: ${code}\nMessage : HemangBSDK\n`;
+          } else {
+              text += `${url} FAT GAYA 💥\n\nError: ${code}\nMessage : HemangBSDK\n`;
+          }
           });
         }
         if (resolvedAlerts.length > 0) {
