@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PBBot — Product Requirements Brief</title>
+  <style>
+    @page { size: A4; margin: 16mm 15mm 17mm; }
+    :root { --ink:#172033; --muted:#5d687a; --navy:#102a43; --blue:#2176ff; --cyan:#12b5cb; --mint:#e8fbf5; --sky:#eaf2ff; --gold:#f7b955; --line:#dfe6ef; --red:#c0392b; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); font-family:Arial,Helvetica,sans-serif; font-size:10.4pt; line-height:1.45; }
+    h1,h2,h3 { color:var(--navy); margin:0 0 8px; line-height:1.15; }
+    h1 { font-size:32pt; letter-spacing:-1px; }
+    h2 { font-size:19pt; margin-top:5px; padding-bottom:6px; border-bottom:2px solid var(--cyan); }
+    h3 { font-size:12.5pt; margin-top:16px; }
+    p { margin:5px 0 9px; }
+    ul,ol { margin:5px 0 10px 19px; padding:0; }
+    li { margin:3px 0; }
+    code { font-family:Consolas,monospace; font-size:8.5pt; color:#123d68; background:#f1f5fa; padding:1px 4px; border-radius:3px; }
+    .cover { min-height:250mm; display:flex; flex-direction:column; justify-content:space-between; page-break-after:always; padding:13mm 4mm 8mm; }
+    .kicker { text-transform:uppercase; color:var(--blue); font-weight:bold; letter-spacing:2px; font-size:9pt; }
+    .subtitle { font-size:16pt; max-width:145mm; color:var(--muted); margin-top:12px; }
+    .meta { border-top:1px solid var(--line); padding-top:12px; color:var(--muted); display:flex; justify-content:space-between; font-size:9pt; }
+    .hero-note { background:linear-gradient(135deg,var(--navy),#185278); color:white; border-radius:16px; padding:18px 20px; max-width:160mm; box-shadow:0 10px 24px #102a4324; }
+    .hero-note strong { color:#9de7ee; }
+    .section { page-break-before:always; }
+    .section:first-of-type { page-break-before:auto; }
+    .eyebrow { color:var(--blue); font-weight:bold; text-transform:uppercase; letter-spacing:1.3px; font-size:8.5pt; }
+    .callout { border-left:5px solid var(--blue); background:var(--sky); padding:10px 13px; margin:12px 0; border-radius:0 8px 8px 0; }
+    .callout.mint { border-color:#19a77d; background:var(--mint); }
+    .callout.gold { border-color:var(--gold); background:#fff8e8; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .card { border:1px solid var(--line); border-radius:10px; padding:11px 13px; break-inside:avoid; }
+    .card h3 { margin-top:0; }
+    .tag { display:inline-block; border-radius:20px; background:#eaf2ff; color:#1959b5; padding:3px 8px; font-size:8pt; font-weight:bold; margin:2px 3px 2px 0; }
+    .tag.green { background:#e6f8f1; color:#087456; }
+    .tag.gold { background:#fff2cf; color:#8b5a00; }
+    table { width:100%; border-collapse:collapse; margin:8px 0 13px; font-size:9pt; }
+    th { text-align:left; color:white; background:var(--navy); padding:7px 8px; }
+    td { border-bottom:1px solid var(--line); padding:7px 8px; vertical-align:top; }
+    tr:nth-child(even) td { background:#f8fafc; }
+    .small { color:var(--muted); font-size:8.8pt; }
+    .diagram { border:1px solid var(--line); border-radius:12px; padding:10px; margin:12px 0; background:#fbfdff; break-inside:avoid; }
+    svg { width:100%; height:auto; display:block; }
+    .step { display:grid; grid-template-columns:28px 1fr; gap:9px; margin:8px 0; }
+    .num { width:26px; height:26px; border-radius:50%; background:var(--blue); color:white; text-align:center; padding-top:4px; font-weight:bold; }
+    .status { font-weight:bold; color:#087456; }
+    .risk { font-weight:bold; color:var(--red); }
+    .footer { display:none; }
+    .page-break { page-break-before:always; }
+    .refs li { margin-bottom:7px; }
+    a { color:#155fbd; text-decoration:none; }
+  </style>
+</head>
+<body>
+  <div class="footer">PBBot · Product Requirements Brief · Draft v1.0</div>
+
+  <section class="cover">
+    <div>
+      <h1>PBBot</h1>
+      <div class="subtitle">A WhatsApp-first community operations platform for events, tasks, updates, reminders, and reports.</div>
+      <div class="diagram" style="margin-top:28px;">
+        <svg viewBox="0 0 720 175" role="img" aria-label="PBBot turns WhatsApp conversations into validated operations and audited database changes">
+          <defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#2176ff"/><stop offset="1" stop-color="#12b5cb"/></linearGradient></defs>
+          <rect x="20" y="48" width="125" height="72" rx="14" fill="#eaf2ff" stroke="#2176ff" stroke-width="2"/><text x="82" y="78" text-anchor="middle" fill="#102a43" font-size="16" font-weight="700">WhatsApp</text><text x="82" y="101" text-anchor="middle" fill="#5d687a" font-size="12">member / admin</text>
+          <path d="M150 84h52" stroke="url(#g)" stroke-width="4" marker-end="url(#a)"/><rect x="207" y="48" width="125" height="72" rx="14" fill="#e8fbf5" stroke="#19a77d" stroke-width="2"/><text x="269" y="78" text-anchor="middle" fill="#102a43" font-size="16" font-weight="700">Router</text><text x="269" y="101" text-anchor="middle" fill="#5d687a" font-size="12">command / NL</text>
+          <path d="M337 84h52" stroke="url(#g)" stroke-width="4"/><rect x="394" y="48" width="125" height="72" rx="14" fill="#fff8e8" stroke="#f7b955" stroke-width="2"/><text x="456" y="78" text-anchor="middle" fill="#102a43" font-size="16" font-weight="700">Validate</text><text x="456" y="101" text-anchor="middle" fill="#5d687a" font-size="12">RBAC + rules</text>
+          <path d="M524 84h52" stroke="url(#g)" stroke-width="4"/><rect x="581" y="48" width="119" height="72" rx="14" fill="#102a43"/><text x="640" y="78" text-anchor="middle" fill="white" font-size="16" font-weight="700">MongoDB</text><text x="640" y="101" text-anchor="middle" fill="#9de7ee" font-size="12">+ audit log</text>
+        </svg>
+      </div>
+      <div class="hero-note"><strong>Guiding idea:</strong> every action is a named operation. Natural language can suggest operations, but only validated operations can change system state.</div>
+    </div>
+    <div class="meta"><span>Version 1.0 draft · For team review</span><span>22 July 2026</span></div>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">01 · Executive view</div><h2>What we are building</h2>
+    <p>PBBot helps a community run programs and activities through the channel members already use: WhatsApp. Admins configure the system; members see assigned work and submit progress; the system keeps the database and audit log authoritative.</p>
+    <div class="callout mint"><strong>Product promise:</strong> less manual follow-up for admins, clearer ownership for members, and reliable history for the team.</div>
+    <h3>Goals</h3>
+    <div class="grid"><div class="card"><h3>Operational clarity</h3><p>One reliable view of members, labels, events, tasks, assignments, updates, and status.</p></div><div class="card"><h3>Deterministic execution</h3><p>Every action is validated, role-checked, executed by business logic, and audited.</p></div><div class="card"><h3>WhatsApp-first access</h3><p>Members can participate without learning a separate app.</p></div><div class="card"><h3>Extensible foundation</h3><p>Dynamic schemas support changing participation programs without code changes to every form.</p></div></div>
+    <h3>What v1 is not</h3><p>It is not a general CRM, a replacement for WhatsApp, a native mobile app, or an autonomous AI agent with database access. Natural language is optional and bounded by the operation layer.</p>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">02 · Who it serves</div><h2>Users and permissions</h2>
+    <div class="grid"><div class="card"><h3>Member</h3><span class="tag green">Read own work</span><span class="tag green">Submit updates</span><span class="tag green">View own history</span><ul><li>View assigned events and tasks</li><li>Submit and edit own updates</li><li>View permitted status and history</li></ul><p class="small">Cannot create, assign, delete, or administer records.</p></div><div class="card"><h3>Admin</h3><span class="tag">Configure</span><span class="tag">Assign</span><span class="tag">Report</span><ul><li>Manage users and labels</li><li>Manage events, schemas, and tasks</li><li>Configure reminders and reports</li><li>View audit history and system configuration</li></ul></div></div>
+    <div class="callout gold"><strong>Security rule:</strong> WhatsApp commands are an interface, not an authorization mechanism. The backend must authorize every operation server-side.</div>
+    <h3>Core data model</h3>
+    <table><tr><th>Entity</th><th>Role in the product</th><th>Key links</th></tr><tr><td>User</td><td>Community member or admin.</td><td>Labels, assignments, audit actor.</td></tr><tr><td>Label</td><td>Reusable classification such as Backend, Core Team, or Fourth Year.</td><td>Many-to-many with users and events.</td></tr><tr><td>Event</td><td>Top-level program or activity.</td><td>Participation schema or organization tasks.</td></tr><tr><td>Assignment</td><td>Explicit connection between a user and event/task.</td><td>Status, reminders, missed count, last update.</td></tr><tr><td>Update</td><td>Progress record against an assignment field.</td><td>Assignment, actor, schema validation.</td></tr><tr><td>Audit log</td><td>Immutable operation history.</td><td>Actor, operation, payload, result, timestamp.</td></tr></table>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">03 · Product workflows</div><h2>How the system is used</h2>
+    <div class="step"><div class="num">1</div><div><strong>Member checks work.</strong><br>Member sends <code>/my</code>, <code>/events</code>, or <code>/tasks</code>; the bot returns active assignments, statuses, and due dates.</div></div>
+    <div class="step"><div class="num">2</div><div><strong>Member submits progress.</strong><br>Member uses <code>/update</code>; the system confirms assignment ownership, field type, required values, and then records the update.</div></div>
+    <div class="step"><div class="num">3</div><div><strong>Admin configures a program.</strong><br>Admin creates an event, attaches a dynamic participation schema or creates organization tasks, and assigns members directly or by label.</div></div>
+    <div class="step"><div class="num">4</div><div><strong>System follows up.</strong><br>A scheduled reminder run finds eligible assignments, sends WhatsApp DMs, records delivery results, increments missed counts, and escalates after a configured threshold.</div></div>
+    <div class="step"><div class="num">5</div><div><strong>Admin reviews outcomes.</strong><br>Progress, pending, completed, and audit reports are generated from persisted records.</div></div>
+    <h3>Two event modes</h3><div class="grid"><div class="card"><h3>Participation event</h3><p>Collect structured information such as organization, PR count, PR links, proposal submitted, mentor, and accepted status.</p><span class="tag">GSoC</span><span class="tag">LFX</span><span class="tag">Research</span></div><div class="card"><h3>Organization event</h3><p>Coordinate work through tasks with name, description, assignee, due date, status, and priority.</p><span class="tag gold">Recruitment</span><span class="tag gold">Hackathon</span><span class="tag gold">Workshop</span></div></div>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">04 · Product architecture</div><h2>Safe path from message to state</h2>
+    <div class="diagram"><svg viewBox="0 0 700 360" role="img" aria-label="PBBot architecture flow through OpenWA"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#2176ff"/></marker></defs><g font-family="Arial" font-size="14" text-anchor="middle"><rect x="250" y="10" width="200" height="42" rx="9" fill="#eaf2ff" stroke="#2176ff"/><text x="350" y="36">WhatsApp user</text><path d="M350 52v25" stroke="#2176ff" stroke-width="3" marker-end="url(#arrow)"/><rect x="250" y="82" width="200" height="42" rx="9" fill="#e8fbf5" stroke="#19a77d"/><text x="350" y="108">OpenWA gateway</text><path d="M350 124v25" stroke="#2176ff" stroke-width="3" marker-end="url(#arrow)"/><rect x="70" y="154" width="180" height="42" rx="9" fill="#f3f6fa" stroke="#b4c1d0"/><text x="160" y="180">PBBot adapter</text><rect x="450" y="154" width="180" height="42" rx="9" fill="#f3f6fa" stroke="#b4c1d0"/><text x="540" y="180">NL interpreter (optional)</text><path d="M350 149L160 154" stroke="#2176ff" stroke-width="3" marker-end="url(#arrow)"/><path d="M350 149L540 154" stroke="#2176ff" stroke-width="3" marker-end="url(#arrow)"/><path d="M160 196L350 222" stroke="#2176ff" stroke-width="3" marker-end="url(#arrow)"/><path d="M540 196L350 222" stroke="#2176ff" stroke-width="3" marker-end="url(#arrow)"/><rect x="250" y="226" width="200" height="42" rx="9" fill="#fff8e8" stroke="#f7b955"/><text x="350" y="252">Operation + validator</text><path d="M350 268v25" stroke="#2176ff" stroke-width="3" marker-end="url(#arrow)"/><rect x="250" y="298" width="200" height="42" rx="9" fill="#102a43" stroke="#102a43"/><text x="350" y="324" fill="white">Business logic → MongoDB</text><path d="M455 319h130" stroke="#19a77d" stroke-width="3" marker-end="url(#arrow)"/><text x="585" y="312" fill="#087456" font-size="12">audit</text></g></svg></div>
+    <div class="callout"><strong>Non-negotiable boundary:</strong> the LLM may translate a message into proposed operations. It may not query repositories, execute commands, or mutate MongoDB directly.</div>
+    <h3>Operation envelope</h3><pre style="background:#172033;color:#e9f1fa;border-radius:8px;padding:12px;font-size:8.5pt;white-space:pre-wrap;">{ "name": "task.create", "payload": { ... }, "actorId": "user-id", "source": "command" }</pre>
+    <p>OpenWA owns WhatsApp connectivity, sessions, and message delivery. PBBot consumes its authenticated webhook/API contract and owns normalization, actor mapping, operations, RBAC, MongoDB, and domain audit. Validation order: envelope → operation name → payload → role → referenced records → business rules → execution → audit.</p>
+    <table><tr><th>Flow</th><th>OpenWA does</th><th>PBBot does</th></tr><tr><td>Inbound</td><td>Receives WhatsApp message and emits signed webhook.</td><td>Verifies, deduplicates, normalizes, identifies actor, routes.</td></tr><tr><td>Outbound</td><td>Sends through the configured session and returns provider status.</td><td>Renders replies/reminders and records delivery/audit results.</td></tr><tr><td>Session</td><td>QR, authentication, reconnect, session health.</td><td>Checks readiness and reports actionable failures.</td></tr></table>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">05 · Functional scope</div><h2>What the MVP must support</h2>
+    <table><tr><th>Area</th><th>Required capabilities</th><th>Primary users</th></tr><tr><td>Users & labels</td><td>Create, update, deactivate, list users; create/update/delete/list labels; assign/remove labels.</td><td>Admin</td></tr><tr><td>Events</td><td>Create, edit, soft-delete, list, assign/unassign, and change status.</td><td>Admin</td></tr><tr><td>Schemas</td><td>Dynamic fields: text, number, boolean, date, URL, single select, multi select, list.</td><td>Admin</td></tr><tr><td>Tasks</td><td>Create, edit, delete, assign, complete, list; due dates and priority.</td><td>Admin</td></tr><tr><td>Updates</td><td>Submit, edit, and view history; validate against ownership and schema.</td><td>Member / Admin</td></tr><tr><td>Reminders</td><td>Configure frequency and escalation; run idempotently; record delivery history.</td><td>Admin / System</td></tr><tr><td>Reports</td><td>Progress, pending, completed, and filtered reports.</td><td>Admin</td></tr><tr><td>Audit</td><td>Record successful and rejected operations; list and filter immutably.</td><td>Admin</td></tr></table>
+    <h3>WhatsApp commands</h3><div class="grid"><div class="card"><h3>Member</h3><p><code>/help</code> <code>/my</code> <code>/events</code> <code>/tasks</code> <code>/update</code> <code>/history</code> <code>/status</code></p></div><div class="card"><h3>Admin</h3><p><code>/users</code> <code>/labels</code> <code>/events</code> <code>/schema</code> <code>/tasks</code> <code>/assign</code> <code>/reminders</code> <code>/reports</code> <code>/audit</code></p></div></div>
+    <h3>Operation catalogue</h3><p class="small">The complete operation list is defined in the source PRD. The implementation must preserve stable names and payload contracts so that both commands and natural language target the same business layer.</p>
+    <p><code>user.*</code> · <code>label.*</code> · <code>event.*</code> · <code>schema.*</code> · <code>task.*</code> · <code>update.*</code> · <code>reminder.*</code> · <code>report.*</code> · <code>audit.*</code></p>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">06 · Quality bar</div><h2>Rules that keep the product trustworthy</h2>
+    <div class="grid"><div class="card"><h3>Security</h3><ul><li>Server-side RBAC for every operation</li><li>Webhook verification and secret management</li><li>Redacted sensitive audit payloads</li></ul></div><div class="card"><h3>Reliability</h3><ul><li>Idempotent reminder runs</li><li>Delivery failures are visible</li><li>Soft deletion preserves history</li></ul></div><div class="card"><h3>Performance</h3><ul><li>Typical command response under 2 seconds, excluding provider latency</li><li>Pagination/bounds on lists and reports</li><li>Indexes for common filters</li></ul></div><div class="card"><h3>Observability</h3><ul><li>Correlation ID, operation, actor, duration, outcome</li><li>No message bodies or secrets in default logs</li><li>Application and database health checks</li></ul></div></div>
+    <h3>Definition of MVP-ready</h3><ol><li>The existing <code>!stats</code> response and nightly configured-group broadcast work through OpenWA and the PBBot operation/audit path with parity tests.</li><li>A member can be identified by WhatsApp ID, view assignments, and submit a validated update.</li><li>An admin can configure an event, schema/tasks, and assignments.</li><li>Reminder runs find pending work, record delivery outcomes, and escalate correctly.</li><li>Progress, pending, completed, and audit reports are available to admins.</li><li>Tests cover role restrictions, schema validation, assignment ownership, reminder idempotency, duplicate delivery, and migration parity.</li><li>The service runs locally and in a container with documented environment variables.</li></ol>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">07 · Work packages</div><h2>Build in reviewable slices</h2>
+    <div class="diagram"><svg viewBox="0 0 720 130" role="img" aria-label="PBBot work packages"><g font-family="Arial" text-anchor="middle"><rect x="8" y="35" width="125" height="55" rx="10" fill="#eaf2ff" stroke="#2176ff"/><text x="70" y="57" fill="#102a43" font-size="13" font-weight="700">0 · Decisions</text><text x="70" y="76" fill="#5d687a" font-size="10">contracts</text><path d="M137 62h9" stroke="#2176ff" stroke-width="3"/><rect x="146" y="35" width="145" height="55" rx="10" fill="#fff8e8" stroke="#f7b955"/><text x="218" y="57" fill="#102a43" font-size="13" font-weight="700">1 · Migrate bot</text><text x="218" y="76" fill="#5d687a" font-size="10">stats + parity</text><path d="M295 62h9" stroke="#2176ff" stroke-width="3"/><rect x="304" y="35" width="125" height="55" rx="10" fill="#e8fbf5" stroke="#19a77d"/><text x="366" y="57" fill="#102a43" font-size="13" font-weight="700">2 · Core</text><text x="366" y="76" fill="#5d687a" font-size="10">domain + audit</text><path d="M433 62h9" stroke="#2176ff" stroke-width="3"/><rect x="442" y="35" width="125" height="55" rx="10" fill="#eaf2ff" stroke="#2176ff"/><text x="504" y="57" fill="#102a43" font-size="13" font-weight="700">3 · Workflows</text><text x="504" y="76" fill="#5d687a" font-size="10">commands + reminders</text><path d="M571 62h9" stroke="#2176ff" stroke-width="3"/><rect x="580" y="35" width="132" height="55" rx="10" fill="#102a43"/><text x="646" y="57" fill="white" font-size="13" font-weight="700">4 · Pilot</text><text x="646" y="76" fill="#9de7ee" font-size="10">reports + NL</text></g></svg></div>
+    <table><tr><th>Work package</th><th>Outcome</th><th>Exit check</th></tr><tr><td>0 · Decisions</td><td>Finalize data model, operation payloads, OpenWA session/API contract, statuses, and pilot event.</td><td>Team approves contracts.</td></tr><tr><td>1 · Existing bot migration</td><td>Move <code>!stats</code>, nightly broadcasts, <code>GROUP_ID</code>/<code>GROUP_IDS</code>, optional stickers, and MongoDB stats reads behind OpenWA and PBBot operations.</td><td>Behavior parity, idempotency, delivery tracking, and failure tests pass.</td></tr><tr><td>2 · Core domain</td><td>Users, labels, events, schemas, tasks, assignments, updates, RBAC, audit.</td><td>API tests pass against MongoDB.</td></tr><tr><td>3 · Workflows</td><td>Webhook normalization, command router, guided flows, outbound messaging, reminders, escalation, and history.</td><td>End-to-end member/admin workflow completes through OpenWA.</td></tr><tr><td>4 · Pilot</td><td>Reports, safe natural language, monitoring, deployment, and one real event.</td><td>Admins can operate without manual spreadsheet backup.</td></tr></table>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">08 · Existing foundations</div><h2>What we can build on</h2>
+    <div class="callout mint"><strong>Reuse infrastructure patterns, not the domain model.</strong> OpenWA and media_automata are substantially more relevant internal foundations than the small supplied stats-bot reference.</div>
+    <table><tr><th>Foundation</th><th>Already provides</th><th>PBBot use</th></tr><tr><td><strong>OpenWA</strong><br><span class="small">NestJS / TypeScript</span></td><td>Sessions, QR lifecycle, REST, HMAC webhooks, API keys, rate limits, queues, health checks, audit logs, Docker, pluggable DB/storage/cache.</td><td>Use as the WhatsApp transport gateway behind a PBBot adapter.</td></tr><tr><td><strong>media_automata</strong><br><span class="small">Python / FastAPI</span></td><td>Webhook normalization, command orchestration, typed LLM intent parsing, jobs/tasks, retries, heartbeats, idempotency, artifacts, deployment checks, tests.</td><td>Reuse reliability patterns; keep PBBot’s operation contract as the boundary.</td></tr><tr><td><strong>whatsapp-bot</strong><br><span class="small">Node.js reference</span></td><td>Trigger words, MongoDB reads, scheduled broadcasts, environment configuration.</td><td>Keep as a simple reference for message handlers and cron behavior.</td></tr></table>
+    <h3>Concrete media_automata examples to take as reference</h3>
+    <table><tr><th>PBBot step</th><th>media_automata precedent</th><th>How PBBot applies it</th></tr><tr><td>Normalize inbound OpenWA events</td><td><code>whatsapp/normalizer.py:44</code> — <code>normalize_openwa_payload()</code></td><td>Normalize once into a stable message object before actor lookup or command parsing.</td></tr><tr><td>Send replies/reminders</td><td><code>whatsapp/client.py:61</code> — <code>OpenWAClient.send_text()</code></td><td>Use an OpenWA client interface and persist returned delivery IDs/status.</td></tr><tr><td>Route messages</td><td><code>orchestrator.py:124</code> — <code>process_whatsapp_message()</code></td><td>Use one orchestration entry point that hands off only typed PBBot operations.</td></tr><tr><td>LLM intent parsing</td><td><code>agents/graph.py:139</code> — <code>SocialAgentGraph.run()</code></td><td>Generate proposed operations, then validate and confirm them before execution.</td></tr><tr><td>Idempotency</td><td><code>repository.py:create_job()</code> plus <code>tests/test_repository.py</code></td><td>Use OpenWA event/message ID to prevent duplicate operation execution.</td></tr><tr><td>Retries and worker recovery</td><td><code>repository.py:347</code>, <code>worker.py:274</code>, <code>retry.py</code></td><td>Atomically claim reminder/report jobs, heartbeat them, retry transient failures, and recover stale work.</td></tr><tr><td>Scheduling</td><td><code>scheduling.py:79</code> plus <code>tests/test_scheduling.py</code></td><td>Centralize timezone-aware reminder parsing and explicit command precedence.</td></tr><tr><td>Operational health</td><td><code>api.py:45</code> and <code>monitoring.py:236</code></td><td>Expose separate PBBot, OpenWA, session, queue, and stale-work checks.</td></tr></table>
+    <p class="small"><strong>Boundary reminder:</strong> PBBot-specific users, labels, events, schemas, assignments, updates, reminders, reports, and domain audit remain new work. The LLM may propose PBBot operations, but never calls either repository or database directly.</p>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">09 · Decisions before coding</div><h2>Questions for the team</h2>
+    <div class="grid"><div class="card"><h3>OpenWA ownership</h3><p>Which OpenWA session/phone number will own the bot, and where will OpenWA be deployed?</p></div><div class="card"><h3>Integration contract</h3><p>Which OpenWA webhook events, API endpoints, signature rules, and delivery acknowledgements will PBBot support?</p></div><div class="card"><h3>Pilot</h3><p>Will the first real workflow be a participation event or an organization event?</p></div><div class="card"><h3>Status model</h3><p>What exact status values and transition rules apply to events, tasks, and assignments?</p></div><div class="card"><h3>Reminders</h3><p>What timezone, sending window, escalation threshold, and admin destination should be used?</p></div><div class="card"><h3>Natural language</h3><p>Should NL be deferred until command workflows are stable, or included behind confirmation in the MVP?</p></div></div>
+    <div class="callout gold"><strong>Recommended team decision:</strong> approve the operation boundary and run one pilot event end-to-end before expanding the natural-language layer.</div>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">10 · References</div><h2>Source material</h2>
+    <ol class="refs"><li><strong>Supplied reference repository:</strong> <a href="https://github.com/ShreyashSri/whatsapp-bot">github.com/ShreyashSri/whatsapp-bot</a> — WhatsApp bot for PBCTF statistics, with MongoDB, scheduled broadcasts, trigger words, Docker/PM2, and deployment configuration.</li><li><strong>Internal foundation — OpenWA:</strong> <code>/home/unichronic/OpenWA</code>, especially <code>docs/03-system-architecture.md</code>, <code>docs/04-security-design.md</code>, <code>docs/05-database-design.md</code>, and <code>docs/06-api-specification.md</code>.</li><li><strong>Internal foundation — media_automata:</strong> <code>/home/unichronic/media_automata</code>, especially the WhatsApp normalizer/client, command orchestrator, repository, schemas, scheduling, retry, monitoring, and tests.</li><li><strong>Product requirement:</strong> PBBot — Product Requirements Specification (PRS) v2.0, reproduced and refined in the project workspace PRD.</li><li><strong>Product principle:</strong> database is the source of truth; operations are validated and audited; natural language is an adapter to operations, not a database actor.</li></ol>
+  </section>
+</body>
+</html>

@@ -1,9 +1,9 @@
-node_modules/
-.wwebjs_auth/
-.wwebjs_cache/
 .env
-posts.json
-media-group.json
-preview-card.png
-preview-card.pdf
-preview-card-pdf.png
+*.log
+node_modules/
+dist/
+coverage/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/

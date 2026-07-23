@@ -1,4 +1,4 @@
-name: Diagnose Bot
+name: Diagnose PBBot
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: PM2 status + recent logs
+      - name: Check deployed container
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -17,18 +17,14 @@ jobs:
           command_timeout: 2m
           script: |
             set +e
-            cd ~/whatsapp-bot
-            echo "=== PM2 list ==="
-            npx pm2 list
+            echo "=== PBBot containers ==="
+            docker ps --filter name=pbbot
             echo
-            echo "=== PM2 info ==="
-            npx pm2 info whatsapp-bot
+            echo "=== PBBot logs ==="
+            docker logs --tail 200 pbbot
             echo
-            echo "=== Auth dir present? ==="
-            ls -la .wwebjs_auth 2>&1 | head -5
+            echo "=== PBBot health ==="
+            curl -fsS http://localhost:3000/health
             echo
-            echo "=== Last 200 OUT lines ==="
-            npx pm2 logs whatsapp-bot --lines 200 --nostream --out
-            echo
-            echo "=== Last 100 ERR lines ==="
-            npx pm2 logs whatsapp-bot --lines 100 --nostream --err
+            echo "=== OpenWA dependency health ==="
+            curl -fsS http://localhost:3000/health/openwa
