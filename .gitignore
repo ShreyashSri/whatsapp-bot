@@ -1,9 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# neonize session
+neonize.db
+
+# Environment
+.env
+
+# Bot runtime state
+posts.json
+media-group.json
+incident_state.json
+
+# Card preview output
+preview-card.png
+preview-card.pdf
+
+# Node.js (legacy)
 node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
-.env
-posts.json
-media-group.json
-preview-card.png
-preview-card.pdf
-preview-card-pdf.png

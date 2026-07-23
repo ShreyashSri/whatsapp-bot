@@ -1,0 +1,175 @@
+"""Card generation feature.
+
+Commands:
+    !card <type> | <name> | <text>       — generate a PNG card (attach photo)
+    !card-pdf <type> | <name> | <text>   — generate PNG + editable PDF
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import logging
+import re
+from typing import TYPE_CHECKING
+
+from neonize.events import MessageEv
+
+if TYPE_CHECKING:
+    from neonize.client import NewClient
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_text(message: MessageEv) -> str:
+    """Extract text body from a message (handles both plain and extended)."""
+    text = message.Message.conversation or ""
+    if message.Message.extendedTextMessage and message.Message.extendedTextMessage.text:
+        text = message.Message.extendedTextMessage.text
+    return text.strip()
+
+
+def _has_image(message: MessageEv) -> bool:
+    """Check if the message has an attached image."""
+    return bool(message.Message.imageMessage and message.Message.imageMessage.url)
+
+
+async def _handle_card_command(
+    client: "NewClient",
+    message: MessageEv,
+    cmd_prefix: str,
+    *,
+    with_pdf: bool,
+) -> None:
+    from cards import render_card, CARD_TYPES
+    from features.media import COMMAND_HELP
+
+    body = _get_text(message)
+    chat_jid = message.Info.MessageSource.Chat
+    rest = body[len(cmd_prefix):].strip()
+
+    # Split on newlines or pipes
+    if "\n" in rest:
+        parts = [s.strip() for s in rest.split("\n")]
+    else:
+        parts = [s.strip() for s in rest.split("|")]
+
+    raw_type = parts[0] if len(parts) > 0 else ""
+    name = parts[1] if len(parts) > 1 else ""
+    text = parts[2] if len(parts) > 2 else ""
+    logo_url = parts[3] if len(parts) > 3 else None
+
+    if not raw_type or not name or not text:
+        client.send_message(chat_jid, COMMAND_HELP["card"])
+        return
+
+    card_type = raw_type.lower()
+    if card_type not in CARD_TYPES:
+        client.send_message(
+            chat_jid,
+            f'⚠️ Unknown card type "{raw_type}". Use one of: {", ".join(CARD_TYPES)}\n\n'
+            "See `!help card` for details.",
+        )
+        return
+
+    if not _has_image(message):
+        client.send_message(
+            chat_jid,
+            f"⚠️ Attach a profile photo to the same message as the `{cmd_prefix}` command.\n\n"
+            "See `!help card` for details.",
+        )
+        return
+
+    try:
+        fmt_label = "PNG + PDF" if with_pdf else "PNG"
+        client.send_message(chat_jid, f"🎨 Rendering {card_type} card for {name} ({fmt_label})...")
+
+        # Download attached image
+        photo_bytes = client.download_any(message.Message)
+        if not photo_bytes:
+            client.send_message(chat_jid, "❌ Couldn't download the attached media.")
+            return
+
+        photo_mime = message.Message.imageMessage.mimetype or "image/jpeg"
+        formats = ["png", "pdf"] if with_pdf else ["png"]
+
+        out = await render_card(
+            card_type=card_type,
+            name=name,
+            text=text,
+            photo_bytes=photo_bytes,
+            photo_mime=photo_mime,
+            logo_url=logo_url,
+            formats=formats,
+        )
+
+        safe_name = re.sub(r"[^a-zA-Z0-9\-_]+", "-", name)[:60] or "card"
+
+        if out.get("png"):
+            png_bytes = base64.b64decode(out["png"])
+            png_msg = client.build_image_message(
+                png_bytes,
+                caption=f"🎉 {name}",
+                mime_type="image/png",
+            )
+            client.send_message(chat_jid, png_msg)
+
+        if out.get("pdf"):
+            pdf_bytes = base64.b64decode(out["pdf"])
+            doc_msg = client.build_document_message(
+                pdf_bytes,
+                filename=f"{safe_name}-card.pdf",
+                caption=f"📄 {name} — editable PDF",
+                mime_type="application/pdf",
+            )
+            client.send_message(chat_jid, doc_msg)
+
+        log.info("Card rendered: type=%s name=%r formats=%s", card_type, name, "+".join(formats))
+
+    except Exception as exc:
+        log.error("Card render error: %s", exc)
+        client.send_message(chat_jid, f"❌ Card render failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Feature registration
+# ---------------------------------------------------------------------------
+
+
+def register(client: "NewClient", config: dict) -> None:
+    """Register the card generation feature on the neonize client."""
+
+    media_group_ids: set[str] = set()
+
+    # We piggyback on the same MessageEv — the media feature also registers
+    # its own handler; neonize supports multiple handlers per event.
+    @client.event(MessageEv)
+    def on_message(client: "NewClient", message: MessageEv):
+        body = _get_text(message)
+        lower = body.lower()
+        chat_jid = str(message.Info.MessageSource.Chat)
+
+        # Card commands can come from any registered group (media or CTF)
+        if lower.startswith("!card-pdf") and (lower == "!card-pdf" or lower[9:10] in (" ", "\n")):
+            try:
+                asyncio.get_event_loop().run_until_complete(
+                    _handle_card_command(client, message, "!card-pdf", with_pdf=True)
+                )
+            except Exception as exc:
+                log.error("Card-pdf command error: %s", exc)
+            return
+
+        if lower.startswith("!card") and (lower == "!card" or lower[5:6] in (" ", "\n")):
+            try:
+                asyncio.get_event_loop().run_until_complete(
+                    _handle_card_command(client, message, "!card", with_pdf=False)
+                )
+            except Exception as exc:
+                log.error("Card command error: %s", exc)
+            return
+
+    log.info("✅ Card generation feature registered")

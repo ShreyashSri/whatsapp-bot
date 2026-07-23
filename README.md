@@ -1,88 +1,172 @@
 # WhatsApp Bot
 
-A WhatsApp bot for [PBCTF](https://pbctf.pointblank.club) that posts registration stats to group chats — automatically every night and on demand via trigger word.
+A WhatsApp bot for [PBCTF](https://pbctf.pointblank.club) that provides a media task manager, achievement card generator, and incident alerting — built in Python with a pluggable feature architecture.
+
+## Features
+
+### 📋 Media Task Manager
+
+Track social media posts across platforms with a full to-do workflow.
+
+| Command | Description |
+|---------|-------------|
+| `!add <text>` | Add a post to to-do |
+| `!remove <id>` | Remove a post (works on both lists) |
+| `!to-do` | List pending posts with stage checkboxes |
+| `!posted <id> <stage>` | Mark a stage done (design / insta / linkedin / twitter) |
+| `!unposted <id> <stage>` | Un-mark a stage |
+| `!posted-list` | List fully posted entries |
+| `!help [command]` | Show help or details for one command |
+| `!set-media` | Register the current group as the media group (self-command) |
+
+**Stages:** design • instagram • linkedin • twitter
+
+When all four stages are marked, the entry auto-moves to the posted list.
+
+### 🎨 Card Generation
+
+Generate achievement/congratulations cards as PNG images or editable PDFs.
+
+| Command | Description |
+|---------|-------------|
+| `!card <type> \| <name> \| <text>` | Generate a PNG card (attach a photo) |
+| `!card-pdf <type> \| <name> \| <text>` | Same, plus an editable PDF |
+
+**Card types:** `gsoc`, `lfx`, `hackathon`, `competitive`, `acm`, `internship`, `custom`
+
+Wrap any phrase in `[brackets]` to highlight it in the accent colour. Attach a profile photo to the same message.
+
+**Examples:**
+```
+!card gsoc | Manas Hejmadi | For getting selected as mentor in [Google Summer of Code] 2026 with [API Dash]
+!card-pdf lfx | Shubhang Sinha | For being a [LiFT Scholarship] holder for 2026
+!card internship | Priya | Joining [Anthropic] as a Software Engineer Intern | https://example.com/anthropic.png
+```
+
+### 🚨 Incident Alerts
+
+Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a WhatsApp group.
+
+- `POST /alert` endpoint on configurable port (default 8081)
+- Deduplicates alerts — only sends on state changes (new incidents, resolved incidents)
+- Persists state across restarts
 
 ## Tech Stack
 
-- [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js) — WhatsApp Web automation
-- [MongoDB](https://www.mongodb.com/) — reads user/team counts from the PBCTF database
-- [node-cron](https://github.com/node-cron/node-cron) — schedules the nightly broadcast
-- [PM2](https://pm2.keymetrics.io/) — keeps the bot running as a background process on the server
+- [neonize](https://github.com/krypton-byte/neonize) — WhatsApp Web automation (Python bindings for whatsmeow)
+- [Playwright](https://playwright.dev/python/) — headless Chromium for card rendering
+- [Flask](https://flask.palletsprojects.com/) — incident alert webhook server
+- [PM2](https://pm2.keymetrics.io/) — process management on the server
 
 ## Configuration
 
-| Variable    | Description                                      |
-|-------------|--------------------------------------------------|
-| `MONGO_URI` | MongoDB connection string                        |
-| `GROUP_ID`  | WhatsApp group ID to post stats to               |
-| `GROUP_IDS` | Optional comma-separated group IDs for more groups |
+| Variable | Description |
+|----------|-------------|
+| `GROUP_ID` | Primary WhatsApp group ID |
+| `GROUP_IDS` | Optional comma-separated extra group IDs |
+| `INCIDENT_GROUP_ID` | WhatsApp group ID for incident alerts |
+| `INCIDENT_PORT` | Webhook port (default: 8081) |
 
-`MONGO_URI` and at least one group ID are required. Existing single-group setups can keep using `GROUP_ID`. To add one more group while keeping `GROUP_ID`, set `GROUP_IDS` in `.env` with the extra group ID:
+Set these in a `.env` file (copy from `.env.example`). The `.env` is never committed.
 
-```bash
-GROUP_IDS=<new-group-id>@g.us
+## Project Structure
+
+```
+whatsapp-bot/
+├── bot.py                  # Main entry point
+├── features/
+│   ├── __init__.py
+│   ├── media.py            # Media task manager
+│   ├── cards.py            # Card generation
+│   └── incidents.py        # Incident alerts
+├── cards/
+│   ├── __init__.py
+│   ├── render.py           # HTML→PNG/PDF renderer
+│   └── assets/
+│       └── pb-logo.png
+├── requirements.txt
+├── Dockerfile
+├── .env.example
+└── .github/workflows/
+    ├── deploy.yml
+    └── diagnose.yml
 ```
 
-Set these in a `.env` file on the server (copy from `.env.example`). The `.env` is never committed or overwritten by CI.
+## Adding New Features
 
-## Trigger Words
+1. Create `features/your_feature.py`
+2. Implement a `register(client, config)` function that hooks into the neonize client
+3. Import and call it in `bot.py`:
 
-| Word     | Action                            |
-|----------|-----------------------------------|
-| `!stats` | Replies with current PBCTF stats  |
-| `!sticker` | Sends the saved custom sticker when enabled in `bot.js` |
+```python
+from features.your_feature import register as register_your_feature
+register_your_feature(client, config)
+```
 
-Type `!stats` (exact word) in any configured group to get an on-demand stats snapshot.
+That's it. The feature system is fully pluggable — no framework, no boilerplate.
 
-Sticker replies are off by default. Set `STICKERS_ENABLED` to `true` in `bot.js` to turn them on. Place one or more sticker files in `stickers/`. When enabled and a sticker trigger word is used, the bot randomly picks one file from that folder and sends it as a sticker. Supported file types are `.webp`, `.png`, `.jpg`, and `.jpeg`. To change the sticker trigger words, edit `STICKER_TRIGGER_WORDS` in `bot.js`.
-
-To add new triggers or actions, update the trigger word arrays and the corresponding handler in the `message` event inside `bot.js`.
-
-## Scheduled Broadcast
-
-Stats are automatically sent to all configured groups every night at **midnight IST** (18:30 UTC).
-
-## First-Time Setup (Server)
+## First-Time Setup
 
 ```bash
-# 1. Create the directory
-mkdir -p ~/whatsapp-bot && cd ~/whatsapp-bot
+# 1. Clone and enter the directory
+cd whatsapp-bot
 
-# 2. Create .env with your values (see .env.example)
+# 2. Create .env with your values
+cp .env.example .env
 nano .env
 
-# 3. Install dependencies (after first deploy copies package files)
-npm ci --omit=dev
+# 3. Create a virtual environment and install deps
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 
-# 4. Start with PM2
-npx pm2 start bot.js --name whatsapp-bot
-npx pm2 save
+# 4. Install Playwright's Chromium (for card rendering)
+playwright install --with-deps chromium
 
-# 5. Scan the QR code printed in the logs to link your WhatsApp
-npx pm2 logs whatsapp-bot
+# 5. Start the bot
+python bot.py
+
+# 6. Scan the QR code printed in the terminal to link WhatsApp
 ```
 
-Once linked, the session is saved in `.wwebjs_auth/` and persists across restarts. The `.env` stays on the server permanently — CI never touches it.
+Once linked, the session is saved in `neonize.db` and persists across restarts.
+
+### Running with PM2
+
+```bash
+pm2 start "python3 bot.py" --name whatsapp-bot
+pm2 save
+```
+
+### Running with Docker
+
+```bash
+docker build -t whatsapp-bot .
+docker run -d \
+  --name whatsapp-bot \
+  --env-file .env \
+  -p 8081:8081 \
+  -v $(pwd)/neonize.db:/app/neonize.db \
+  -v $(pwd)/posts.json:/app/posts.json \
+  whatsapp-bot
+```
 
 ## CI/CD (GitHub Actions)
 
-Any push to the `main` branch automatically deploys to the server. No git setup needed on the server.
+Any push to `main` automatically:
+1. Builds and pushes the Docker image to `shreyashsri/whatsapp-bot` (tagged `latest` + commit SHA)
+2. Deploys to the server via SCP + SSH
+3. Installs dependencies and restarts the PM2 process
 
-**How it works:**
+**Required GitHub Secrets:**
 
-1. Push code (or merge a PR) to `main`
-2. GitHub Actions checks out the repo on the runner
-3. Copies `bot.js`, `package.json`, `package-lock.json` to `~/whatsapp-bot` via SCP
-4. SSHes in, runs `npm ci` to sync dependencies
-5. Restarts the PM2 process (`whatsapp-bot`)
-
-**Required GitHub Secrets** (set in repo → Settings → Secrets → Actions):
-
-| Secret            | Description                                |
-|-------------------|--------------------------------------------|
-| `SSH_HOST`        | Server IP or hostname                      |
-| `SSH_USER`        | SSH login username                         |
+| Secret | Description |
+|--------|-------------|
+| `SSH_HOST` | Server IP or hostname |
+| `SSH_USER` | SSH login username |
 | `SSH_PRIVATE_KEY` | Private key for SSH auth (full PEM string) |
-| `SSH_PORT`        | SSH port (optional, defaults to `22`)      |
+| `SSH_PORT` | SSH port (optional, defaults to `22`) |
+| `DOCKERHUB_USERNAME` | Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
 
-> Deployment only happens when a PR is merged into `main` (or a direct push to `main`). Pushes to other branches are ignored.
+> Deployment only happens when a PR is merged into `main` (or a direct push to `main`).

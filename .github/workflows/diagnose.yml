@@ -19,16 +19,19 @@ jobs:
             set +e
             cd ~/whatsapp-bot
             echo "=== PM2 list ==="
-            npx pm2 list
+            pm2 list
             echo
             echo "=== PM2 info ==="
-            npx pm2 info whatsapp-bot
+            pm2 info whatsapp-bot
             echo
-            echo "=== Auth dir present? ==="
-            ls -la .wwebjs_auth 2>&1 | head -5
+            echo "=== Session DB present? ==="
+            ls -la neonize.db 2>&1
+            echo
+            echo "=== Python version ==="
+            python3 --version
             echo
             echo "=== Last 200 OUT lines ==="
-            npx pm2 logs whatsapp-bot --lines 200 --nostream --out
+            pm2 logs whatsapp-bot --lines 200 --nostream --out
             echo
             echo "=== Last 100 ERR lines ==="
-            npx pm2 logs whatsapp-bot --lines 100 --nostream --err
+            pm2 logs whatsapp-bot --lines 100 --nostream --err

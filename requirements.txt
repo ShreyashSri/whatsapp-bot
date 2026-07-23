@@ -1,0 +1,5 @@
+neonize
+python-dotenv
+playwright
+httpx
+flask
