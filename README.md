@@ -63,6 +63,25 @@ When someone @mentions a group in any community chat, the bot silently pings eve
 - No configuration needed — auto-detects group mentions via WhatsApp's native `groupMentions` protocol
 - The bot must be a member of the mentioned group to tag its participants
 
+### 🏷️ Custom Subgroups
+
+Create named subgroups of users that can be @mentioned in any group. Members get a silent notification — no names shown in the message.
+
+| Command | Description |
+|---------|-------------|
+| `!add-subgroup <name> \| @user1 @user2 …` | Create subgroup or add members to an existing one |
+| `!remove-from-subgroup <name> \| @user1 @user2 …` | Remove members (auto-deletes subgroup if empty) |
+| `!delete-subgroup <name>` | Delete an entire subgroup |
+| `!list-subgroups` | List all subgroups with member counts |
+| `!subgroup-info <name>` | Show members of a specific subgroup |
+
+To tag a subgroup, just write `@subgroupname` anywhere in a message — the bot detects it and pings all members.
+
+- Subgroups are **global** — created once, usable in any group
+- Names must be 2-32 characters: letters, digits, hyphens, or underscores
+- A subgroup can never be empty; removing the last member auto-deletes it
+- State persisted in `subgroups.json`
+
 ### 🚨 Incident Alerts
 
 Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a WhatsApp group.
@@ -100,12 +119,14 @@ whatsapp-bot/
 │   ├── media.py            # Media task manager
 │   ├── cards.py            # Card generation
 │   ├── community_tag.py    # Community group tagging
+│   ├── subgroups.py        # Custom subgroups
 │   └── incidents.py        # Incident alerts
 ├── cards/
 │   ├── __init__.py
 │   ├── render.py           # HTML→PNG/PDF renderer
 │   └── assets/
 │       └── pb-logo.png
+├── subgroups.json          # Subgroup state (auto-created)
 ├── requirements.txt
 ├── Dockerfile
 ├── .env.example

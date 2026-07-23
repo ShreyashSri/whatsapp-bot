@@ -91,10 +91,12 @@ from features.media import register as register_media        # noqa: E402
 from features.cards import register as register_cards        # noqa: E402
 from features.incidents import register as register_incidents  # noqa: E402
 from features.community_tag import register as register_community_tag  # noqa: E402
+from features.subgroups import register as register_subgroups            # noqa: E402
 
 media_handler = register_media(client, config)
 cards_handler = register_cards(client, config)
 community_tag_handler = register_community_tag(client, config)
+subgroups_handler = register_subgroups(client, config)
 register_incidents(client, config)
 
 from neonize.events import MessageEv
@@ -107,6 +109,8 @@ def on_message(client: "NewClient", message: MessageEv):
         cards_handler(client, message)
     if community_tag_handler:
         community_tag_handler(client, message)
+    if subgroups_handler:
+        subgroups_handler(client, message)
 
 # ---------------------------------------------------------------------------
 # Global error handling
