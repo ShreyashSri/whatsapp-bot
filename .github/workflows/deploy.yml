@@ -72,9 +72,9 @@ jobs:
             venv/bin/python -m pip install --upgrade pip
             venv/bin/pip install -r requirements.txt
             
-            # Install Playwright browsers using the venv's playwright binary
-            venv/bin/playwright install --with-deps chromium
+            # Install Playwright browsers
+            venv/bin/playwright install chromium
             
-            # Start/Restart the bot in the background
-            pkill -f "venv/bin/python bot.py" || true
-            nohup venv/bin/python bot.py > bot.log 2>&1 &
+            # Start/Restart the bot in the background using PM2
+            npx pm2 restart whatsapp-bot 2>/dev/null || npx pm2 start "venv/bin/python bot.py" --name whatsapp-bot
+            npx pm2 save

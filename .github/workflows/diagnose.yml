@@ -7,7 +7,7 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Check process and logs
+      - name: PM2 status + recent logs
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -16,17 +16,16 @@ jobs:
           port: ${{ secrets.SSH_PORT || 22 }}
           command_timeout: 2m
           script: |
+            # Load user profile so npx is in PATH
+            source ~/.profile || source ~/.bashrc || source ~/.zshrc || true
+            
             set +e
             cd ~/whatsapp-bot
-            
-            echo "=== BOT PROCESS STATUS ==="
-            if pgrep -f "venv/bin/python bot.py" > /dev/null; then
-              echo "✅ Bot is currently RUNNING"
-              ps -p $(pgrep -f "venv/bin/python bot.py") -o pid,etime,%cpu,%mem,cmd
-            else
-              echo "❌ Bot is NOT running!"
-            fi
-            
+            echo "=== PM2 list ==="
+            npx pm2 list
             echo
-            echo "=== RECENT LOGS (bot.log) ==="
-            tail -n 50 bot.log
+            echo "=== PM2 info ==="
+            npx pm2 info whatsapp-bot
+            echo
+            echo "=== PM2 logs (Last 50 lines) ==="
+            npx pm2 logs whatsapp-bot --lines 50 --nostream
