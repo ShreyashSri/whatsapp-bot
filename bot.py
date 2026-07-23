@@ -48,6 +48,7 @@ def _parse_group_ids(*env_keys: str) -> set[str]:
 
 
 GROUP_IDS = _parse_group_ids("GROUP_ID", "GROUP_IDS")
+MEDIA_GROUP_ID = os.getenv("MEDIA_GROUP_ID", "").strip() or None
 INCIDENT_GROUP_ID = os.getenv("INCIDENT_GROUP_ID", "").strip() or None
 INCIDENT_PORT = int(os.getenv("INCIDENT_PORT", "8081"))
 
@@ -60,6 +61,7 @@ SESSION_DB = Path.cwd() / "neonize.db"
 
 config: dict = {
     "group_ids": GROUP_IDS,
+    "media_group_id": MEDIA_GROUP_ID,
     "incident_group_id": INCIDENT_GROUP_ID,
     "incident_port": INCIDENT_PORT,
 }
@@ -89,9 +91,18 @@ from features.media import register as register_media        # noqa: E402
 from features.cards import register as register_cards        # noqa: E402
 from features.incidents import register as register_incidents  # noqa: E402
 
-register_media(client, config)
-register_cards(client, config)
+media_handler = register_media(client, config)
+cards_handler = register_cards(client, config)
 register_incidents(client, config)
+
+from neonize.events import MessageEv
+
+@client.event(MessageEv)
+def on_message(client: "NewClient", message: MessageEv):
+    if media_handler:
+        media_handler(client, message)
+    if cards_handler:
+        cards_handler(client, message)
 
 # ---------------------------------------------------------------------------
 # Global error handling
@@ -111,5 +122,6 @@ sys.excepthook = _excepthook
 if __name__ == "__main__":
     log.info("Starting WhatsApp bot...")
     log.info("Groups: %s", GROUP_IDS or "(none)")
+    log.info("Media group: %s", MEDIA_GROUP_ID or "(not set)")
     log.info("Incident group: %s", INCIDENT_GROUP_ID or "(not set)")
     client.connect()

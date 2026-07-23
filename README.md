@@ -17,7 +17,6 @@ Track social media posts across platforms with a full to-do workflow.
 | `!unposted <id> <stage>` | Un-mark a stage |
 | `!posted-list` | List fully posted entries |
 | `!help [command]` | Show help or details for one command |
-| `!set-media` | Register the current group as the media group (self-command) |
 
 **Stages:** design • instagram • linkedin • twitter
 
@@ -64,6 +63,7 @@ Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a
 |----------|-------------|
 | `GROUP_ID` | Primary WhatsApp group ID |
 | `GROUP_IDS` | Optional comma-separated extra group IDs |
+| `MEDIA_GROUP_ID` | WhatsApp group ID for media task manager |
 | `INCIDENT_GROUP_ID` | WhatsApp group ID for incident alerts |
 | `INCIDENT_PORT` | Webhook port (default: 8081) |
 

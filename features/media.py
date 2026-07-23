@@ -8,7 +8,6 @@ Commands:
     !unposted <id> <stage>   — un-mark a stage
     !posted-list             — list fully posted entries
     !help [command]          — show help
-    !set-media               — register the current group as the media group
 """
 
 from __future__ import annotations
@@ -25,6 +24,16 @@ if TYPE_CHECKING:
     from neonize.client import NewClient
 
 log = logging.getLogger(__name__)
+
+
+def _get_text(message: MessageEv) -> str:
+    """Extract text body from a message (handles both plain, extended, and image captions)."""
+    text = message.Message.conversation or ""
+    if message.Message.extendedTextMessage and message.Message.extendedTextMessage.text:
+        text = message.Message.extendedTextMessage.text
+    elif message.Message.imageMessage and message.Message.imageMessage.caption:
+        text = message.Message.imageMessage.caption
+    return text.strip()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -135,12 +144,6 @@ COMMAND_HELP: dict[str, str] = {
         "`!card internship | Priya | Joining [Anthropic] as a Software Engineer Intern | https://example.com/anthropic.png`\n\n"
         "_PDFs are rendered with text-as-text, so they can be edited in Illustrator, Inkscape, or Figma._"
     ),
-    "set-media": (
-        "*!set-media*\n\n"
-        "Self-command sent by this bot's own WhatsApp number inside the target group, to "
-        "register that group as the media-team group. The group id is saved on the server and "
-        "persists across restarts. Send it again in another group to switch."
-    ),
 }
 COMMAND_ALIASES: dict[str, str] = {"todo": "todo", "to-do": "todo", "card-pdf": "card"}
 
@@ -208,30 +211,6 @@ def _format_posted_entry(entry: dict) -> str:
     return f"*#{entry['id']}* — {entry['text']}\n   Posted: {when}"
 
 
-# ---------------------------------------------------------------------------
-# Media group persistence (media-group.json)
-# ---------------------------------------------------------------------------
-
-_MEDIA_GROUP_FILE = Path.cwd() / "media-group.json"
-_media_group_ids: set[str] = set()
-
-
-def _load_media_group() -> None:
-    if not _MEDIA_GROUP_FILE.exists():
-        log.info("No media group configured. Send `!set-media` from this bot's WhatsApp in the target group.")
-        return
-    try:
-        data = json.loads(_MEDIA_GROUP_FILE.read_text())
-        gid = data.get("groupId")
-        if isinstance(gid, str) and gid:
-            _media_group_ids.add(gid)
-            log.info("Media group loaded: %s", gid)
-    except (json.JSONDecodeError, KeyError) as exc:
-        log.error("media-group.json corrupt, ignoring: %s", exc)
-
-
-def _save_media_group(group_id: str) -> None:
-    _MEDIA_GROUP_FILE.write_text(json.dumps({"groupId": group_id}, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -246,11 +225,8 @@ def _reply(client: "NewClient", chat_jid, text: str) -> None:
 
 async def _handle_media_command(client: "NewClient", message: MessageEv) -> None:
     """Process a single media-group command."""
-    text_body = message.Message.conversation or ""
-    if message.Message.extendedTextMessage and message.Message.extendedTextMessage.text:
-        text_body = message.Message.extendedTextMessage.text
-    body = text_body.strip()
-    if not body.startswith("!"):
+    body = _get_text(message)
+    if not body or not body.startswith("!"):
         return
 
     chat_jid = message.Info.MessageSource.Chat
@@ -448,47 +424,24 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
 # ---------------------------------------------------------------------------
 
 
-def register(client: "NewClient", config: dict) -> None:
+def register(client: "NewClient", config: dict) -> callable:
     """Register the media task-manager feature on the neonize client."""
-    _load_media_group()
+    media_group_id = config.get("media_group_id")
 
-    group_ids: set[str] = config.get("group_ids", set())
+    if not media_group_id:
+        log.warning("MEDIA_GROUP_ID not set — skipping media task-manager feature.")
+        return None
 
-    @client.event(MessageEv)
     def on_message(client: "NewClient", message: MessageEv):
-        chat = str(message.Info.MessageSource.Chat)
-
-        # Self-sent !set-media
-        body = message.Message.conversation or ""
-        if message.Message.extendedTextMessage and message.Message.extendedTextMessage.text:
-            body = message.Message.extendedTextMessage.text
-        body = body.strip()
-
-        if body == "!set-media" and message.Info.MessageSource.IsFromMe:
-            # Only works in group chats
-            if not message.Info.MessageSource.IsGroup:
-                _reply(client, message.Info.MessageSource.Chat, "⚠️ `!set-media` only works inside a group chat.")
-                return
-
-            if chat in group_ids:
-                _reply(client, message.Info.MessageSource.Chat, "⚠️ This is the CTF group. Refusing to make it the media group.")
-                return
-
-            _media_group_ids.clear()
-            _media_group_ids.add(chat)
-            _save_media_group(chat)
-            _reply(client, message.Info.MessageSource.Chat, f"✅ Media group set.\n\nTask-manager commands are now live here. Send `!help` for the list.")
-            log.info("Media group set to %s", chat)
-            return
-
+        chat_obj = message.Info.MessageSource.Chat
+        chat = f"{chat_obj.User}@{chat_obj.Server}"
         # Handle media-group commands
-        if chat in _media_group_ids:
+        if chat == media_group_id:
             try:
                 import asyncio
-                asyncio.get_event_loop().run_until_complete(
-                    _handle_media_command(client, message)
-                )
+                asyncio.run(_handle_media_command(client, message))
             except Exception as exc:
                 log.error("Media command error: %s", exc)
 
     log.info("✅ Media task-manager feature registered")
+    return on_message

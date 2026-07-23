@@ -26,16 +26,18 @@ log = logging.getLogger(__name__)
 
 
 def _get_text(message: MessageEv) -> str:
-    """Extract text body from a message (handles both plain and extended)."""
+    """Extract text body from a message (handles both plain, extended, and image captions)."""
     text = message.Message.conversation or ""
     if message.Message.extendedTextMessage and message.Message.extendedTextMessage.text:
         text = message.Message.extendedTextMessage.text
+    elif message.Message.imageMessage and message.Message.imageMessage.caption:
+        text = message.Message.imageMessage.caption
     return text.strip()
 
 
 def _has_image(message: MessageEv) -> bool:
     """Check if the message has an attached image."""
-    return bool(message.Message.imageMessage and message.Message.imageMessage.url)
+    return bool(message.Message.imageMessage and message.Message.imageMessage.URL)
 
 
 async def _handle_card_command(
@@ -114,7 +116,6 @@ async def _handle_card_command(
             png_msg = client.build_image_message(
                 png_bytes,
                 caption=f"🎉 {name}",
-                mime_type="image/png",
             )
             client.send_message(chat_jid, png_msg)
 
@@ -124,7 +125,7 @@ async def _handle_card_command(
                 pdf_bytes,
                 filename=f"{safe_name}-card.pdf",
                 caption=f"📄 {name} — editable PDF",
-                mime_type="application/pdf",
+                mimetype="application/pdf",
             )
             client.send_message(chat_jid, doc_msg)
 
@@ -140,14 +141,9 @@ async def _handle_card_command(
 # ---------------------------------------------------------------------------
 
 
-def register(client: "NewClient", config: dict) -> None:
+def register(client: "NewClient", config: dict) -> callable:
     """Register the card generation feature on the neonize client."""
 
-    media_group_ids: set[str] = set()
-
-    # We piggyback on the same MessageEv — the media feature also registers
-    # its own handler; neonize supports multiple handlers per event.
-    @client.event(MessageEv)
     def on_message(client: "NewClient", message: MessageEv):
         body = _get_text(message)
         lower = body.lower()
@@ -156,20 +152,21 @@ def register(client: "NewClient", config: dict) -> None:
         # Card commands can come from any registered group (media or CTF)
         if lower.startswith("!card-pdf") and (lower == "!card-pdf" or lower[9:10] in (" ", "\n")):
             try:
-                asyncio.get_event_loop().run_until_complete(
+                asyncio.run(
                     _handle_card_command(client, message, "!card-pdf", with_pdf=True)
                 )
             except Exception as exc:
-                log.error("Card-pdf command error: %s", exc)
+                log.error("Card-pdf command error: %s", exc, exc_info=True)
             return
 
         if lower.startswith("!card") and (lower == "!card" or lower[5:6] in (" ", "\n")):
             try:
-                asyncio.get_event_loop().run_until_complete(
+                asyncio.run(
                     _handle_card_command(client, message, "!card", with_pdf=False)
                 )
             except Exception as exc:
-                log.error("Card command error: %s", exc)
+                log.error("Card command error: %s", exc, exc_info=True)
             return
 
     log.info("✅ Card generation feature registered")
+    return on_message

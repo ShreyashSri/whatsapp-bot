@@ -7,7 +7,6 @@ venv/
 .github/
 neonize.db
 posts.json
-media-group.json
 incident_state.json
 preview-card.*
 node_modules/

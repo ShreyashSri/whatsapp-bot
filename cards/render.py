@@ -325,20 +325,24 @@ def _build_html(
     box-shadow: 0 10px 26px rgba(0,0,0,0.5);
   }}
   .pill.logo-pill {{
-    padding: 18px 28px;
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
   }}
   .pill.logo-pill img {{
-    height: 72px;
-    max-width: 420px;
+    max-height: 150px;
+    max-width: 480px;
     object-fit: contain;
     display: block;
+    margin: 0 auto;
+    border-radius: 12px;
   }}
 </style>
 </head>
 <body>
   <svg class="grid-bg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {CARD_W} {CARD_H}" width="{CARD_W}" height="{CARD_H}" aria-hidden="true">
     <defs>
-      <pattern id="grid-pattern" width="52" height="52" patternUnits="userSpaceOnUse">
+      <pattern id="grid-pattern" width="52" height="52" patternUnits="userSpaceOnUse" patternTransform="translate(20, 25)">
         <path d="M 52 0 L 0 0 0 52" fill="none" stroke="#969FBE" stroke-opacity="0.34" stroke-width="1"/>
       </pattern>
     </defs>
