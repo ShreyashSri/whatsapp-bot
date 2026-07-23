@@ -31,15 +31,28 @@ Generate achievement/congratulations cards as PNG images or editable PDFs.
 | `!card <type> \| <name> \| <text>` | Generate a PNG card (attach a photo) |
 | `!card-pdf <type> \| <name> \| <text>` | Same, plus an editable PDF |
 
-**Card types:** `gsoc`, `lfx`, `hackathon`, `competitive`, `acm`, `internship`, `custom`
+**Card types:** `gsoc`, `lfx`, `hackathon`, `competitive`, `acm`, `internship`, `talk`, `custom`
 
 Wrap any phrase in `[brackets]` to highlight it in the accent colour. Attach a profile photo to the same message.
+
+#### Talk Cards
+
+Use `talk` for speaker thank-you posts:
+
+```
+!card talk | <speaker name> | <talk topic/title> | <event name> | <logo URL 1> | <logo URL 2>
+```
+
+The first three fields after `talk` are required: speaker name, talk topic/title, and event name.
+The template writes the thank-you copy automatically: `THANK YOU !!`, `for presenting us at`, and `and giving an insightful talk on`.
+Logo URLs are optional. If you pass one logo, it is centered at the bottom; if you pass two, they are shown side by side. Use direct image URLs (`.png`, `.jpg`, `.webp`, `.svg`) for best results.
 
 **Examples:**
 ```
 !card gsoc | Manas Hejmadi | For getting selected as mentor in [Google Summer of Code] 2026 with [API Dash]
 !card-pdf lfx | Shubhang Sinha | For being a [LiFT Scholarship] holder for 2026
 !card internship | Priya | Joining [Anthropic] as a Software Engineer Intern | https://example.com/anthropic.png
+!card talk | Dhruv Puri | Why Your Cluster-Wide Policies Are a Risk (And What to Do About It) | KubeCon + CloudNativeCon India 2026 | https://example.com/cncf.png | https://example.com/kubecon.png
 ```
 
 ### 🚨 Incident Alerts

@@ -3,6 +3,10 @@
 Commands:
     !card <type> | <name> | <text>       — generate a PNG card (attach photo)
     !card-pdf <type> | <name> | <text>   — generate PNG + editable PDF
+
+For the ``talk`` type, ``name`` is the speaker, ``text`` is the talk title,
+and the fourth part is the event name. Optional fifth/sixth parts are event
+logo URLs.
 """
 
 from __future__ import annotations
@@ -40,6 +44,17 @@ def _has_image(message: MessageEv) -> bool:
     return bool(message.Message.imageMessage and message.Message.imageMessage.URL)
 
 
+def _parse_talk_logo_urls(raw_parts: list[str]) -> list[str]:
+    """Parse up to two talk logo URLs from pipe fields or comma-separated text."""
+    urls: list[str] = []
+    for raw_part in raw_parts:
+        for item in raw_part.split(","):
+            item = item.strip()
+            if item:
+                urls.append(item)
+    return urls
+
+
 async def _handle_card_command(
     client: "NewClient",
     message: MessageEv,
@@ -63,13 +78,20 @@ async def _handle_card_command(
     raw_type = parts[0] if len(parts) > 0 else ""
     name = parts[1] if len(parts) > 1 else ""
     text = parts[2] if len(parts) > 2 else ""
-    logo_url = parts[3] if len(parts) > 3 else None
+    card_type = raw_type.lower()
+    if card_type == "talk":
+        logo_url = None
+        event_name = parts[3] if len(parts) > 3 else ""
+        event_logo_urls = _parse_talk_logo_urls(parts[4:])
+    else:
+        logo_url = parts[3] if len(parts) > 3 else None
+        event_name = None
+        event_logo_urls = None
 
     if not raw_type or not name or not text:
         client.send_message(chat_jid, COMMAND_HELP["card"])
         return
 
-    card_type = raw_type.lower()
     if card_type not in CARD_TYPES:
         client.send_message(
             chat_jid,
@@ -77,6 +99,19 @@ async def _handle_card_command(
             "See `!help card` for details.",
         )
         return
+
+    if card_type == "talk":
+        if not event_name:
+            client.send_message(
+                chat_jid,
+                "⚠️ Talk cards require an event name as the 4th field.\n\n"
+                "Usage: `!card talk | <speaker> | <talk title> | <event name> | <logoUrl1> | <logoUrl2>`",
+            )
+            return
+
+        if len(event_logo_urls) > 2:
+            client.send_message(chat_jid, "⚠️ Talk cards support at most two event logo URLs.")
+            return
 
     if not _has_image(message):
         client.send_message(
@@ -106,6 +141,8 @@ async def _handle_card_command(
             photo_bytes=photo_bytes,
             photo_mime=photo_mime,
             logo_url=logo_url,
+            event_name=event_name,
+            event_logo_urls=event_logo_urls,
             formats=formats,
         )
 
