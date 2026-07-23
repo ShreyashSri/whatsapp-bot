@@ -1,110 +1,181 @@
-"""Community Group Tagging Feature."""
+"""Community Group Tagging Feature.
+
+When someone @mentions a group in any community chat, the bot sends a single
+notification message that silently pings every member of that group.  Members
+receive a notification but the message itself only shows the group name — no
+individual @names are displayed.
+
+Requirements:
+  - The bot must be a member of the mentioned group.
+  - Works for any group the bot has joined within the community.
+"""
 
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING
-from neonize.events import MessageEv
+
+from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
+    ContextInfo,
+    ExtendedTextMessage,
+    Message,
+)
+from neonize.utils.jid import Jid2String, JIDToNonAD
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
+    from neonize.events import MessageEv
 
 log = logging.getLogger(__name__)
 
-def _get_text(message: MessageEv) -> str:
-    """Extract text body from a message."""
-    text = message.Message.conversation or ""
-    if message.Message.extendedTextMessage and message.Message.extendedTextMessage.text:
-        text = message.Message.extendedTextMessage.text
-    elif message.Message.imageMessage and message.Message.imageMessage.caption:
-        text = message.Message.imageMessage.caption
-    return text.strip()
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_context_info(message: "MessageEv") -> ContextInfo | None:
+    """Extract ContextInfo from the incoming message, regardless of type.
+
+    WhatsApp wraps the real payload in ephemeral / viewOnce containers.
+    Rather than manually unwrapping every layer we iterate over protobuf
+    fields until we find a ContextInfo.
+    """
+    msg = message.Message
+
+    # Walk through wrapper layers (ephemeral, viewOnce, etc.)
+    for _ in range(5):  # safety limit
+        found_wrapper = False
+        for field_desc, value in msg.ListFields():
+            name = field_desc.name
+            # Unwrap known wrapper messages
+            if name in (
+                "ephemeralMessage",
+                "viewOnceMessage",
+                "viewOnceMessageV2",
+                "documentWithCaptionMessage",
+                "groupMentionedMessage",
+            ):
+                inner = getattr(value, "message", None)
+                if inner and inner.ListFields():
+                    msg = inner
+                    found_wrapper = True
+                    break
+        if not found_wrapper:
+            break
+
+    # Now look for contextInfo on the actual message type
+    for field_desc, value in msg.ListFields():
+        if field_desc.name.endswith("Message"):
+            ctx = getattr(value, "contextInfo", None)
+            if ctx is not None and ctx.ListFields():
+                return ctx
+    return None
+
+
+def _get_group_mentions(ctx: ContextInfo) -> list[tuple[str, str]]:
+    """Extract (groupJID, groupSubject) pairs from contextInfo.groupMentions."""
+    mentions = []
+    for gm in getattr(ctx, "groupMentions", []):
+        jid = getattr(gm, "groupJID", "")
+        subject = getattr(gm, "groupSubject", "")
+        if jid:
+            mentions.append((jid, subject))
+    return mentions
+
+
+# ---------------------------------------------------------------------------
+# Feature registration
+# ---------------------------------------------------------------------------
 
 def register(client: "NewClient", config: dict) -> callable:
-    def on_message(client: "NewClient", message: MessageEv):
+    def on_message(client: "NewClient", message: "MessageEv"):
         if not message.Info or not message.Info.MessageSource:
             return
-            
+
         chat = message.Info.MessageSource.Chat
+
+        # Only process group messages
         if getattr(chat, "Server", "") != "g.us":
             return
-            
-        # Ignore our own messages to prevent infinite loops
+
+        # Ignore our own messages to prevent loops
         if message.Info.MessageSource.IsFromMe:
             return
-            
-        body = _get_text(message)
-        if not body:
+
+        ctx = _get_context_info(message)
+        if ctx is None:
             return
-            
-        lower_body = body.lower()
-        
+
+        group_mentions = _get_group_mentions(ctx)
+        if not group_mentions:
+            return
+
+        log.info("Detected group mentions: %s", group_mentions)
+
+        # Cache joined groups so we only fetch once per message
         try:
             groups = client.get_joined_groups()
-            chat_info = client.get_group_info(chat)
         except Exception as exc:
-            log.error("Failed to get joined groups or chat info: %s", exc)
+            log.error("Failed to fetch joined groups: %s", exc)
             return
-            
-        chat_parent = getattr(chat_info, "GroupLinkedParent", None)
-        chat_parent_user = getattr(chat_parent, "User", "") if chat_parent else ""
-        
-        # If the chat itself is the community announcement group, we might need its JID
-        if not chat_parent_user and getattr(chat_info, "GroupIsDefaultSub", False):
-             chat_parent_user = chat.User
-             
-        # Filter groups to only those in the same community (or the chat itself)
-        community_groups = []
+
+        # Build a lookup: User part -> GroupInfo
+        groups_by_user = {}
         for g in groups:
-            g_parent = getattr(g, "GroupLinkedParent", None)
-            g_parent_user = getattr(g_parent, "User", "") if g_parent else ""
-            if (chat_parent_user and g_parent_user == chat_parent_user) or (g.JID.User == chat.User):
-                community_groups.append(g)
-            
-        # Sort by longest name first to avoid matching "Dev" inside "@Dev Team"
-        sorted_groups = sorted(
-            community_groups, 
-            key=lambda g: len(getattr(g.GroupName, "Name", getattr(g, "Name", getattr(g, "name", "")))), 
-            reverse=True
-        )
-        
-        matched_groups = []
-        for g in sorted_groups:
-            name = getattr(g.GroupName, "Name", getattr(g, "Name", getattr(g, "name", "")))
-            if not name:
+            user = getattr(g.JID, "User", "")
+            if user:
+                groups_by_user[user] = g
+
+        for group_jid_str, group_subject in group_mentions:
+            target_user = group_jid_str.split("@")[0]
+            ginfo = groups_by_user.get(target_user)
+
+            if ginfo is None:
+                log.warning(
+                    "Bot is not in group %s (%s) — cannot tag its members.",
+                    group_subject, group_jid_str,
+                )
                 continue
-                
-            mention_str = f"@{name.lower()}"
-            if mention_str in lower_body:
-                matched_groups.append((g, name))
-                # Remove matched mention to avoid double matching shorter sub-names
-                lower_body = lower_body.replace(mention_str, "")
-                
-        if not matched_groups:
-            return
-            
-        for group, name in matched_groups:
+
+            # Collect participant JIDs as full strings (user@server)
+            mentioned_jids: list[str] = []
+
+            for p in getattr(ginfo, "Participants", []):
+                jid = getattr(p, "JID", None)
+                if jid is None:
+                    continue
+                user = getattr(jid, "User", "")
+                if not user:
+                    continue
+                # Convert to non-AD form and then to string
+                mentioned_jids.append(Jid2String(JIDToNonAD(jid)))
+
+            if not mentioned_jids:
+                log.warning("No participants found in group %s", group_subject)
+                continue
+
+            # Clean message — no @names visible, but mentionedJID ensures notifications
+            text = f"📢 Tagging all members of {group_subject}"
+
+            # Construct the protobuf Message directly so we have full control
+            # over mentionedJID (avoids the regex-based ghost_mentions hack).
+            proto_msg = Message(
+                extendedTextMessage=ExtendedTextMessage(
+                    text=text,
+                    contextInfo=ContextInfo(
+                        mentionedJID=mentioned_jids,
+                    ),
+                ),
+            )
+
             try:
-                ginfo = client.get_group_info(group.JID)
-            except Exception as e:
-                log.error("Failed to get group info for %s: %s", name, e)
-                continue
-                
-            mentions = []
-            if hasattr(ginfo, "Participants"):
-                for p in ginfo.Participants:
-                    if hasattr(p, "JID"):
-                        user = getattr(p.JID, "User", "")
-                        if user:
-                            mentions.append(f"@{user}")
-                            
-            if mentions:
-                ghost_str = " ".join(mentions)
-                text = f"📢 Tagging all members of {name}"
-                try:
-                    client.send_message(chat, text, ghost_mentions=ghost_str)
-                    log.info("Sent community tag for group: %s", name)
-                except Exception as e:
-                    log.error("Failed to send community tag message: %s", e)
+                client.send_message(chat, proto_msg)
+                log.info(
+                    "Sent community tag for group %s — %d members mentioned.",
+                    group_subject, len(mentioned_jids),
+                )
+            except Exception as exc:
+                log.error("Failed to send community tag message: %s", exc)
 
     log.info("✅ Community tag feature registered")
     return on_message

@@ -55,6 +55,14 @@ Logo URLs are optional. If you pass one logo, it is centered at the bottom; if y
 !card talk | Dhruv Puri | Why Your Cluster-Wide Policies Are a Risk (And What to Do About It) | KubeCon + CloudNativeCon India 2026 | https://example.com/cncf.png | https://example.com/kubecon.png
 ```
 
+### 🏷️ Community Group Tagging
+
+When someone @mentions a group in any community chat, the bot silently pings every member of that group. Members receive a notification but the message only shows the group name — no individual @names are displayed.
+
+- Works for any group the bot has joined within the community
+- No configuration needed — auto-detects group mentions via WhatsApp's native `groupMentions` protocol
+- The bot must be a member of the mentioned group to tag its participants
+
 ### 🚨 Incident Alerts
 
 Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a WhatsApp group.
@@ -91,6 +99,7 @@ whatsapp-bot/
 │   ├── __init__.py
 │   ├── media.py            # Media task manager
 │   ├── cards.py            # Card generation
+│   ├── community_tag.py    # Community group tagging
 │   └── incidents.py        # Incident alerts
 ├── cards/
 │   ├── __init__.py
