@@ -7,7 +7,7 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: PM2 status + recent logs
+      - name: Check process and logs
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -18,20 +18,15 @@ jobs:
           script: |
             set +e
             cd ~/whatsapp-bot
-            echo "=== PM2 list ==="
-            pm2 list
+            
+            echo "=== BOT PROCESS STATUS ==="
+            if pgrep -f "venv/bin/python bot.py" > /dev/null; then
+              echo "✅ Bot is currently RUNNING"
+              ps -p $(pgrep -f "venv/bin/python bot.py") -o pid,etime,%cpu,%mem,cmd
+            else
+              echo "❌ Bot is NOT running!"
+            fi
+            
             echo
-            echo "=== PM2 info ==="
-            pm2 info whatsapp-bot
-            echo
-            echo "=== Session DB present? ==="
-            ls -la neonize.db 2>&1
-            echo
-            echo "=== Python version ==="
-            python3 --version
-            echo
-            echo "=== Last 200 OUT lines ==="
-            pm2 logs whatsapp-bot --lines 200 --nostream --out
-            echo
-            echo "=== Last 100 ERR lines ==="
-            pm2 logs whatsapp-bot --lines 100 --nostream --err
+            echo "=== RECENT LOGS (bot.log) ==="
+            tail -n 50 bot.log

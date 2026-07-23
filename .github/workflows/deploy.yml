@@ -60,9 +60,21 @@ jobs:
           port: ${{ secrets.SSH_PORT || 22 }}
           command_timeout: 10m
           script: |
+            # Load user profile
+            source ~/.profile || source ~/.bashrc || source ~/.zshrc || true
+            
             cd ~/whatsapp-bot
-            python3 -m pip install --upgrade pip
-            pip install -r requirements.txt
-            playwright install --with-deps chromium
-            pm2 restart whatsapp-bot 2>/dev/null || pm2 start "python3 bot.py" --name whatsapp-bot
-            pm2 save
+            
+            # Create a virtual environment if it doesn't exist
+            python3 -m venv venv
+            
+            # Use the virtual environment's pip to install dependencies safely
+            venv/bin/python -m pip install --upgrade pip
+            venv/bin/pip install -r requirements.txt
+            
+            # Install Playwright browsers using the venv's playwright binary
+            venv/bin/playwright install --with-deps chromium
+            
+            # Start/Restart the bot in the background
+            pkill -f "venv/bin/python bot.py" || true
+            nohup venv/bin/python bot.py > bot.log 2>&1 &
