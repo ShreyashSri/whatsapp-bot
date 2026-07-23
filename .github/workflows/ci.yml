@@ -2,7 +2,7 @@ name: PBBot CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
 
 jobs:
@@ -17,5 +17,7 @@ jobs:
         run: python -m pip install -e '.[dev]'
       - name: Compile
         run: python -m compileall -q src
+      - name: Lint
+        run: ruff check .
       - name: Tests
         run: pytest

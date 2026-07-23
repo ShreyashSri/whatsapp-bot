@@ -25,6 +25,3 @@ jobs:
             echo
             echo "=== PBBot health ==="
             curl -fsS http://localhost:3000/health
-            echo
-            echo "=== OpenWA dependency health ==="
-            curl -fsS http://localhost:3000/health/openwa
