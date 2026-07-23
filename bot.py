@@ -51,6 +51,7 @@ GROUP_IDS = _parse_group_ids("GROUP_ID", "GROUP_IDS")
 MEDIA_GROUP_ID = os.getenv("MEDIA_GROUP_ID", "").strip() or None
 INCIDENT_GROUP_ID = os.getenv("INCIDENT_GROUP_ID", "").strip() or None
 INCIDENT_PORT = int(os.getenv("INCIDENT_PORT", "8081"))
+SUBGROUP_BLOCKED_USERS = _parse_group_ids("SUBGROUP_BLOCKED_USERS")
 
 # Session database for neonize (persists WhatsApp login across restarts)
 SESSION_DB = Path.cwd() / "neonize.db"
@@ -64,6 +65,7 @@ config: dict = {
     "media_group_id": MEDIA_GROUP_ID,
     "incident_group_id": INCIDENT_GROUP_ID,
     "incident_port": INCIDENT_PORT,
+    "subgroup_blocked_users": SUBGROUP_BLOCKED_USERS,
 }
 
 # ---------------------------------------------------------------------------

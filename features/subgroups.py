@@ -289,6 +289,12 @@ def _detect_subgroup_mentions(text: str, subgroups: dict[str, list[str]]) -> lis
 # ---------------------------------------------------------------------------
 
 def register(client: "NewClient", config: dict) -> callable:
+    # Clean blocked users (remove spaces, +, -, etc) so they match sender.User
+    blocked_users: set[str] = {
+        "".join(c for c in u if c.isdigit())
+        for u in config.get("subgroup_blocked_users", set())
+    }
+
     def on_message(client: "NewClient", message: "MessageEv"):
         if not message.Info or not message.Info.MessageSource:
             return
@@ -301,6 +307,12 @@ def register(client: "NewClient", config: dict) -> callable:
 
         # Ignore our own messages to prevent loops
         if message.Info.MessageSource.IsFromMe:
+            return
+
+        # Block listed users from using the subgroup feature
+        sender = message.Info.MessageSource.Sender
+        sender_user = getattr(sender, "User", "")
+        if sender_user in blocked_users:
             return
 
         body = _get_text(message)

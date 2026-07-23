@@ -106,6 +106,7 @@ Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a
 | `MEDIA_GROUP_ID` | WhatsApp group ID for media task manager |
 | `INCIDENT_GROUP_ID` | WhatsApp group ID for incident alerts |
 | `INCIDENT_PORT` | Webhook port (default: 8081) |
+| `SUBGROUP_BLOCKED_USERS` | Comma-separated phone numbers blocked from using subgroups |
 
 Set these in a `.env` file (copy from `.env.example`). The `.env` is never committed.
 
