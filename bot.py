@@ -90,9 +90,11 @@ def on_connected(_client: NewClient, _event: ConnectedEv):
 from features.media import register as register_media        # noqa: E402
 from features.cards import register as register_cards        # noqa: E402
 from features.incidents import register as register_incidents  # noqa: E402
+from features.community_tag import register as register_community_tag  # noqa: E402
 
 media_handler = register_media(client, config)
 cards_handler = register_cards(client, config)
+community_tag_handler = register_community_tag(client, config)
 register_incidents(client, config)
 
 from neonize.events import MessageEv
@@ -103,6 +105,8 @@ def on_message(client: "NewClient", message: MessageEv):
         media_handler(client, message)
     if cards_handler:
         cards_handler(client, message)
+    if community_tag_handler:
+        community_tag_handler(client, message)
 
 # ---------------------------------------------------------------------------
 # Global error handling
