@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     port: int = 3000
     openwa_webhook_secret: str = ""
     command_prefixes: Annotated[tuple[str, ...], NoDecode] = ("/", "!")
+    openwa_base_url: str = "http://localhost:2785/api"
+    openwa_api_key: str | None = None
+    openwa_session_id: str = "main"
 
     @field_validator("command_prefixes", mode="before")
     @classmethod
