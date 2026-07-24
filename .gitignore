@@ -17,6 +17,10 @@ neonize.db
 # Bot runtime state
 posts.json
 incident_state.json
+tasks.json
+
+# Test cache
+.pytest_cache/
 
 # Card preview output
 preview-card.png
