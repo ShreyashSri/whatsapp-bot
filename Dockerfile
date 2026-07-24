@@ -10,6 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Install Playwright browsers in a shared location readable by the runtime
+# user instead of root's private cache.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 # Keep bot logs visible to the container runtime.
 ENV PYTHONUNBUFFERED=1
 
