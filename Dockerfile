@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dumb-init \
     fonts-liberation \
     fonts-noto-color-emoji \
+    libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
