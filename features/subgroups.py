@@ -272,13 +272,13 @@ def _detect_subgroup_mentions(text: str, subgroups: dict[str, list[str]]) -> lis
 
 
 def _is_subgroup_command(text: str) -> bool:
-    """Return whether text is an explicit subgroup command.
+    """Return whether text is an explicit subgroup command or @mention.
 
     Own-account commands are allowed for testing, but own-account replies and
     generated mention messages must not be fed back into the feature.
     """
     lower = text.lower()
-    return any(
+    if any(
         lower == command or lower.startswith(f"{command} ")
         for command in (
             "!add-subgroup",
@@ -286,8 +286,13 @@ def _is_subgroup_command(text: str) -> bool:
             "!delete-subgroup",
             "!list-subgroups",
             "!subgroup-info",
+            "!labels",
         )
-    )
+    ):
+        return True
+    if "@" in text:
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +304,12 @@ def register(client: "NewClient", config: dict) -> callable:
     blocked_users: set[str] = {
         "".join(c for c in u if c.isdigit())
         for u in config.get("subgroup_blocked_users", set())
+    }
+
+    # Admin users for management commands (empty = no restriction)
+    admin_users: set[str] = {
+        "".join(c for c in u if c.isdigit())
+        for u in config.get("admin_users", set())
     }
 
     session_factory = config.get("db_session_factory")
@@ -335,6 +346,20 @@ def register(client: "NewClient", config: dict) -> callable:
         # ----- Command handling -----
         lower = body.lower()
 
+        # Admin-only gate for all management commands
+        is_management_command = (
+            lower.startswith("!add-subgroup")
+            or lower.startswith("!remove-from-subgroup")
+            or lower.startswith("!delete-subgroup")
+            or lower == "!list-subgroups"
+            or lower.startswith("!subgroup-info")
+            or lower.startswith("!labels")
+        )
+        log.info("DEBUG sender_user=%r admin_users=%r", sender_user, admin_users)
+        if is_management_command and admin_users and sender_user not in admin_users:
+            _reply(client, chat, "⚠️ Only admins can use this command.")
+            return
+
         if lower == "!add-subgroup" or lower.startswith("!add-subgroup "):
             args = body[len("!add-subgroup"):].strip()
             if not args:
@@ -369,6 +394,52 @@ def register(client: "NewClient", config: dict) -> callable:
                 _reply(client, chat, "⚠️ Usage: `!subgroup-info <name>`")
             else:
                 _cmd_subgroup_info(client, chat, args, store)
+            return
+
+        # ----- !labels aliases (route to subgroup handlers) -----
+        if lower == "!labels" or lower.startswith("!labels "):
+            args = body[7:].strip()
+            if not args:
+                _cmd_list_subgroups(client, chat, store)
+                return
+
+            parts = args.split(None, 1)
+            subcmd = parts[0].lower()
+            rest = parts[1].strip() if len(parts) > 1 else ""
+
+            if subcmd in ("create", "add"):
+                if not rest:
+                    _reply(client, chat, "⚠️ Usage: `!labels create <name> | @user1 @user2 …`")
+                else:
+                    _cmd_add_subgroup(client, chat, rest, _get_mentioned_jids(message), store)
+                return
+
+            if subcmd == "remove":
+                if not rest:
+                    _reply(client, chat, "⚠️ Usage: `!labels remove <name> | @user1 @user2 …`")
+                else:
+                    _cmd_remove_from_subgroup(client, chat, rest, _get_mentioned_jids(message), store)
+                return
+
+            if subcmd == "delete":
+                if not rest:
+                    _reply(client, chat, "⚠️ Usage: `!labels delete <name>`")
+                else:
+                    _cmd_delete_subgroup(client, chat, rest, store)
+                return
+
+            if subcmd == "list":
+                _cmd_list_subgroups(client, chat, store)
+                return
+
+            if subcmd == "info":
+                if not rest:
+                    _reply(client, chat, "⚠️ Usage: `!labels info <name>`")
+                else:
+                    _cmd_subgroup_info(client, chat, rest, store)
+                return
+
+            _reply(client, chat, f'⚠️ Unknown label subcommand "{subcmd}".\nUse: create, add, remove, delete, list, info')
             return
 
         # ----- @subgroup tag detection -----
