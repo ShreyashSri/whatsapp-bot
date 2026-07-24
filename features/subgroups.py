@@ -5,7 +5,7 @@ them with WhatsApp users.  When someone writes ``@blogmaintainers`` in any
 group the bot is in, every member of that subgroup receives a silent
 notification (ghost mention) — their names do not appear in the message.
 
-Subgroups are global (not per-group) and persisted in ``subgroups.json``.
+Subgroups are global (not per-group) and persisted in PostgreSQL.
 
 Commands:
   !add-subgroup <name> | @user1 @user2 …
@@ -17,10 +17,8 @@ Commands:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
@@ -28,6 +26,8 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
     ExtendedTextMessage,
     Message,
 )
+
+from db.subgroup_store import SubgroupStore
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -39,32 +39,15 @@ log = logging.getLogger(__name__)
 _NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{1,31}$")
 
 # ---------------------------------------------------------------------------
-# Persistence (subgroups.json)
+# Persistence
 # ---------------------------------------------------------------------------
 
-_SUBGROUPS_FILE: Path = Path.cwd() / "subgroups.json"
+def _read_subgroups(store: SubgroupStore) -> dict[str, list[str]]:
+    return store.read()
 
 
-def _read_subgroups() -> dict[str, list[str]]:
-    """Load subgroups from disk.  Returns {name: [jid, …]}."""
-    if not _SUBGROUPS_FILE.exists():
-        return {}
-    try:
-        data = json.loads(_SUBGROUPS_FILE.read_text())
-        if not isinstance(data, dict):
-            return {}
-        # Sanitise: drop any entries that aren't lists of strings
-        return {
-            k: v for k, v in data.items()
-            if isinstance(v, list) and all(isinstance(j, str) for j in v)
-        }
-    except (json.JSONDecodeError, OSError) as exc:
-        log.error("subgroups.json corrupt, starting fresh: %s", exc)
-        return {}
-
-
-def _write_subgroups(data: dict[str, list[str]]) -> None:
-    _SUBGROUPS_FILE.write_text(json.dumps(data, indent=2))
+def _write_subgroups(store: SubgroupStore, data: dict[str, list[str]]) -> None:
+    store.write(data)
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +110,9 @@ def _reply(client: "NewClient", chat_jid, text: str) -> None:
 # Command handlers
 # ---------------------------------------------------------------------------
 
-def _cmd_add_subgroup(client, chat_jid, body: str, mentioned_jids: list[str]) -> None:
+def _cmd_add_subgroup(
+    client, chat_jid, body: str, mentioned_jids: list[str], store: SubgroupStore
+) -> None:
     """!add-subgroup <name> | @user1 @user2 …"""
     parts = body.split("|", 1)
     raw_name = parts[0].strip().lstrip("@")
@@ -150,11 +135,11 @@ def _cmd_add_subgroup(client, chat_jid, body: str, mentioned_jids: list[str]) ->
         _reply(client, chat_jid, "⚠️ Mention at least one user after the `|`.")
         return
 
-    subgroups = _read_subgroups()
+    subgroups = _read_subgroups(store)
     existing = set(subgroups.get(name, []))
     added = [j for j in mentioned_jids if j not in existing]
     subgroups[name] = list(existing | set(mentioned_jids))
-    _write_subgroups(subgroups)
+    _write_subgroups(store, subgroups)
 
     total = len(subgroups[name])
     if added:
@@ -166,7 +151,9 @@ def _cmd_add_subgroup(client, chat_jid, body: str, mentioned_jids: list[str]) ->
         _reply(client, chat_jid, f"ℹ️ All mentioned users are already in *@{name}* ({total} members).")
 
 
-def _cmd_remove_from_subgroup(client, chat_jid, body: str, mentioned_jids: list[str]) -> None:
+def _cmd_remove_from_subgroup(
+    client, chat_jid, body: str, mentioned_jids: list[str], store: SubgroupStore
+) -> None:
     """!remove-from-subgroup <name> | @user1 @user2 …"""
     parts = body.split("|", 1)
     raw_name = parts[0].strip().lstrip("@")
@@ -176,7 +163,7 @@ def _cmd_remove_from_subgroup(client, chat_jid, body: str, mentioned_jids: list[
         _reply(client, chat_jid, "⚠️ Usage: `!remove-from-subgroup <name> | @user1 @user2 …`")
         return
 
-    subgroups = _read_subgroups()
+    subgroups = _read_subgroups(store)
     if name not in subgroups:
         _reply(client, chat_jid, f"⚠️ Subgroup *@{name}* does not exist.")
         return
@@ -191,7 +178,7 @@ def _cmd_remove_from_subgroup(client, chat_jid, body: str, mentioned_jids: list[
 
     if remaining:
         subgroups[name] = remaining
-        _write_subgroups(subgroups)
+        _write_subgroups(store, subgroups)
         _reply(
             client, chat_jid,
             f"✅ Removed {removed_count} member(s) from *@{name}* ({len(remaining)} remaining).",
@@ -199,14 +186,14 @@ def _cmd_remove_from_subgroup(client, chat_jid, body: str, mentioned_jids: list[
     else:
         # Last members removed — auto-delete the subgroup
         del subgroups[name]
-        _write_subgroups(subgroups)
+        _write_subgroups(store, subgroups)
         _reply(
             client, chat_jid,
             f"🗑️ Subgroup *@{name}* deleted (no members remaining).",
         )
 
 
-def _cmd_delete_subgroup(client, chat_jid, name_raw: str) -> None:
+def _cmd_delete_subgroup(client, chat_jid, name_raw: str, store: SubgroupStore) -> None:
     """!delete-subgroup <name>"""
     name = name_raw.strip().lstrip("@").lower()
 
@@ -214,19 +201,19 @@ def _cmd_delete_subgroup(client, chat_jid, name_raw: str) -> None:
         _reply(client, chat_jid, "⚠️ Usage: `!delete-subgroup <name>`")
         return
 
-    subgroups = _read_subgroups()
+    subgroups = _read_subgroups(store)
     if name not in subgroups:
         _reply(client, chat_jid, f"⚠️ Subgroup *@{name}* does not exist.")
         return
 
     del subgroups[name]
-    _write_subgroups(subgroups)
+    _write_subgroups(store, subgroups)
     _reply(client, chat_jid, f"🗑️ Subgroup *@{name}* deleted.")
 
 
-def _cmd_list_subgroups(client, chat_jid) -> None:
+def _cmd_list_subgroups(client, chat_jid, store: SubgroupStore) -> None:
     """!list-subgroups"""
-    subgroups = _read_subgroups()
+    subgroups = _read_subgroups(store)
     if not subgroups:
         _reply(client, chat_jid, "📭 No subgroups defined yet.")
         return
@@ -235,7 +222,7 @@ def _cmd_list_subgroups(client, chat_jid) -> None:
     _reply(client, chat_jid, f"*📋 Subgroups ({len(subgroups)})*\n\n" + "\n".join(lines))
 
 
-def _cmd_subgroup_info(client, chat_jid, name_raw: str) -> None:
+def _cmd_subgroup_info(client, chat_jid, name_raw: str, store: SubgroupStore) -> None:
     """!subgroup-info <name>"""
     name = name_raw.strip().lstrip("@").lower()
 
@@ -243,7 +230,7 @@ def _cmd_subgroup_info(client, chat_jid, name_raw: str) -> None:
         _reply(client, chat_jid, "⚠️ Usage: `!subgroup-info <name>`")
         return
 
-    subgroups = _read_subgroups()
+    subgroups = _read_subgroups(store)
     if name not in subgroups:
         _reply(client, chat_jid, f"⚠️ Subgroup *@{name}* does not exist.")
         return
@@ -295,6 +282,11 @@ def register(client: "NewClient", config: dict) -> callable:
         for u in config.get("subgroup_blocked_users", set())
     }
 
+    session_factory = config.get("db_session_factory")
+    if session_factory is None:
+        raise RuntimeError("Subgroups feature requires db_session_factory")
+    store = SubgroupStore(session_factory)
+
     def on_message(client: "NewClient", message: "MessageEv"):
         if not message.Info or not message.Info.MessageSource:
             return
@@ -327,7 +319,7 @@ def register(client: "NewClient", config: dict) -> callable:
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!add-subgroup <name> | @user1 @user2 …`")
             else:
-                _cmd_add_subgroup(client, chat, args, _get_mentioned_jids(message))
+                _cmd_add_subgroup(client, chat, args, _get_mentioned_jids(message), store)
             return
 
         if lower == "!remove-from-subgroup" or lower.startswith("!remove-from-subgroup "):
@@ -335,7 +327,7 @@ def register(client: "NewClient", config: dict) -> callable:
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!remove-from-subgroup <name> | @user1 @user2 …`")
             else:
-                _cmd_remove_from_subgroup(client, chat, args, _get_mentioned_jids(message))
+                _cmd_remove_from_subgroup(client, chat, args, _get_mentioned_jids(message), store)
             return
 
         if lower == "!delete-subgroup" or lower.startswith("!delete-subgroup "):
@@ -343,11 +335,11 @@ def register(client: "NewClient", config: dict) -> callable:
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!delete-subgroup <name>`")
             else:
-                _cmd_delete_subgroup(client, chat, args)
+                _cmd_delete_subgroup(client, chat, args, store)
             return
 
         if lower == "!list-subgroups":
-            _cmd_list_subgroups(client, chat)
+            _cmd_list_subgroups(client, chat, store)
             return
 
         if lower == "!subgroup-info" or lower.startswith("!subgroup-info "):
@@ -355,11 +347,11 @@ def register(client: "NewClient", config: dict) -> callable:
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!subgroup-info <name>`")
             else:
-                _cmd_subgroup_info(client, chat, args)
+                _cmd_subgroup_info(client, chat, args, store)
             return
 
         # ----- @subgroup tag detection -----
-        subgroups = _read_subgroups()
+        subgroups = _read_subgroups(store)
         matched = _detect_subgroup_mentions(body, subgroups)
         if not matched:
             return
