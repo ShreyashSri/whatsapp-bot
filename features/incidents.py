@@ -3,8 +3,8 @@
 Runs a lightweight Flask HTTP server that accepts Prometheus/Alertmanager-style
 payloads on ``POST /alert`` and forwards incident messages to a WhatsApp group.
 
-State is persisted in ``incident_state.json`` so duplicate alerts are
-suppressed across restarts.
+State is persisted in PostgreSQL so duplicate alerts are suppressed across
+restarts.
 """
 
 from __future__ import annotations
@@ -12,10 +12,11 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from flask import Flask, request, jsonify
+
+from db.incident_store import IncidentStore
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -26,18 +27,12 @@ log = logging.getLogger(__name__)
 # State persistence
 # ---------------------------------------------------------------------------
 
-_STATE_FILE = Path.cwd() / "incident_state.json"
+def _load_state(store: IncidentStore) -> dict:
+    return store.read()
 
 
-def _load_state() -> dict:
-    try:
-        return json.loads(_STATE_FILE.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def _save_state(state: dict) -> None:
-    _STATE_FILE.write_text(json.dumps(state, indent=2))
+def _save_state(store: IncidentStore, state: dict) -> None:
+    store.write(state)
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +48,11 @@ def register(client: "NewClient", config: dict) -> None:
     if not incident_group_id:
         log.warning("INCIDENT_GROUP_ID not set — skipping incident webhook server.")
         return
+
+    session_factory = config.get("db_session_factory")
+    if session_factory is None:
+        raise RuntimeError("Incident feature requires db_session_factory")
+    store = IncidentStore(session_factory)
 
     app = Flask(__name__)
     # Silence Flask's default request logging unless in debug mode
@@ -82,7 +82,7 @@ def register(client: "NewClient", config: dict) -> None:
 
             log.info("🔍 Currently failing: %s", json.dumps(current_failing, indent=2))
 
-            active_incidents = _load_state()
+            active_incidents = _load_state(store)
             current_failing_urls = {f["url"] for f in current_failing}
 
             new_alerts = []
@@ -101,7 +101,7 @@ def register(client: "NewClient", config: dict) -> None:
                     resolved_alerts.append(url)
                     del active_incidents[url]
 
-            _save_state(active_incidents)
+            _save_state(store, active_incidents)
 
             # Send WhatsApp message only if there are changes
             if new_alerts or resolved_alerts:

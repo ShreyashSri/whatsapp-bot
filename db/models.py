@@ -56,3 +56,4 @@ class IncidentState(Base):
     incident_url: Mapped[str] = mapped_column(Text, primary_key=True)
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     last_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
