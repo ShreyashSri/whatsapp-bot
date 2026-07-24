@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pbbot}
+      POSTGRES_USER: ${POSTGRES_USER:-pbbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pbbot}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  bot:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-pbbot}:${POSTGRES_PASSWORD:-pbbot}@postgres:5432/${POSTGRES_DB:-pbbot}
+      NEONIZE_SESSION_DB: /app/data/neonize.db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${INCIDENT_PORT:-8081}:8081"
+    volumes:
+      - neonize-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  neonize-data:

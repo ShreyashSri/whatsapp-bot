@@ -78,7 +78,9 @@ def main() -> None:
 
     # Keep neonize.db independent from PostgreSQL: it is the WhatsApp session
     # database and must remain persistent across container restarts.
-    session_db = Path.cwd() / "neonize.db"
+    session_db = Path(os.getenv("NEONIZE_SESSION_DB", "neonize.db"))
+    if not session_db.is_absolute():
+        session_db = Path.cwd() / session_db
     client = NewClient(str(session_db))
 
     @client.event(PairStatusEv)

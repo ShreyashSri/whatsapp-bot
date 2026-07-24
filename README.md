@@ -190,13 +190,37 @@ pm2 save
 
 ### Running with Docker
 
+The repository includes a Compose setup with PostgreSQL and the bot. Copy
+`.env.example` to `.env`, set the WhatsApp group values and a PostgreSQL
+password, then run:
+
+```bash
+docker compose up --build
+```
+
+PostgreSQL data is stored in the `postgres-data` volume and the Neonize
+WhatsApp session is stored separately in the `neonize-data` volume. Scan the
+QR code shown in the bot logs on first startup.
+
+To stop the services while retaining data:
+
+```bash
+docker compose down
+```
+
+Do not use `docker compose down -v` unless you intentionally want to delete
+the PostgreSQL and WhatsApp session volumes.
+
+For a manually managed PostgreSQL instance, set `DATABASE_URL` directly and
+run the bot container without the Compose PostgreSQL service.
+
 ```bash
 docker build -t whatsapp-bot .
 docker run -d \
   --name whatsapp-bot \
   --env-file .env \
   -p 8081:8081 \
-  -v $(pwd)/neonize.db:/app/neonize.db \
+  -v whatsapp-neonize-data:/app/data \
   whatsapp-bot
 ```
 
