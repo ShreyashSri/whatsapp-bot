@@ -57,3 +57,6 @@ class IncidentState(Base):
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     last_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+# Import modular update models so they are registered in the Base metadata
+from updates import models as update_models
