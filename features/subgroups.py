@@ -355,7 +355,6 @@ def register(client: "NewClient", config: dict) -> callable:
             or lower.startswith("!subgroup-info")
             or lower.startswith("!labels")
         )
-        log.info("DEBUG sender_user=%r admin_users=%r", sender_user, admin_users)
         if is_management_command and admin_users and sender_user not in admin_users:
             _reply(client, chat, "⚠️ Only admins can use this command.")
             return
