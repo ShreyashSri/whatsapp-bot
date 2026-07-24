@@ -3,3 +3,4 @@ python-dotenv
 playwright
 httpx
 flask
+pymongo

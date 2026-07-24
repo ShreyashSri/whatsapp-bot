@@ -52,6 +52,7 @@ MEDIA_GROUP_ID = os.getenv("MEDIA_GROUP_ID", "").strip() or None
 INCIDENT_GROUP_ID = os.getenv("INCIDENT_GROUP_ID", "").strip() or None
 INCIDENT_PORT = int(os.getenv("INCIDENT_PORT", "8081"))
 SUBGROUP_BLOCKED_USERS = _parse_group_ids("SUBGROUP_BLOCKED_USERS")
+TASKS_GROUP_ID = os.getenv("TASKS_GROUP_ID", "").strip() or None
 
 # Session database for neonize (persists WhatsApp login across restarts)
 SESSION_DB = Path.cwd() / "neonize.db"
@@ -66,6 +67,7 @@ config: dict = {
     "incident_group_id": INCIDENT_GROUP_ID,
     "incident_port": INCIDENT_PORT,
     "subgroup_blocked_users": SUBGROUP_BLOCKED_USERS,
+    "tasks_group_id": TASKS_GROUP_ID,
 }
 
 # ---------------------------------------------------------------------------
@@ -95,12 +97,14 @@ from features.incidents import register as register_incidents  # noqa: E402
 from features.community_tag import register as register_community_tag  # noqa: E402
 from features.subgroups import register as register_subgroups            # noqa: E402
 from features.help import register as register_help                      # noqa: E402
+from features.tasks import register as register_tasks                    # noqa: E402
 
 media_handler = register_media(client, config)
 cards_handler = register_cards(client, config)
 community_tag_handler = register_community_tag(client, config)
 subgroups_handler = register_subgroups(client, config)
 help_handler = register_help(client, config)
+tasks_handler = register_tasks(client, config)
 register_incidents(client, config)
 
 from neonize.events import MessageEv
@@ -117,6 +121,8 @@ def on_message(client: "NewClient", message: MessageEv):
         subgroups_handler(client, message)
     if help_handler:
         help_handler(client, message)
+    if tasks_handler:
+        tasks_handler(client, message)
 
 # ---------------------------------------------------------------------------
 # Global error handling
@@ -138,4 +144,5 @@ if __name__ == "__main__":
     log.info("Groups: %s", GROUP_IDS or "(none)")
     log.info("Media group: %s", MEDIA_GROUP_ID or "(not set)")
     log.info("Incident group: %s", INCIDENT_GROUP_ID or "(not set)")
+    log.info("Tasks group: %s", TASKS_GROUP_ID or "(not set)")
     client.connect()
