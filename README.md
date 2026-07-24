@@ -80,7 +80,7 @@ To tag a subgroup, just write `@subgroupname` anywhere in a message — the bot 
 - Subgroups are **global** — created once, usable in any group
 - Names must be 2-32 characters: letters, digits, hyphens, or underscores
 - A subgroup can never be empty; removing the last member auto-deletes it
-- State persisted in `subgroups.json`
+- State persisted in PostgreSQL
 
 ### 🚨 Incident Alerts
 
@@ -93,6 +93,7 @@ Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a
 ## Tech Stack
 
 - [neonize](https://github.com/krypton-byte/neonize) — WhatsApp Web automation (Python bindings for whatsmeow)
+- [SQLAlchemy](https://www.sqlalchemy.org/) + [psycopg](https://www.psycopg.org/) — PostgreSQL persistence for bot state
 - [Playwright](https://playwright.dev/python/) — headless Chromium for card rendering
 - [Flask](https://flask.palletsprojects.com/) — incident alert webhook server
 - [PM2](https://pm2.keymetrics.io/) — process management on the server
@@ -103,6 +104,7 @@ Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a
 |----------|-------------|
 | `GROUP_ID` | Primary WhatsApp group ID |
 | `GROUP_IDS` | Optional comma-separated extra group IDs |
+| `DATABASE_URL` | PostgreSQL connection URL |
 | `MEDIA_GROUP_ID` | WhatsApp group ID for media task manager |
 | `INCIDENT_GROUP_ID` | WhatsApp group ID for incident alerts |
 | `INCIDENT_PORT` | Webhook port (default: 8081) |
@@ -127,7 +129,7 @@ whatsapp-bot/
 │   ├── render.py           # HTML→PNG/PDF renderer
 │   └── assets/
 │       └── pb-logo.png
-├── subgroups.json          # Subgroup state (auto-created)
+├── db/                      # PostgreSQL setup, models, stores, and migration
 ├── requirements.txt
 ├── Dockerfile
 ├── .env.example
@@ -173,7 +175,11 @@ python bot.py
 # 6. Scan the QR code printed in the terminal to link WhatsApp
 ```
 
-Once linked, the session is saved in `neonize.db` and persists across restarts.
+On the first start, existing `posts.json`, `subgroups.json`, and
+`incident_state.json` files are imported if their PostgreSQL tables are empty.
+The JSON files are left untouched as backups; normal operation uses PostgreSQL.
+The Neonize session is saved separately in `neonize.db` and persists across
+restarts.
 
 ### Running with PM2
 
@@ -191,7 +197,6 @@ docker run -d \
   --env-file .env \
   -p 8081:8081 \
   -v $(pwd)/neonize.db:/app/neonize.db \
-  -v $(pwd)/posts.json:/app/posts.json \
   whatsapp-bot
 ```
 
