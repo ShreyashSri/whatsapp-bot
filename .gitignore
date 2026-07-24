@@ -16,6 +16,7 @@ neonize.db
 
 # Bot runtime state
 posts.json
+subgroups.json
 incident_state.json
 
 # Card preview output
