@@ -6,8 +6,6 @@ venv/
 .git/
 .github/
 neonize.db
-posts.json
-incident_state.json
 preview-card.*
 node_modules/
 .wwebjs_auth/
