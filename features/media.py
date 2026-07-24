@@ -425,9 +425,10 @@ def register(client: "NewClient", config: dict) -> callable:
     """Register the media task-manager feature on the neonize client."""
     media_group_id = config.get("media_group_id")
 
-    if not media_group_id:
-        log.warning("MEDIA_GROUP_ID not set — skipping media task-manager feature.")
-        return None
+    if media_group_id:
+        log.info("Media task-manager restricted to group %s", media_group_id)
+    else:
+        log.info("Media task-manager enabled for all WhatsApp groups")
 
     session_factory = config.get("db_session_factory")
     if session_factory is None:
@@ -437,13 +438,18 @@ def register(client: "NewClient", config: dict) -> callable:
     def on_message(client: "NewClient", message: MessageEv):
         chat_obj = message.Info.MessageSource.Chat
         chat = f"{chat_obj.User}@{chat_obj.Server}"
-        # Handle media-group commands
-        if chat == media_group_id:
-            try:
-                import asyncio
-                asyncio.run(_handle_media_command(client, message, store))
-            except Exception as exc:
-                log.error("Media command error: %s", exc)
+        # Neonize only delivers messages for groups the account has joined.
+        # An explicit MEDIA_GROUP_ID can still restrict this feature; when it
+        # is empty, allow commands in every joined WhatsApp group.
+        if chat_obj.Server != "g.us":
+            return
+        if media_group_id and chat != media_group_id:
+            return
+        try:
+            import asyncio
+            asyncio.run(_handle_media_command(client, message, store))
+        except Exception as exc:
+            log.error("Media command error: %s", exc)
 
     log.info("✅ Media task-manager feature registered")
     return on_message
