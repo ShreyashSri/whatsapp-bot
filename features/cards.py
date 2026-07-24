@@ -63,7 +63,7 @@ async def _handle_card_command(
     with_pdf: bool,
 ) -> None:
     from cards import render_card, CARD_TYPES
-    from features.media import COMMAND_HELP
+    from features.help import MODULE_HELP
 
     body = _get_text(message)
     chat_jid = message.Info.MessageSource.Chat
@@ -89,7 +89,7 @@ async def _handle_card_command(
         event_logo_urls = None
 
     if not raw_type or not name or not text:
-        client.send_message(chat_jid, COMMAND_HELP["card"])
+        client.send_message(chat_jid, MODULE_HELP["cards"])
         return
 
     if card_type not in CARD_TYPES:

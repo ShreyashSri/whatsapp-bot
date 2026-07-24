@@ -61,94 +61,6 @@ def _get_card_types_str() -> str:
         _card_types_str = ", ".join(CARD_TYPES)
     return _card_types_str
 
-
-def _help_text() -> str:
-    return (
-        "*📋 Task Manager Commands*\n\n"
-        "`!add <text>` — add a post to to-do\n"
-        "`!remove <id>` — remove a post (works on both lists)\n"
-        "`!to-do` — list pending posts\n"
-        "`!posted <id> <stage>` — mark a stage done\n"
-        "`!unposted <id> <stage>` — un-mark a stage\n"
-        "`!posted-list` — list fully posted entries\n"
-        "`!card <type> | <name> | <text>` — generate an achievement/talk card (attach a photo)\n"
-        "`!card-pdf <type> | <name> | <text>` — same, plus an editable PDF\n"
-        "`!help [command]` — this message, or details for one command\n\n"
-        "Type `!help <command>` (e.g. `!help card`) for full usage.\n\n"
-        f"_Stages:_ design • instagram • linkedin • twitter\n"
-        f"_Card types:_ {_get_card_types_str()}"
-    )
-
-
-COMMAND_HELP: dict[str, str] = {
-    "help": (
-        "*!help [command]*\n\n"
-        "Without args, shows the command list. Pass a command name for detailed usage:\n"
-        "`!help card`, `!help posted`, `!help add`, etc."
-    ),
-    "add": (
-        "*!add <text>*\n\n"
-        "Adds a post to the to-do list. The bot replies with the assigned id (#1, #2, ...). "
-        "The text can be anything you want to track — a topic, a draft idea, a link.\n\n"
-        "*Example:*\n`!add Post about Shubhang's LFX selection`"
-    ),
-    "remove": (
-        "*!remove <id>*\n\n"
-        "Removes an entry by id. Searches both the to-do list and the posted list, so you can "
-        "clean up either.\n\n"
-        "*Example:*\n`!remove 3`"
-    ),
-    "todo": (
-        "*!to-do*\n\n"
-        "Lists every pending post with its stage checkboxes (design, instagram, linkedin, "
-        "twitter). Alias: `!todo`."
-    ),
-    "posted": (
-        "*!posted <id> <stage>*\n\n"
-        "Marks one stage as done for a post. When all four stages are marked, the entry "
-        "auto-moves to posted.\n\n"
-        "*Stages and aliases:*\n"
-        "• design — `d`, `des`\n"
-        "• instagram — `insta`, `ig`\n"
-        "• linkedin — `li`\n"
-        "• twitter — `x`, `tw`\n\n"
-        "*Example:*\n`!posted 3 insta`"
-    ),
-    "unposted": (
-        "*!unposted <id> <stage>*\n\n"
-        "Un-marks one stage. If the entry was already fully posted, it moves back to to-do so "
-        "the workflow can resume.\n\n"
-        "*Example:*\n`!unposted 3 insta`"
-    ),
-    "posted-list": (
-        "*!posted-list*\n\n"
-        "Lists entries that have all four stages marked."
-    ),
-    "card": (
-        "*!card <type> | <name> | <text>* (\\| <logoUrl>)\n"
-        "*!card talk | <speaker> | <talk title> | <event name>* (\\| <logoUrl1> \\| <logoUrl2>)\n"
-        "*!card-pdf <type> | <name> | <text>* — same as !card, plus an editable PDF\n\n"
-        "Generates an achievement card. Attach a profile photo to the *same* message. "
-        "For `talk`, it generates a speaker thank-you card.\n\n"
-        "For normal cards, the *type* controls only the accent color and the bottom pill — "
-        "the text is yours. Wrap any phrase in [brackets] to highlight it in the accent color. "
-        "*Types:*\n"
-        "• `gsoc` — gold, \"Google Summer of Code\" pill\n"
-        "• `lfx` — blue, \"The Linux Foundation\" pill\n"
-        "• `hackathon` — purple, \"Hackathon Winner\" pill\n"
-        "• `competitive` — green, \"Competitive Programming\" pill\n"
-        "• `acm` — orange, \"ACM Summer / Winter School\" pill\n"
-        "• `internship` — cyan, no pill by default. Pass a logo URL as a 4th part.\n"
-        "• `talk` — speaker thank-you template. Requires an event name; accepts up to two logo URLs.\n"
-        "• `custom` — white, no pill. Also accepts a logo URL.\n\n"
-        "*Examples:*\n"
-        "`!card gsoc | Manas Hejmadi | For getting selected as mentor in [Google Summer of Code] 2026 with [API Dash]`\n\n"
-        "`!card-pdf lfx | Shubhang Sinha | For being a [LiFT Scholarship] holder for 2026`\n\n"
-        "`!card internship | Priya | Joining [Anthropic] as a Software Engineer Intern | https://example.com/anthropic.png`\n\n"
-        "`!card talk | Dhruv Puri | Why Your Cluster-Wide Policies Are a Risk (And What to Do About It) | KubeCon + CloudNativeCon India 2026 | https://example.com/cncf.png | https://example.com/kubecon.png`\n\n"
-        "_PDFs are rendered with text-as-text, so they can be edited in Illustrator, Inkscape, or Figma._"
-    ),
-}
 COMMAND_ALIASES: dict[str, str] = {"todo": "todo", "to-do": "todo", "card-pdf": "card"}
 
 # ---------------------------------------------------------------------------
@@ -236,22 +148,6 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
     chat_jid = message.Info.MessageSource.Chat
     sender = str(message.Info.MessageSource.Sender)
     lower = body.lower()
-
-    # --- !help ---
-    if lower == "!help":
-        _reply(client, chat_jid, _help_text())
-        return
-
-    if lower.startswith("!help "):
-        cmd = lower[6:].strip().lstrip("!")
-        key = COMMAND_ALIASES.get(cmd, cmd)
-        detail = COMMAND_HELP.get(key)
-        if not detail:
-            known = ", ".join(f"`!{k}`" for k in COMMAND_HELP)
-            _reply(client, chat_jid, f'⚠️ No detailed help for "{cmd}".\nKnown: {known}')
-            return
-        _reply(client, chat_jid, detail)
-        return
 
     # --- !to-do / !todo ---
     if lower in ("!to-do", "!todo"):
