@@ -14,12 +14,14 @@ def register_features(client, config: dict) -> Callable:
     from features.community_tag import register as register_community_tag
     from features.subgroups import register as register_subgroups
     from features.incidents import register as register_incidents
+    from updates.feature import register as register_updates
 
     handlers = [
         register_media(client, config),
         register_cards(client, config),
         register_community_tag(client, config),
         register_subgroups(client, config),
+        register_updates(client, config),
     ]
     # The incident feature owns its Flask listener and is not a MessageEv
     # handler, so start it after the four existing message features.
