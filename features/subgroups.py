@@ -306,12 +306,6 @@ def register(client: "NewClient", config: dict) -> callable:
         for u in config.get("subgroup_blocked_users", set())
     }
 
-    # Admin users for management commands (empty = no restriction)
-    admin_users: set[str] = {
-        "".join(c for c in u if c.isdigit())
-        for u in config.get("admin_users", set())
-    }
-
     session_factory = config.get("db_session_factory")
     if session_factory is None:
         raise RuntimeError("Subgroups feature requires db_session_factory")
@@ -345,19 +339,6 @@ def register(client: "NewClient", config: dict) -> callable:
 
         # ----- Command handling -----
         lower = body.lower()
-
-        # Admin-only gate for all management commands
-        is_management_command = (
-            lower.startswith("!add-subgroup")
-            or lower.startswith("!remove-from-subgroup")
-            or lower.startswith("!delete-subgroup")
-            or lower == "!list-subgroups"
-            or lower.startswith("!subgroup-info")
-            or lower.startswith("!labels")
-        )
-        if is_management_command and admin_users and sender_user not in admin_users:
-            _reply(client, chat, "⚠️ Only admins can use this command.")
-            return
 
         if lower == "!add-subgroup" or lower.startswith("!add-subgroup "):
             args = body[len("!add-subgroup"):].strip()

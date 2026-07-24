@@ -49,7 +49,6 @@ def _build_config() -> dict:
         "incident_group_id": os.getenv("INCIDENT_GROUP_ID", "").strip() or None,
         "incident_port": int(os.getenv("INCIDENT_PORT", "8081")),
         "subgroup_blocked_users": _parse_group_ids("SUBGROUP_BLOCKED_USERS"),
-        "admin_users": _parse_group_ids("ADMIN_USERS"),
         "database_url": os.getenv("DATABASE_URL", "").strip(),
     }
 
