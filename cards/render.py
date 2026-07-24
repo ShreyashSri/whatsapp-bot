@@ -718,7 +718,7 @@ def _build_talk_html(
       <div><span class="point">Point</span> <span class="blank">Blank</span></div>
     </div>
     <div class="talk-thanks">THANK YOU !!</div>
-    <div class="talk-kicker">for presenting us at</div>
+    <div class="talk-kicker">for representing us at</div>
     <div class="talk-event">{_escape(event_text)}</div>
     <div class="talk-photo"><img src="{photo_data_url}" alt="speaker" /></div>
     <div class="talk-speaker">{_escape(speaker_name)}</div>

@@ -44,7 +44,7 @@ Use `talk` for speaker thank-you posts:
 ```
 
 The first three fields after `talk` are required: speaker name, talk topic/title, and event name.
-The template writes the thank-you copy automatically: `THANK YOU !!`, `for presenting us at`, and `and giving an insightful talk on`.
+The template writes the thank-you copy automatically: `THANK YOU !!`, `for representing us at`, and `and giving an insightful talk on`.
 Logo URLs are optional. If you pass one logo, it is centered at the bottom; if you pass two, they are shown side by side. Use direct image URLs (`.png`, `.jpg`, `.webp`, `.svg`) for best results.
 
 **Examples:**
