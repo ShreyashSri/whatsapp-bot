@@ -271,6 +271,25 @@ def _detect_subgroup_mentions(text: str, subgroups: dict[str, list[str]]) -> lis
     return [m.group(1) for m in re.finditer(pattern, text, re.IGNORECASE)]
 
 
+def _is_subgroup_command(text: str) -> bool:
+    """Return whether text is an explicit subgroup command.
+
+    Own-account commands are allowed for testing, but own-account replies and
+    generated mention messages must not be fed back into the feature.
+    """
+    lower = text.lower()
+    return any(
+        lower == command or lower.startswith(f"{command} ")
+        for command in (
+            "!add-subgroup",
+            "!remove-from-subgroup",
+            "!delete-subgroup",
+            "!list-subgroups",
+            "!subgroup-info",
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Feature registration
 # ---------------------------------------------------------------------------
@@ -297,10 +316,6 @@ def register(client: "NewClient", config: dict) -> callable:
         if getattr(chat, "Server", "") != "g.us":
             return
 
-        # Ignore our own messages to prevent loops
-        if message.Info.MessageSource.IsFromMe:
-            return
-
         # Block listed users from using the subgroup feature
         sender = message.Info.MessageSource.Sender
         sender_user = getattr(sender, "User", "")
@@ -309,6 +324,12 @@ def register(client: "NewClient", config: dict) -> callable:
 
         body = _get_text(message)
         if not body:
+            return
+
+        # Allow explicit commands sent from the bot's own account for testing,
+        # but ignore all other own-account messages. This prevents generated
+        # subgroup replies/tags from triggering recursive loops.
+        if message.Info.MessageSource.IsFromMe and not _is_subgroup_command(body):
             return
 
         # ----- Command handling -----
