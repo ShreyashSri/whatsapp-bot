@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""WhatsApp Bot — main entry point.
+"""WhatsApp bot entrypoint.
 
-Initialises a neonize WhatsApp client and registers all features.
-To add a new feature, create ``features/your_feature.py`` with a
-``register(client, config)`` function and import it below.
+The process owns configuration, database setup, legacy migration, Neonize
+initialisation, feature registration, dispatch, and the connection lifecycle.
+Feature business rules remain in the feature modules.
 """
 
 from __future__ import annotations
@@ -15,11 +15,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from neonize.client import NewClient
-from neonize.events import ConnectedEv, PairStatusEv
+from neonize.events import ConnectedEv, MessageEv, PairStatusEv
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
+from db.database import create_database
+from db.migration import migrate_legacy_json
+from features.registry import register_features
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,95 +28,34 @@ logging.basicConfig(
 )
 log = logging.getLogger("bot")
 
-# ---------------------------------------------------------------------------
-# Environment
-# ---------------------------------------------------------------------------
-
 load_dotenv()
 
 
 def _parse_group_ids(*env_keys: str) -> set[str]:
-    """Parse comma-separated group IDs from one or more env vars."""
+    """Parse comma-separated group IDs from one or more environment values."""
     ids: set[str] = set()
     for key in env_keys:
-        val = os.getenv(key, "")
-        for gid in val.split(","):
-            gid = gid.strip()
-            if gid:
-                ids.add(gid)
+        for group_id in os.getenv(key, "").split(","):
+            group_id = group_id.strip()
+            if group_id:
+                ids.add(group_id)
     return ids
 
 
-GROUP_IDS = _parse_group_ids("GROUP_ID", "GROUP_IDS")
-MEDIA_GROUP_ID = os.getenv("MEDIA_GROUP_ID", "").strip() or None
-INCIDENT_GROUP_ID = os.getenv("INCIDENT_GROUP_ID", "").strip() or None
-INCIDENT_PORT = int(os.getenv("INCIDENT_PORT", "8081"))
-SUBGROUP_BLOCKED_USERS = _parse_group_ids("SUBGROUP_BLOCKED_USERS")
-
-# Session database for neonize (persists WhatsApp login across restarts)
-SESSION_DB = Path.cwd() / "neonize.db"
-
-# ---------------------------------------------------------------------------
-# Build config dict shared across features
-# ---------------------------------------------------------------------------
-
-config: dict = {
-    "group_ids": GROUP_IDS,
-    "media_group_id": MEDIA_GROUP_ID,
-    "incident_group_id": INCIDENT_GROUP_ID,
-    "incident_port": INCIDENT_PORT,
-    "subgroup_blocked_users": SUBGROUP_BLOCKED_USERS,
-}
-
-# ---------------------------------------------------------------------------
-# Client setup
-# ---------------------------------------------------------------------------
-
-client = NewClient(str(SESSION_DB))
+def _build_config() -> dict:
+    return {
+        "group_ids": _parse_group_ids("GROUP_ID", "GROUP_IDS"),
+        "media_group_id": os.getenv("MEDIA_GROUP_ID", "").strip() or None,
+        "incident_group_id": os.getenv("INCIDENT_GROUP_ID", "").strip() or None,
+        "incident_port": int(os.getenv("INCIDENT_PORT", "8081")),
+        "subgroup_blocked_users": _parse_group_ids("SUBGROUP_BLOCKED_USERS"),
+        "database_url": os.getenv("DATABASE_URL", "").strip(),
+    }
 
 
-@client.event(PairStatusEv)
-def on_pair_status(_client: NewClient, event: PairStatusEv):
-    log.info("📱 Pair status: %s", event)
-
-
-@client.event(ConnectedEv)
-def on_connected(_client: NewClient, _event: ConnectedEv):
-    log.info("✅ Bot connected to WhatsApp — all features active")
-
-
-# ---------------------------------------------------------------------------
-# Register features — add new imports here to extend the bot
-# ---------------------------------------------------------------------------
-
-from features.media import register as register_media        # noqa: E402
-from features.cards import register as register_cards        # noqa: E402
-from features.incidents import register as register_incidents  # noqa: E402
-from features.community_tag import register as register_community_tag  # noqa: E402
-from features.subgroups import register as register_subgroups            # noqa: E402
-
-media_handler = register_media(client, config)
-cards_handler = register_cards(client, config)
-community_tag_handler = register_community_tag(client, config)
-subgroups_handler = register_subgroups(client, config)
-register_incidents(client, config)
-
-from neonize.events import MessageEv
-
-@client.event(MessageEv)
-def on_message(client: "NewClient", message: MessageEv):
-    if media_handler:
-        media_handler(client, message)
-    if cards_handler:
-        cards_handler(client, message)
-    if community_tag_handler:
-        community_tag_handler(client, message)
-    if subgroups_handler:
-        subgroups_handler(client, message)
-
-# ---------------------------------------------------------------------------
-# Global error handling
-# ---------------------------------------------------------------------------
+# Kept available for callers that import bot configuration, without creating a
+# database connection or a Neonize session as an import side effect.
+config = _build_config()
 
 
 def _excepthook(exc_type, exc_value, exc_tb):
@@ -125,13 +64,43 @@ def _excepthook(exc_type, exc_value, exc_tb):
 
 sys.excepthook = _excepthook
 
-# ---------------------------------------------------------------------------
-# Run
-# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """Initialise all runtime dependencies and connect Neonize."""
+    database = create_database(config["database_url"])
+    database.initialize()
+    migrate_legacy_json(database.session_factory, Path.cwd())
+
+    runtime_config = {
+        **config,
+        "db_session_factory": database.session_factory,
+    }
+
+    # Keep neonize.db independent from PostgreSQL: it is the WhatsApp session
+    # database and must remain persistent across container restarts.
+    session_db = Path.cwd() / "neonize.db"
+    client = NewClient(str(session_db))
+
+    @client.event(PairStatusEv)
+    def on_pair_status(_client: NewClient, event: PairStatusEv):
+        log.info("📱 Pair status: %s", event)
+
+    @client.event(ConnectedEv)
+    def on_connected(_client: NewClient, _event: ConnectedEv):
+        log.info("✅ Bot connected to WhatsApp — all features active")
+
+    dispatch = register_features(client, runtime_config)
+
+    @client.event(MessageEv)
+    def on_message(_client: NewClient, message: MessageEv):
+        dispatch(message)
+
+    log.info("Starting WhatsApp bot...")
+    log.info("Groups: %s", config["group_ids"] or "(none)")
+    log.info("Media group: %s", config["media_group_id"] or "(not set)")
+    log.info("Incident group: %s", config["incident_group_id"] or "(not set)")
+    client.connect()
+
 
 if __name__ == "__main__":
-    log.info("Starting WhatsApp bot...")
-    log.info("Groups: %s", GROUP_IDS or "(none)")
-    log.info("Media group: %s", MEDIA_GROUP_ID or "(not set)")
-    log.info("Incident group: %s", INCIDENT_GROUP_ID or "(not set)")
-    client.connect()
+    main()
