@@ -12,13 +12,13 @@ Commands:
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from neonize.events import MessageEv
+
+from db.media_store import MediaStore
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -64,11 +64,8 @@ def _get_card_types_str() -> str:
 COMMAND_ALIASES: dict[str, str] = {"todo": "todo", "to-do": "todo", "card-pdf": "card"}
 
 # ---------------------------------------------------------------------------
-# State persistence (posts.json)
+# State persistence
 # ---------------------------------------------------------------------------
-
-_POSTS_FILE: Path = Path.cwd() / "posts.json"
-
 
 def _empty_platform_flags() -> dict[str, bool]:
     return {p: False for p in PLATFORMS}
@@ -84,21 +81,15 @@ def _normalize_entry_flags(entry: dict) -> dict:
     return entry
 
 
-def _read_posts() -> dict:
-    if not _POSTS_FILE.exists():
-        return {"nextId": 1, "todo": [], "posted": []}
-    try:
-        data = json.loads(_POSTS_FILE.read_text())
-        todo = [_normalize_entry_flags(e) for e in data.get("todo", [])]
-        posted = [_normalize_entry_flags(e) for e in data.get("posted", [])]
-        return {"nextId": data.get("nextId", 1), "todo": todo, "posted": posted}
-    except (json.JSONDecodeError, KeyError) as exc:
-        log.error("posts.json corrupt, starting fresh: %s", exc)
-        return {"nextId": 1, "todo": [], "posted": []}
+def _read_posts(store: MediaStore) -> dict:
+    state = store.read()
+    state["todo"] = [_normalize_entry_flags(e) for e in state["todo"]]
+    state["posted"] = [_normalize_entry_flags(e) for e in state["posted"]]
+    return state
 
 
-def _write_posts(state: dict) -> None:
-    _POSTS_FILE.write_text(json.dumps(state, indent=2))
+def _write_posts(store: MediaStore, state: dict) -> None:
+    store.write(state)
 
 
 def _normalize_platform(raw: str | None) -> str | None:
@@ -139,7 +130,9 @@ def _reply(client: "NewClient", chat_jid, text: str) -> None:
     client.send_message(chat_jid, text)
 
 
-async def _handle_media_command(client: "NewClient", message: MessageEv) -> None:
+async def _handle_media_command(
+    client: "NewClient", message: MessageEv, store: MediaStore
+) -> None:
     """Process a single media-group command."""
     body = _get_text(message)
     if not body or not body.startswith("!"):
@@ -151,7 +144,7 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
 
     # --- !to-do / !todo ---
     if lower in ("!to-do", "!todo"):
-        state = _read_posts()
+        state = _read_posts(store)
         if not state["todo"]:
             _reply(client, chat_jid, "📭 To-do list is empty.")
             return
@@ -161,7 +154,7 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
 
     # --- !posted-list ---
     if lower == "!posted-list":
-        state = _read_posts()
+        state = _read_posts(store)
         if not state["posted"]:
             _reply(client, chat_jid, "📭 No posts marked fully posted yet.")
             return
@@ -175,7 +168,7 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
         if not text:
             _reply(client, chat_jid, "⚠️ Usage: `!add <text>`")
             return
-        state = _read_posts()
+        state = _read_posts(store)
         entry = {
             "id": state["nextId"],
             "text": text,
@@ -185,7 +178,7 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
         }
         state["todo"].append(entry)
         state["nextId"] += 1
-        _write_posts(state)
+        _write_posts(store, state)
         _reply(client, chat_jid, f"✅ Added *#{entry['id']}* — {entry['text']}")
         return
 
@@ -198,7 +191,7 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
             _reply(client, chat_jid, "⚠️ Usage: `!remove <id>`")
             return
 
-        state = _read_posts()
+        state = _read_posts(store)
         todo_idx = next((i for i, e in enumerate(state["todo"]) if e["id"] == entry_id), -1)
         posted_idx = next((i for i, e in enumerate(state["posted"]) if e["id"] == entry_id), -1)
 
@@ -212,7 +205,7 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
             _reply(client, chat_jid, f"❌ No entry with id *#{entry_id}*.")
             return
 
-        _write_posts(state)
+        _write_posts(store, state)
         _reply(client, chat_jid, f"🗑️ Removed *#{removed['id']}* from {where} — {removed['text']}")
         return
 
@@ -238,7 +231,7 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
             )
             return
 
-        state = _read_posts()
+        state = _read_posts(store)
         entry = next((e for e in state["todo"] if e["id"] == entry_id), None)
         if not entry:
             _reply(
@@ -256,7 +249,7 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
             entry["postedAt"] = datetime.now(timezone.utc).isoformat()
             state["posted"].append(entry)
 
-        _write_posts(state)
+        _write_posts(store, state)
 
         header = (
             f"ℹ️ *#{entry_id}* was already marked on {platform}."
@@ -289,7 +282,7 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
             )
             return
 
-        state = _read_posts()
+        state = _read_posts(store)
         entry = next((e for e in state["todo"] if e["id"] == entry_id), None)
         moved_back = False
 
@@ -307,7 +300,7 @@ async def _handle_media_command(client: "NewClient", message: MessageEv) -> None
 
         was_marked = entry["platforms"][platform]
         entry["platforms"][platform] = False
-        _write_posts(state)
+        _write_posts(store, state)
 
         header = (
             f"↩️ *#{entry_id}* un-marked on {platform}."
@@ -332,6 +325,11 @@ def register(client: "NewClient", config: dict) -> callable:
         log.warning("MEDIA_GROUP_ID not set — skipping media task-manager feature.")
         return None
 
+    session_factory = config.get("db_session_factory")
+    if session_factory is None:
+        raise RuntimeError("Media feature requires db_session_factory")
+    store = MediaStore(session_factory)
+
     def on_message(client: "NewClient", message: MessageEv):
         chat_obj = message.Info.MessageSource.Chat
         chat = f"{chat_obj.User}@{chat_obj.Server}"
@@ -339,7 +337,7 @@ def register(client: "NewClient", config: dict) -> callable:
         if chat == media_group_id:
             try:
                 import asyncio
-                asyncio.run(_handle_media_command(client, message))
+                asyncio.run(_handle_media_command(client, message, store))
             except Exception as exc:
                 log.error("Media command error: %s", exc)
 
