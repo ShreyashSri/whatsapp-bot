@@ -8,7 +8,7 @@ from typing import Callable
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import Assignment, Event, EventLabel
+from .models import Assignment, Event, EventLabel, User
 
 
 class EventTypeLockedError(ValueError):
@@ -211,3 +211,11 @@ class EventStore:
             assignment.status = status
             session.flush()
             return True
+
+    def is_admin(self, user_id: str) -> bool:
+        """Check if a specific WhatsApp ID belongs to an admin."""
+        with self.session_factory() as session:
+            user = session.scalar(
+                select(User).where(User.whatsapp_id == user_id)
+            )
+            return user is not None and user.role == "admin"
