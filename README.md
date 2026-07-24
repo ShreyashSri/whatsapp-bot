@@ -102,9 +102,10 @@ Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a
 
 | Variable | Description |
 |----------|-------------|
-| `GROUP_ID` / `GROUP_IDS` | Optional allowlist for deployments that need to track specific groups; empty means all joined groups |
+| `GROUP_ID` | Primary WhatsApp group ID |
+| `GROUP_IDS` | Optional comma-separated extra group IDs |
 | `DATABASE_URL` | PostgreSQL connection URL |
-| `MEDIA_GROUP_ID` | Optional WhatsApp group restriction for media commands; empty means all joined groups |
+| `MEDIA_GROUP_ID` | WhatsApp group ID for media task manager |
 | `INCIDENT_GROUP_ID` | WhatsApp group ID for incident alerts |
 | `INCIDENT_PORT` | Webhook port (default: 8081) |
 | `SUBGROUP_BLOCKED_USERS` | Comma-separated phone numbers blocked from using subgroups |
