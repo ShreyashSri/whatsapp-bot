@@ -326,17 +326,6 @@ def register(client: "NewClient", config: dict) -> callable:
         if not body:
             return
 
-        # Be tolerant of WhatsApp input such as ``! add-subgroup``.
-        body = re.sub(r"^!\s+", "!", body, count=1)
-
-        if body.startswith("!"):
-            log.info(
-                "Subgroup command event: command=%s from_me=%s chat_server=%s",
-                body.split(maxsplit=1)[0].lower(),
-                message.Info.MessageSource.IsFromMe,
-                getattr(chat, "Server", ""),
-            )
-
         # Allow explicit commands sent from the bot's own account for testing,
         # but ignore all other own-account messages. This prevents generated
         # subgroup replies/tags from triggering recursive loops.
