@@ -8,7 +8,7 @@ from typing import Callable
 from sqlalchemy import select,func
 from sqlalchemy.orm import Session
 
-from .models import Assignment, Event, EventLabel
+from .models import Assignment, Event, EventLabel, User
 
 
 class EventTypeLockedError(ValueError):
@@ -43,6 +43,14 @@ class EventStore:
     def __init__(self, session_factory: Callable[[], Session]):
         self.session_factory = session_factory
 
+    def is_admin(self, user_id: str) -> bool:
+        """Check if a specific WhatsApp ID belongs to an admin."""
+        with self.session_factory() as session:
+            user = session.scalar(
+                select(User).where(User.whatsapp_id == user_id)
+            )
+            return user is not None and user.role == "admin"
+        
     def create_event(
         self,
         *,
@@ -217,7 +225,44 @@ class EventStore:
                 return False
             session.delete(assignment)
             return True
+        
+    def get_user_assignments(self, user_id: str) -> list[dict]:
+        """Fetch all event assignments for a specific user."""
+        with self.session_factory() as session:
+            # Query assignments joined with events for this user
+            # Adjust the model names (Assignment, Event) to match your actual models.py
+            stmt = (
+                select(Assignment, Event)
+                .join(Event, Assignment.event_id == Event.id)
+                .where(Assignment.user_id == user_id)
+            )
+            results = session.execute(stmt).all()
+            
+            assignments = []
+            for assignment, event in results:
+                assignments.append({
+                    "event_id": event.id,
+                    "event_name": event.name,
+                    "event_type": event.type,
+                    "status": assignment.status
+                })
+            return assignments
 
+    def update_user_assignment_status(self, user_id: str, event_id: int, status: str) -> bool:
+        """Update the status of a user's assignment for an event."""
+        with self.session_factory.begin() as session:
+            assignment = session.scalar(
+                select(Assignment).where(
+                    Assignment.event_id == event_id,
+                    Assignment.user_id == user_id
+                )
+            )
+            if assignment is None:
+                return False
+            assignment.status = status
+            session.flush()
+            return True
+        
     def list_assignments(self, event_id: int) -> list[dict]:
         with self.session_factory() as session:
             rows = session.scalars(
@@ -229,8 +274,6 @@ class EventStore:
                     "event_id": row.event_id,
                     "user_id": row.user_id,
                     "status": row.status,
-                    "missed_count": row.missed_count,
-                    "last_update_at": row.last_update_at,
                 }
                 for row in rows
             ]

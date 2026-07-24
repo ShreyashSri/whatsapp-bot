@@ -4,9 +4,10 @@ Allows admins to create participation/organization events and users to assign
 themselves to these events.
 
 Commands (based on PRD):
-  /events
-  /create-event <type> | <name> | [description]
-  /assign <event_id>
+    /events
+    /create-event <type> | <name> | [description]
+    /assign <event_id> | @user
+    /unassign <event_id> | @user
 """
 
 from __future__ import annotations
@@ -42,6 +43,23 @@ def _reply(client: "NewClient", chat_jid, text: str) -> None:
     """Helper to send a text reply to a specific chat."""
     client.send_message(chat_jid, text)
 
+def _extract_target_user(args: str, message: "MessageEv") -> str:
+    """Helper to extract user ID from either a mention tag or text argument."""
+    target_user_id = ""
+    # Try extracting from WhatsApp mention context info
+    try:
+        context_info = message.Message.extendedTextMessage.contextInfo
+        if context_info and context_info.mentionedJid:
+            target_user_id = "".join(c for c in context_info.mentionedJid[0] if c.isdigit())
+    except (AttributeError, IndexError):
+        pass
+
+    # Fallback to manual text parsing if no mention was found
+    if not target_user_id:
+        target_user_id = "".join(c for c in args if c.isdigit())
+
+    return target_user_id
+
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
@@ -55,18 +73,22 @@ def _cmd_events(client: "NewClient", chat_jid, store: EventStore) -> None:
             return
 
         lines = [
-        f"• *[{ev['id']}]* {ev['name']} _({ev['type']})_ - 👥 {ev.get('assignment_count', 0)} assigned" 
-        for ev in events
-    ]
+            f"• *[{ev['id']}]* {ev['name']} _({ev['type']})_ [`{ev['status']}`] - 👥 {ev.get('assignment_count', 0)} assigned" 
+            for ev in events
+        ]
         _reply(client, chat_jid, f"*📋 Active Events ({len(events)})*\n\n" + "\n".join(lines))
     except Exception as exc:
         log.error("Failed to list events: %s", exc)
         _reply(client, chat_jid, "❌ Failed to fetch events.")
 
-def _cmd_create_event(client: "NewClient", chat_jid, args: str, store: EventStore) -> None:
+def _cmd_create_event(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
     """/create-event <type> | <name> | [description]"""
-    parts = [p.strip() for p in args.split("|")]
+    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
+    if not store.is_admin(clean_sender_id):
+        _reply(client, chat_jid, "⛔ Permission denied. Admin access required.")
+        return
     
+    parts = [p.strip() for p in args.split("|")]
     if len(parts) < 2:
         _reply(client, chat_jid, "⚠️ Usage: `/create-event <participation|organization> | <Name> | [Description]`")
         return
@@ -91,58 +113,178 @@ def _cmd_create_event(client: "NewClient", chat_jid, args: str, store: EventStor
         log.error("Failed to create event: %s", exc)
         _reply(client, chat_jid, f"❌ Failed to create event: {exc}")
 
-def _cmd_assign(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
-    """/assign <event_id>"""
-    match = re.match(r"^(\d+)$", args)
-    if not match:
-        _reply(client, chat_jid, "⚠️ Usage: `/assign <event_id>`")
+def _cmd_assign(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore, message: "MessageEv") -> None:
+    """/assign <event_id> | @user"""
+    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
+    if not store.is_admin(clean_sender_id):
+        _reply(client, chat_jid, "⛔ Permission denied. Only Admins can assign users.")
         return
 
-    event_id = int(match.group(1))
+    parts = [p.strip() for p in args.split("|")]
+    if len(parts) != 2 or not parts[0].isdigit():
+        _reply(client, chat_jid, "⚠️ Usage: `/assign <event_id> | @user`")
+        return
+
+    event_id = int(parts[0])
+    target_user_id = _extract_target_user(parts[1], message)
     
-    
-    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
+    # Extract a friendly display name (e.g., "Shivam" from "@Shivam" or fallback to the ID)
+    display_name = parts[1] if "@" in parts[1] else f"User {target_user_id}"
+
+    if not target_user_id:
+        _reply(client, chat_jid, "❌ Could not determine target user from mention or ID.")
+        return
 
     try:
-        assignment = store.assign(event_id=event_id, user_id=clean_sender_id)
-        _reply(client, chat_jid, f"✅ You are assigned to Event {event_id}. Status: `{assignment['status']}`")
+        assignment = store.assign(event_id=event_id, user_id=target_user_id)
+        _reply(client, chat_jid, f"✅ {display_name} assigned to Event {event_id}. Status: `{assignment['status']}`")
     except ValueError as exc:
         _reply(client, chat_jid, f"❌ *Error:* {exc}")
     except Exception as exc:
         log.error("Failed to assign user: %s", exc)
         _reply(client, chat_jid, "❌ Failed to process assignment.")
 
-def _cmd_unassign(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
-    """/unassign <event_id>"""
-    match = re.match(r"^(\d+)$", args)
-    if not match:
-        _reply(client, chat_jid, "⚠️ Usage: `/unassign <event_id>`")
+
+def _cmd_unassign(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore, message: "MessageEv") -> None:
+    """/unassign <event_id> | @user"""
+    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
+    if not store.is_admin(clean_sender_id):
+        _reply(client, chat_jid, "⛔ Permission denied. Only Admins can unassign users.")
         return
 
-    event_id = int(match.group(1))
+    parts = [p.strip() for p in args.split("|")]
+    if len(parts) != 2 or not parts[0].isdigit():
+        _reply(client, chat_jid, "⚠️ Usage: `/unassign <event_id> | @user`")
+        return
+
+    event_id = int(parts[0])
+    target_user_id = _extract_target_user(parts[1], message)
     
-    # Keep it as a string to prevent the Integer crash!
-    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
+    # Extract friendly display name
+    display_name = parts[1] if parts[1].startswith("@") else f"User {target_user_id}"
+
+    if not target_user_id:
+        _reply(client, chat_jid, "❌ Could not determine target user from mention or ID.")
+        return
 
     try:
-        # Assuming your store.unassign returns a boolean indicating success
-        success = store.unassign(event_id=event_id, user_id=clean_sender_id)
+        success = store.unassign(event_id=event_id, user_id=target_user_id)
         if success:
-            _reply(client, chat_jid, f"✅ You have been unassigned from Event {event_id}.")
+            _reply(client, chat_jid, f"✅ {display_name} has been unassigned from Event {event_id}.")
         else:
-            _reply(client, chat_jid, f"⚠️ You are not currently assigned to Event {event_id}.")
-    except ValueError as exc:
-        _reply(client, chat_jid, f"❌ *Error:* {exc}")
+            _reply(client, chat_jid, f"⚠️ {display_name} is not currently assigned to Event {event_id}.")
     except Exception as exc:
         log.error("Failed to unassign user: %s", exc)
         _reply(client, chat_jid, "❌ Failed to process unassignment.")
+
+def _cmd_delete_event(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
+    """/delete-event <event_id>"""
+    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
+    if not store.is_admin(clean_sender_id):
+        _reply(client, chat_jid, "⛔ Permission denied. Admin access required.")
+        return
+
+    match = re.match(r"^(\d+)$", args)
+    if not match:
+        _reply(client, chat_jid, "⚠️ Usage: `/delete-event <event_id>`")
+        return
+
+    event_id = int(match.group(1))
+    try:
+        success = store.delete_event(event_id)
+        if success:
+            _reply(client, chat_jid, f"🗑️ Event {event_id} has been deleted.")
+        else:
+            _reply(client, chat_jid, f"⚠️ Event {event_id} not found or already deleted.")
+    except Exception as exc:
+        log.error("Failed to delete event: %s", exc)
+        _reply(client, chat_jid, "❌ Failed to delete event.")
+
+def _cmd_set_status(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
+    """/set-status <event_id> | <status>"""
+    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
+    if not store.is_admin(clean_sender_id):
+        _reply(client, chat_jid, "⛔ Permission denied. Admin access required.")
+        return
+
+    parts = [p.strip() for p in args.split("|")]
+    if len(parts) != 2 or not parts[0].isdigit():
+        _reply(client, chat_jid, "⚠️ Usage: `/set-status <event_id> | <status>`")
+        return
+
+    event_id = int(parts[0])
+    status = parts[1].lower()
+
+    try:
+        updated_event = store.set_status(event_id=event_id, status=status)
+        _reply(client, chat_jid, f"✅ Event {event_id} status changed to `{updated_event['status']}`.")
+    except ValueError as exc:
+        _reply(client, chat_jid, f"❌ {exc}")
+    except Exception as exc:
+        log.error("Failed to update status: %s", exc)
+        _reply(client, chat_jid, "❌ Failed to update event status.")
+
+def _cmd_my(client: "NewClient", chat_jid, sender_user: str, store: EventStore) -> None:
+    """/my - Shows the member their own assignments"""
+    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
+    try:
+        assignments = store.get_user_assignments(user_id=clean_sender_id)
+        if not assignments:
+            _reply(client, chat_jid, "📋 *You have no active event assignments right now.*")
+            return
+
+        lines = [
+            f"• *[{asg['event_id']}]* {asg['event_name']} _({asg['event_type']})_ - Status: `{asg['status']}`"
+            for asg in assignments
+        ]
+        _reply(client, chat_jid, f"*📌 Your Assigned Events ({len(assignments)})*\n\n" + "\n".join(lines))
+    except Exception as exc:
+        log.error("Failed to fetch user assignments: %s", exc)
+        _reply(client, chat_jid, "❌ Failed to fetch your assignments.")
+
+def _cmd_my_status(client: "NewClient", chat_jid, sender_user: str, args: str, store: EventStore) -> None:
+    """/my-status <event_id> | <status> - Updates your status for an event"""
+    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
+    try:
+        parts = [p.strip() for p in args.split("|")]
+        if len(parts) < 2 or not parts[0].isdigit():
+            _reply(client, chat_jid, "⚠️ Usage: `/my-status <event_id> | <status>`\nExample: `/my-status 1 | completed`")
+            return
+
+        event_id = int(parts[0])
+        new_status = parts[1].lower()
+
+        success = store.update_user_assignment_status(clean_sender_id, event_id, new_status)
+        if success:
+            _reply(client, chat_jid, f"✅ Your assignment status for Event {event_id} has been updated to `{new_status}`!")
+        else:
+            _reply(client, chat_jid, f"❌ You are not assigned to Event {event_id}.")
+    except Exception as exc:
+        log.error("Failed to update user assignment status: %s", exc)
+        _reply(client, chat_jid, "❌ Failed to update your assignment status.")
+
+def _cmd_help(client: "NewClient", chat_jid) -> None:
+    """/help events"""
+    help_text = (
+        "*📋 Events Management Commands*\n\n"
+        "`/events` — list all active events and their assignment counts\n"
+        "`/create-event <type> | <name> | [description]` — create a new participation or organization event (Admin only)\n"
+        "`/assign <event_id> | @user` — assign a user to an event (Admin only)\n"
+        "`/unassign <event_id> | @user` — unassign a user from an event (Admin only)\n"
+        "`/delete-event <event_id>` — delete an event (Admin only)\n"
+        "`/set-status <event_id> | <status>` — update an event's status (Admin only)\n"
+        "`/my` — show your own active event assignments\n"
+        "`/my-status <event_id> | <status>` — update your personal assignment status for an event\n\n"
+        "_Event types:_ participation • organization"
+    )
+    _reply(client, chat_jid, help_text)
 
 def _is_event_command(text: str) -> bool:
     """Return whether text is an explicit event command."""
     lower = text.lower()
     return any(
         lower == cmd or lower.startswith(f"{cmd} ")
-        for cmd in ("/events", "/create-event", "/assign", "/unassign")
+        for cmd in ("/events", "/create-event", "/assign", "/unassign", "/delete-event", "/set-status", "/my", "/my-status", "/help events")
     )
 
 # ---------------------------------------------------------------------------
@@ -161,13 +303,6 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         chat = message.Info.MessageSource.Chat
-        
-        # Only process group messages (like subgroups) or allow direct messages?
-        # Typically bot commands work in both. We'll allow both for now, but 
-        # you can enforce "g.us" if needed by uncommenting the next two lines:
-        # if getattr(chat, "Server", "") != "g.us":
-        #     return
-
         sender = message.Info.MessageSource.Sender
         sender_user = getattr(sender, "User", "")
 
@@ -175,11 +310,9 @@ def register(client: "NewClient", config: dict) -> callable:
         if not body:
             return
 
-        # Prevent recursive loops from bot's own replies
         if message.Info.MessageSource.IsFromMe and not _is_event_command(body):
             return
 
-        # ----- Command handling -----
         lower = body.lower()
 
         if lower == "/events":
@@ -187,19 +320,42 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         if lower.startswith("/create-event "):
-            # TODO: RBAC check - verify if sender_user is in config.get("admin_users")
             args = body[len("/create-event"):].strip()
-            _cmd_create_event(client, chat, args, store)
+            _cmd_create_event(client, chat, args, sender_user, store) 
             return
 
         if lower.startswith("/assign "):
             args = body[len("/assign"):].strip()
-            _cmd_assign(client, chat, args, sender_user, store)
+            _cmd_assign(client, chat, args, sender_user, store, message)
             return
 
         if lower.startswith("/unassign "):
             args = body[len("/unassign"):].strip()
-            _cmd_unassign(client, chat, args, sender_user, store)
+            _cmd_unassign(client, chat, args, sender_user, store, message)
             return
+
+        if lower.startswith("/delete-event "):
+            args = body[len("/delete-event"):].strip()
+            _cmd_delete_event(client, chat, args, sender_user, store) 
+            return
+
+        if lower == "/help events" or lower == "!help events":
+            _cmd_help(client, chat)
+            return
+
+        if lower.startswith("/set-status "):
+            args = body[len("/set-status"):].strip()
+            _cmd_set_status(client, chat, args, sender_user, store)
+            return 
+
+        if lower == "/my":
+            _cmd_my(client, chat, sender_user, store)
+            return
+
+        if lower.startswith("/my-status "):
+            args = body[len("/my-status"):].strip()
+            _cmd_my_status(client, chat, sender_user, args, store)
+            return
+
     log.info("✅ Events feature registered")
     return on_message
