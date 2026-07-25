@@ -14,6 +14,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from db.event_store import EventStore
+from db.auth import normalize_jid
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import ContextInfo, ExtendedTextMessage, Message
 
 if TYPE_CHECKING:
@@ -69,7 +70,7 @@ def _resolve_mention(args: str, message: "MessageEv") -> tuple[str, str]:
 
 
 def _require_admin(client: "NewClient", chat_jid, sender_user: str, store: EventStore) -> bool:
-    if not store.is_admin(_digits(sender_user)):
+    if not store.is_admin(sender_user):
         _reply(client, chat_jid, "⛔ Permission denied. Admin access required.")
         return False
     return True
@@ -136,7 +137,8 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         chat = message.Info.MessageSource.Chat
-        sender_user = getattr(message.Info.MessageSource.Sender, "User", "")
+        # Preserve the complete JID, including @lid identities.
+        sender_user = normalize_jid(message.Info.MessageSource.Sender)
 
         body = _get_text(message)
         if not body:

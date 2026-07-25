@@ -1,8 +1,7 @@
 """Administrative user and role commands."""
 from __future__ import annotations
 import logging
-from db.auth import (normalize_jid, remove_or_demote_user, require_admin, require_member,
-                     upsert_user)
+from db.auth import (gate, normalize_jid, remove_or_demote_user, upsert_user)
 from features.subgroups import _get_mentioned_jids, _get_text
 from db.models import User
 
@@ -18,15 +17,12 @@ def register(client, config):
         if getattr(chat, "Server", "") != "g.us": return
         body = _get_text(message); lower = body.lower()
         if not lower.startswith(("!add-user", "!remove-user", "!users", "!admins", "!admin-list", "!admins-list")): return
-        actor_jid = normalize_jid(source.Sender)
         command, _, args = body.partition(" ")
         cmd = command.lower()
-        
-        # !admins / !admins list requires only member permission
+
+        # !admins requires only member permission
         if cmd in ("!admins", "!admin-list", "!admins-list") or (cmd == "!admins" and args.strip() == "list"):
-            actor = require_member(factory, actor_jid, "admin.list")
-            if not actor:
-                reply(chat, "⛔ An active user account is required."); return
+            if not gate(factory, source.Sender, client, chat, "member", "admin.list"): return
             with factory() as session:
                 admins = session.query(User).filter(User.role == "admin", User.active.is_(True)).order_by(User.jid).all()
             if not admins: reply(chat, "📭 No active admins found.")
@@ -34,10 +30,9 @@ def register(client, config):
             return
 
         # Commands requiring active admin access (!add-user, !remove-user, !users)
-        actor = require_admin(factory, actor_jid, cmd)
-        if not actor:
-            log.warning("Admin access denied for sender=%s (actor_jid=%s)", source.Sender, actor_jid)
-            reply(chat, "⛔ You need to be an active administrator to use this command."); return
+        actor = gate(factory, source.Sender, client, chat, "admin", cmd)
+        if not actor: return
+        actor_jid = normalize_jid(source.Sender)  # for logging only
         try:
             mentions = _get_mentioned_jids(message)
             if cmd == "!add-user":

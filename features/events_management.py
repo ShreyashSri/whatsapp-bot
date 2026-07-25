@@ -72,8 +72,7 @@ def _cmd_events(client: "NewClient", chat_jid, store: EventStore) -> None:
 
 def _cmd_create_event(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
     """!create-event <type> | <name> | [description]"""
-    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
-    if not store.is_admin(clean_sender_id):
+    if not store.is_admin(sender_user):
         _reply(client, chat_jid, "⛔ Permission denied. Admin access required.")
         return
 
@@ -104,8 +103,7 @@ def _cmd_create_event(client: "NewClient", chat_jid, args: str, sender_user: str
 
 def _cmd_delete_event(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
     """!delete-event <event_id>"""
-    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
-    if not store.is_admin(clean_sender_id):
+    if not store.is_admin(sender_user):
         _reply(client, chat_jid, "⛔ Permission denied. Admin access required.")
         return
 
@@ -127,8 +125,7 @@ def _cmd_delete_event(client: "NewClient", chat_jid, args: str, sender_user: str
 
 def _cmd_set_status(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
     """!set-status <event_id> | <status>"""
-    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
-    if not store.is_admin(clean_sender_id):
+    if not store.is_admin(sender_user):
         _reply(client, chat_jid, "⛔ Permission denied. Admin access required.")
         return
 
@@ -151,9 +148,8 @@ def _cmd_set_status(client: "NewClient", chat_jid, args: str, sender_user: str, 
 
 def _cmd_my(client: "NewClient", chat_jid, sender_user: str, store: EventStore) -> None:
     """!my - Shows the member their own assignments"""
-    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
     try:
-        assignments = store.get_user_assignments(user_id=clean_sender_id)
+        assignments = store.get_user_assignments(user_id=sender_user)
         if not assignments:
             _reply(client, chat_jid, "📋 *You have no active event assignments right now.*")
             return
@@ -169,7 +165,6 @@ def _cmd_my(client: "NewClient", chat_jid, sender_user: str, store: EventStore) 
 
 def _cmd_my_status(client: "NewClient", chat_jid, sender_user: str, args: str, store: EventStore) -> None:
     """!my-status <event_id> | <status> - Updates your status for an event"""
-    clean_sender_id = "".join(c for c in sender_user if c.isdigit())
     try:
         parts = [p.strip() for p in args.split("|")]
         if len(parts) < 2 or not parts[0].isdigit():
@@ -184,7 +179,7 @@ def _cmd_my_status(client: "NewClient", chat_jid, sender_user: str, args: str, s
             _reply(client, chat_jid, f"❌ Invalid status `{new_status}`.\nAllowed values: {allowed}")
             return
 
-        success = store.update_user_assignment_status(clean_sender_id, event_id, new_status)
+        success = store.update_user_assignment_status(sender_user, event_id, new_status)
         if success:
             _reply(client, chat_jid, f"✅ Your assignment status for Event {event_id} has been updated to `{new_status}`!")
         else:
@@ -218,7 +213,8 @@ def register(client: "NewClient", config: dict) -> callable:
 
         chat = message.Info.MessageSource.Chat
         sender = message.Info.MessageSource.Sender
-        sender_user = getattr(sender, "User", "")
+        # Preserve the complete JID, including @lid identities.
+        sender_user = normalize_jid(sender)
 
         body = _get_text(message)
         if not body:
