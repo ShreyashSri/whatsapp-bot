@@ -114,8 +114,25 @@ def _cmd_help(client: "NewClient", chat_jid) -> None:
     """!help events"""
     _reply(client, chat_jid, (
         "*📋 Events Management Commands*\n\n"
-        "`!assign <event_id> | @user` — assign a user to an event (Admin only)\n"
-        "`!unassign <event_id> | @user` — unassign a user from an event (Admin only)"
+        "*Member Commands:*\n"
+        "• `!events` — List all active events\n"
+        "• `!my` — Show your own assigned events\n"
+        "• `!my-status <event_id> | <status>` — Update your status for an event\n"
+        "  _Example:_ `!my-status 1 | completed`\n"
+        "  _Valid statuses:_ pending, in_progress, completed, cancelled\n\n"
+        "*Admin Commands:*\n"
+        "• `!create-event <type> | <name> | [description]` — Create a new event\n"
+        "  _Example:_ `!create-event participation | Hackathon | Annual coding contest`\n"
+        "  _Types:_ participation, organization\n"
+        "• `!assign <event_id> | @user` — Assign a user to an event\n"
+        "  _Example:_ `!assign 1 | @919876543210`\n"
+        "• `!unassign <event_id> | @user` — Unassign a user from an event\n"
+        "  _Example:_ `!unassign 1 | @919876543210`\n"
+        "• `!delete-event <event_id>` — Delete an event\n"
+        "  _Example:_ `!delete-event 1`\n"
+        "• `!set-status <event_id> | <status>` — Update an event's status\n"
+        "  _Example:_ `!set-status 1 | active`\n\n"
+        "ℹ️ *General:* `!help events` — Show this help message"
     ))
 
 
