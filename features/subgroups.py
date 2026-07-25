@@ -28,7 +28,7 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
 )
 
 from db.subgroup_store import SubgroupStore
-from db.auth import get_active_admin_jids, normalize_jid, require_admin, require_member
+from db.auth import gate, get_active_admin_jids, normalize_jid
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -342,7 +342,7 @@ def register(client: "NewClient", config: dict) -> callable:
         actor = normalize_jid(sender)
 
         if lower == "!add-subgroup" or lower.startswith("!add-subgroup "):
-            if not require_admin(session_factory, actor, "subgroup.add"): _reply(client, chat, "⛔ Active admin access required."); return
+            if not gate(session_factory, sender, client, chat, "admin", "subgroup.add"): return
             args = body[len("!add-subgroup"):].strip()
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!add-subgroup <name> | @user1 @user2 …`")
@@ -351,7 +351,7 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         if lower == "!remove-from-subgroup" or lower.startswith("!remove-from-subgroup "):
-            if not require_admin(session_factory, actor, "subgroup.remove"): _reply(client, chat, "⛔ Active admin access required."); return
+            if not gate(session_factory, sender, client, chat, "admin", "subgroup.remove"): return
             args = body[len("!remove-from-subgroup"):].strip()
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!remove-from-subgroup <name> | @user1 @user2 …`")
@@ -360,7 +360,7 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         if lower == "!delete-subgroup" or lower.startswith("!delete-subgroup "):
-            if not require_admin(session_factory, actor, "subgroup.delete"): _reply(client, chat, "⛔ Active admin access required."); return
+            if not gate(session_factory, sender, client, chat, "admin", "subgroup.delete"): return
             args = body[len("!delete-subgroup"):].strip()
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!delete-subgroup <name>`")
@@ -369,12 +369,12 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         if lower == "!list-subgroups":
-            if not require_member(session_factory, actor, "subgroup.list"): _reply(client, chat, "⛔ An active user account is required."); return
+            if not gate(session_factory, sender, client, chat, "member", "subgroup.list"): return
             _cmd_list_subgroups(client, chat, store)
             return
 
         if lower == "!subgroup-info" or lower.startswith("!subgroup-info "):
-            if not require_member(session_factory, actor, "subgroup.info"): _reply(client, chat, "⛔ An active user account is required."); return
+            if not gate(session_factory, sender, client, chat, "member", "subgroup.info"): return
             args = body[len("!subgroup-info"):].strip()
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!subgroup-info <name>`")
@@ -383,7 +383,7 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         # ----- @subgroup and @admins tag detection -----
-        if not require_member(session_factory, actor, "subgroup.tag"):
+        if not gate(session_factory, sender, client, chat, "member", "subgroup.tag"):
             return
         subgroups = _read_subgroups(store)
         matched = _detect_subgroup_mentions(body, subgroups)

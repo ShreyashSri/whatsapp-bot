@@ -54,29 +54,55 @@ MODULE_HELP = {
     ),
     "subgroups": (
         "*🏷️ Custom Subgroups*\n\n"
-        "`!add-subgroup <name> | @user1 ...` — create/add members\n"
-        "`!remove-from-subgroup <name> | @user1 ...` — remove members\n"
-        "`!delete-subgroup <name>` — delete entire subgroup\n"
-        "`!list-subgroups` — list all subgroups\n"
-        "`!subgroup-info <name>` — show members of a subgroup\n\n"
-        "Subgroup changes require an admin; listing, info, and tagging require an active user.\n\n"
+        "`!add-subgroup <name> | @user1 ...` — create/add members (admin)\n"
+        "`!remove-from-subgroup <name> | @user1 ...` — remove members (admin)\n"
+        "`!delete-subgroup <name>` — delete entire subgroup (admin)\n"
+        "`!list-subgroups` — list all subgroups (active user)\n"
+        "`!subgroup-info <name>` — show members of a subgroup (active user)\n\n"
+        "Subgroup mutations require an admin; listing, info, and tagging require an active user.\n\n"
         "To tag a subgroup, just write `@subgroupname` anywhere in a message."
     ),
     "admin": (
         "*🔐 User Administration*\n\n"
         "`!add-user [admin|member] @person` — add or update a user\n"
         "`!remove-user @person` — deactivate a user\n"
-        "`!users` — list users\n\n"
-        "These commands require an active administrator."
+        "`!users` — list users\n"
+        "`!admins` / `!admin-list` / `!admins-list` — list active admins\n\n"
+        "User changes and `!users` require an active administrator; admin listing requires an active user."
     ),
     "events": (
         "*📋 Events*\n\n"
-        "`!events` — list active events\n"
-        "`!my` — show your assignments\n"
-        "`!my-status <id> | <status>` — update your assignment\n"
+        "`!events` — list active events (active user)\n"
+        "`!my` — show your assignments (active user)\n"
+        "`!my-status <id> | <status>` — update your assignment (active user)\n"
         "`!create-event <type> | <name> | [description]` — create an event (admin)\n"
-        "`!assign <id> | @user` / `!unassign <id> | @user` — manage assignments (admin)\n"
-        "`!delete-event <id>` / `!set-status <id> | <status>` — manage events (admin)"
+        "`!delete-event <id>` — delete an event (admin)\n"
+        "`!set-status <id> | <status>` — update an event status (admin)\n"
+        "`!assign <id> | @user` or `!assign event <id> | @user` — assign to an event (admin)\n"
+        "`!unassign <id> | @user` or `!unassign event <id> | @user` — unassign from an event (admin)\n"
+        "`!assign task <id> | @user` — assign to a task (admin)\n"
+        "`!unassign task <id>` — unassign a task (admin)"
+    ),
+    "tasks": (
+        "*✅ Tasks*\n\n"
+        "*Admin commands:*\n"
+        "`!add-task <title> [| description] [| due YYYY-MM-DD] [| priority low|medium|high]` — create a task\n"
+        "`!update-task <id> | field: value` — update title, description, due date, priority, or status\n"
+        "`!delete-task <id>` — delete a task\n"
+        "`!tasks` — list all tasks\n\n"
+        "*Member commands:*\n"
+        "`!tasks` — list your assigned tasks\n"
+        "`!task <id>` — show task details\n"
+        "`!complete-task <id>` — mark your assigned task done"
+    ),
+    "updates": (
+        "*📝 Assignment Updates*\n\n"
+        "`!update <assignment_id> <field> <value>` — submit a progress update\n"
+        "`!update-edit <update_id> <new_value>` — edit an update\n"
+        "`!history <assignment_id>` — view update history\n"
+        "`!status <assignment_id>` — view assignment status\n"
+        "`!set-status <assignment_id> <status>` — set assignment status (admin)\n"
+        "`!help-update` — show update help"
     ),
     "incidents": (
         "*🚨 Incident Alerts*\n\n"
@@ -93,6 +119,9 @@ GLOBAL_HELP = (
     "• `!help community` — Community group tags\n"
     "• `!help subgroups` — Custom subgroup tags\n"
     "• `!help admin` — User and role administration\n"
+    "• `!help events` — Events and assignments\n"
+    "• `!help tasks` — Task management\n"
+    "• `!help updates` — Assignment updates\n"
     "• `!help incidents` — Incident alerts\n\n"
     "Type `!help <module>` for detailed commands."
 )
@@ -131,7 +160,13 @@ def register(client: "NewClient", config: dict) -> callable:
                     "delete-subgroup": "subgroups", "list-subgroups": "subgroups",
                     "subgroup-info": "subgroups", "events": "events", "assign": "events",
                     "unassign": "events", "create-event": "events", "delete-event": "events",
-                    "set-status": "events", "my": "events", "my-status": "events"
+                    "set-status": "events", "my": "events", "my-status": "events",
+                    "add-user": "admin", "remove-user": "admin", "users": "admin",
+                    "admins": "admin", "admin-list": "admin", "admins-list": "admin",
+                    "add-task": "tasks", "tasks": "tasks", "task": "tasks",
+                    "complete-task": "tasks", "update-task": "tasks", "delete-task": "tasks",
+                    "update": "updates", "update-edit": "updates", "history": "updates",
+                    "status": "updates", "help-update": "updates"
                 }
                 
                 module = cmd_to_module.get(args)

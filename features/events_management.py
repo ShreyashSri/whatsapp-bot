@@ -1,6 +1,6 @@
 """Event Management Feature (Core Actions).
 
-Allows admins to create and manage events, and members to view and update 
+Allows admins to create and manage events, and members to view and update
 their personal assignment statuses.
 
 Commands:
@@ -19,7 +19,7 @@ import re
 from typing import TYPE_CHECKING
 
 from db.event_store import EventStore
-from db.auth import normalize_jid, require_member
+from db.auth import gate, normalize_jid
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -30,12 +30,12 @@ log = logging.getLogger(__name__)
 # Allowed values a member can set via !my-status
 VALID_ASSIGNMENT_STATUSES: frozenset[str] = frozenset({"pending", "in_progress", "completed", "cancelled"})
 
+
 # ---------------------------------------------------------------------------
 # Message text extraction
 # ---------------------------------------------------------------------------
 
 def _get_text(message: "MessageEv") -> str:
-    """Extract plain text body from a message."""
     msg = message.Message
     if msg.conversation:
         return msg.conversation.strip()
@@ -45,9 +45,10 @@ def _get_text(message: "MessageEv") -> str:
         return msg.imageMessage.caption.strip()
     return ""
 
+
 def _reply(client: "NewClient", chat_jid, text: str) -> None:
-    """Helper to send a text reply to a specific chat."""
     client.send_message(chat_jid, text)
+
 
 # ---------------------------------------------------------------------------
 # Command handlers
@@ -60,7 +61,6 @@ def _cmd_events(client: "NewClient", chat_jid, store: EventStore) -> None:
         if not events:
             _reply(client, chat_jid, "📅 *No active events right now.*")
             return
-
         lines = [
             f"• *[{ev['id']}]* {ev['name']} _({ev['type']})_ [`{ev['status']}`] - 👥 {ev.get('assignment_count', 0)} assigned"
             for ev in events
@@ -70,12 +70,9 @@ def _cmd_events(client: "NewClient", chat_jid, store: EventStore) -> None:
         log.error("Failed to list events: %s", exc)
         _reply(client, chat_jid, "❌ Failed to fetch events.")
 
-def _cmd_create_event(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
-    """!create-event <type> | <name> | [description]"""
-    if not store.is_admin(sender_user):
-        _reply(client, chat_jid, "⛔ Permission denied. Admin access required.")
-        return
 
+def _cmd_create_event(client: "NewClient", chat_jid, args: str, store: EventStore) -> None:
+    """!create-event <type> | <name> | [description]"""
     parts = [p.strip() for p in args.split("|")]
     if len(parts) < 2:
         _reply(client, chat_jid, "⚠️ Usage: `!create-event <participation|organization> | <Name> | [Description]`")
@@ -85,37 +82,27 @@ def _cmd_create_event(client: "NewClient", chat_jid, args: str, sender_user: str
     name = parts[1]
     desc = parts[2] if len(parts) > 2 else ""
 
-    if ev_type not in ["participation", "organization"]:
+    if ev_type not in ("participation", "organization"):
         _reply(client, chat_jid, "❌ Event type must be `participation` or `organization`.")
         return
 
     try:
-        event = store.create_event(
-            name=name,
-            type=ev_type,
-            description=desc,
-            status="active"
-        )
+        event = store.create_event(name=name, type=ev_type, description=desc, status="active")
         _reply(client, chat_jid, f"✅ Event *{name}* created successfully! (ID: {event['id']})")
     except Exception as exc:
         log.error("Failed to create event: %s", exc)
         _reply(client, chat_jid, f"❌ Failed to create event: {exc}")
 
-def _cmd_delete_event(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
-    """!delete-event <event_id>"""
-    if not store.is_admin(sender_user):
-        _reply(client, chat_jid, "⛔ Permission denied. Admin access required.")
-        return
 
+def _cmd_delete_event(client: "NewClient", chat_jid, args: str, store: EventStore) -> None:
+    """!delete-event <event_id>"""
     match = re.match(r"^(\d+)$", args)
     if not match:
         _reply(client, chat_jid, "⚠️ Usage: `!delete-event <event_id>`")
         return
-
     event_id = int(match.group(1))
     try:
-        success = store.delete_event(event_id)
-        if success:
+        if store.delete_event(event_id):
             _reply(client, chat_jid, f"🗑️ Event {event_id} has been deleted.")
         else:
             _reply(client, chat_jid, f"⚠️ Event {event_id} not found or already deleted.")
@@ -123,82 +110,76 @@ def _cmd_delete_event(client: "NewClient", chat_jid, args: str, sender_user: str
         log.error("Failed to delete event: %s", exc)
         _reply(client, chat_jid, "❌ Failed to delete event.")
 
-def _cmd_set_status(client: "NewClient", chat_jid, args: str, sender_user: str, store: EventStore) -> None:
-    """!set-status <event_id> | <status>"""
-    if not store.is_admin(sender_user):
-        _reply(client, chat_jid, "⛔ Permission denied. Admin access required.")
-        return
 
+def _cmd_set_status(client: "NewClient", chat_jid, args: str, store: EventStore) -> None:
+    """!set-status <event_id> | <status>"""
     parts = [p.strip() for p in args.split("|")]
     if len(parts) != 2 or not parts[0].isdigit():
         _reply(client, chat_jid, "⚠️ Usage: `!set-status <event_id> | <status>`")
         return
-
-    event_id = int(parts[0])
-    status = parts[1].lower()
-
     try:
-        updated_event = store.set_status(event_id=event_id, status=status)
-        _reply(client, chat_jid, f"✅ Event {event_id} status changed to `{updated_event['status']}`.")
+        updated = store.set_status(event_id=int(parts[0]), status=parts[1].lower())
+        _reply(client, chat_jid, f"✅ Event {parts[0]} status changed to `{updated['status']}`.")
     except ValueError as exc:
         _reply(client, chat_jid, f"❌ {exc}")
     except Exception as exc:
         log.error("Failed to update status: %s", exc)
         _reply(client, chat_jid, "❌ Failed to update event status.")
 
-def _cmd_my(client: "NewClient", chat_jid, sender_user: str, store: EventStore) -> None:
-    """!my - Shows the member their own assignments"""
+
+def _cmd_my(client: "NewClient", chat_jid, sender_jid: str, store: EventStore) -> None:
+    """!my — show own assignments"""
     try:
-        assignments = store.get_user_assignments(user_id=sender_user)
+        assignments = store.get_user_assignments(user_id=sender_jid)
         if not assignments:
             _reply(client, chat_jid, "📋 *You have no active event assignments right now.*")
             return
-
         lines = [
-            f"• *[{asg['event_id']}]* {asg['event_name']} _({asg['event_type']})_ - Status: `{asg['status']}`"
-            for asg in assignments
+            f"• *[{a['event_id']}]* {a['event_name']} _({a['event_type']})_ - Status: `{a['status']}`"
+            for a in assignments
         ]
         _reply(client, chat_jid, f"*📌 Your Assigned Events ({len(assignments)})*\n\n" + "\n".join(lines))
     except Exception as exc:
         log.error("Failed to fetch user assignments: %s", exc)
         _reply(client, chat_jid, "❌ Failed to fetch your assignments.")
 
-def _cmd_my_status(client: "NewClient", chat_jid, sender_user: str, args: str, store: EventStore) -> None:
-    """!my-status <event_id> | <status> - Updates your status for an event"""
+
+def _cmd_my_status(client: "NewClient", chat_jid, sender_jid: str, args: str, store: EventStore) -> None:
+    """!my-status <event_id> | <status>"""
+    parts = [p.strip() for p in args.split("|")]
+    if len(parts) < 2 or not parts[0].isdigit():
+        _reply(client, chat_jid,
+               "⚠️ Usage: `!my-status <event_id> | <status>`\nExample: `!my-status 1 | completed`")
+        return
+
+    new_status = parts[1].lower()
+    if new_status not in VALID_ASSIGNMENT_STATUSES:
+        _reply(client, chat_jid,
+               f"❌ Invalid status `{new_status}`.\nAllowed: {' • '.join(sorted(VALID_ASSIGNMENT_STATUSES))}")
+        return
+
     try:
-        parts = [p.strip() for p in args.split("|")]
-        if len(parts) < 2 or not parts[0].isdigit():
-            _reply(client, chat_jid, "⚠️ Usage: `!my-status <event_id> | <status>`\nExample: `!my-status 1 | completed`")
-            return
-
-        event_id = int(parts[0])
-        new_status = parts[1].lower()
-
-        if new_status not in VALID_ASSIGNMENT_STATUSES:
-            allowed = " • ".join(sorted(VALID_ASSIGNMENT_STATUSES))
-            _reply(client, chat_jid, f"❌ Invalid status `{new_status}`.\nAllowed values: {allowed}")
-            return
-
-        success = store.update_user_assignment_status(sender_user, event_id, new_status)
-        if success:
-            _reply(client, chat_jid, f"✅ Your assignment status for Event {event_id} has been updated to `{new_status}`!")
+        if store.update_user_assignment_status(sender_jid, int(parts[0]), new_status):
+            _reply(client, chat_jid,
+                   f"✅ Your assignment status for Event {parts[0]} updated to `{new_status}`!")
         else:
-            _reply(client, chat_jid, f"❌ You are not assigned to Event {event_id}.")
+            _reply(client, chat_jid, f"❌ You are not assigned to Event {parts[0]}.")
     except Exception as exc:
-        log.error("Failed to update user assignment status: %s", exc)
+        log.error("Failed to update assignment status: %s", exc)
         _reply(client, chat_jid, "❌ Failed to update your assignment status.")
 
-def _is_event_command(text: str) -> bool:
-    """Return whether text is an explicit event management command."""
-    lower = text.lower()
-    return any(
-        lower == cmd or lower.startswith(f"{cmd} ")
-        for cmd in ("!events", "!create-event", "!delete-event", "!set-status", "!my", "!my-status")
-    )
 
 # ---------------------------------------------------------------------------
 # Feature registration
 # ---------------------------------------------------------------------------
+
+EVENT_MGMT_CMDS = ("!events", "!create-event", "!delete-event", "!set-status", "!my", "!my-status")
+
+
+def _is_event_mgmt_command(text: str) -> bool:
+    lower = text.lower()
+    return any(lower == cmd or lower.startswith(f"{cmd} ") for cmd in EVENT_MGMT_CMDS)
+
 
 def register(client: "NewClient", config: dict) -> callable:
     session_factory = config.get("db_session_factory")
@@ -211,57 +192,47 @@ def register(client: "NewClient", config: dict) -> callable:
         if not message.Info or not message.Info.MessageSource:
             return
 
-        chat = message.Info.MessageSource.Chat
-        sender = message.Info.MessageSource.Sender
-        # Preserve the complete JID, including @lid identities.
-        sender_user = normalize_jid(sender)
+        source = message.Info.MessageSource
+        chat = source.Chat
 
-        body = _get_text(message)
-        if not body:
+        if getattr(chat, "Server", "") != "g.us":
             return
 
-        if message.Info.MessageSource.IsFromMe and not _is_event_command(body):
+        body = _get_text(message)
+        if not body or not _is_event_mgmt_command(body):
             return
 
         lower = body.lower()
+        command, _, args = body.partition(" ")
+        cmd = command.lower()
+        sender_jid = normalize_jid(source.Sender)
 
-        if lower == "!events":
-            if not require_member(session_factory, normalize_jid(message.Info.MessageSource.Sender), "events.list"):
-                _reply(client, chat, "⛔ An active user account is required."); return
-            _cmd_events(client, chat, store)
-            return
-
-        if lower.startswith("!create-event "):
-            args = body[len("!create-event"):].strip()
-            _cmd_create_event(client, chat, args, sender_user, store)
-            return
-
-        if lower.startswith("!delete-event "):
-            args = body[len("!delete-event"):].strip()
-            _cmd_delete_event(client, chat, args, sender_user, store)
-            return
-
-        if lower.startswith("!set-status "):
-            args = body[len("!set-status"):].strip()
-            # ``!set-status <assignment> <status>`` belongs to the updates
-            # feature. Event status changes remain pipe-delimited.
-            if "|" not in args:
+        # --- member-accessible commands (auto-provisions new users) ---
+        if cmd in ("!events", "!my", "!my-status"):
+            if not gate(session_factory, source.Sender, client, chat, "member", f"events.{cmd[1:]}"):
                 return
-            _cmd_set_status(client, chat, args, sender_user, store)
+            if cmd == "!events":
+                _cmd_events(client, chat, store)
+            elif cmd == "!my":
+                _cmd_my(client, chat, sender_jid, store)
+            elif cmd == "!my-status":
+                _cmd_my_status(client, chat, sender_jid, args, store)
             return
 
-        if lower == "!my":
-            if not require_member(session_factory, normalize_jid(message.Info.MessageSource.Sender), "events.my"):
-                _reply(client, chat, "⛔ An active user account is required."); return
-            _cmd_my(client, chat, sender_user, store)
+        # --- admin-only commands ---
+        # !set-status with no pipe is used by the updates feature — skip it here
+        if cmd == "!set-status" and "|" not in args:
             return
 
-        if lower.startswith("!my-status "):
-            if not require_member(session_factory, normalize_jid(message.Info.MessageSource.Sender), "events.my_status"):
-                _reply(client, chat, "⛔ An active user account is required."); return
-            args = body[len("!my-status"):].strip()
-            _cmd_my_status(client, chat, sender_user, args, store)
+        if not gate(session_factory, source.Sender, client, chat, "admin", f"events.{cmd[1:]}"):
             return
+
+        if cmd == "!create-event":
+            _cmd_create_event(client, chat, args, store)
+        elif cmd == "!delete-event":
+            _cmd_delete_event(client, chat, args, store)
+        elif cmd == "!set-status":
+            _cmd_set_status(client, chat, args, store)
 
     log.info("✅ Event management feature registered")
     return on_message

@@ -116,3 +116,44 @@ class IncidentState(Base):
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     last_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class Task(Base):
+    """PRD FR-5: trackable work item, optionally linked to an organization event."""
+
+    __tablename__ = "tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('todo', 'in_progress', 'done', 'cancelled')",
+            name="ck_tasks_status",
+        ),
+        CheckConstraint(
+            "priority IN ('low', 'medium', 'high')",
+            name="ck_tasks_priority",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("events.id"), nullable=True, index=True
+    )
+    assignee_jid: Mapped[str | None] = mapped_column(
+        ForeignKey("users.jid"), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="todo", index=True
+    )
+    priority: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="medium"
+    )
+    due_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_by_jid: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
