@@ -72,6 +72,29 @@ def submit_update(session: Session, id_or_name: str, field: str, value: str) -> 
     return update
 
 
+def edit_update(session: Session, update_id: str, new_value: str) -> Update:
+    """Edit an existing update by its ID and refresh its assignment timestamp."""
+    if not update_id.strip().isdigit():
+        raise ValueError("Update ID must be numeric.")
+
+    new_value = new_value.strip()
+    if not new_value:
+        raise ValueError("The new update value is required.")
+
+    update = session.get(Update, int(update_id))
+    if update is None:
+        raise ValueError(f"Update '{update_id}' not found.")
+
+    update.value = new_value
+    update.timestamp = datetime.now(timezone.utc)
+    assignment = session.get(Assignment, update.assignment_id)
+    if assignment is not None:
+        assignment.last_update_at = update.timestamp
+    session.commit()
+    session.refresh(update)
+    return update
+
+
 def get_update_history(session: Session, id_or_name: str) -> list[Update]:
     """Return field updates ordered from oldest to newest."""
     assignment = _require_assignment(session, id_or_name)

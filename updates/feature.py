@@ -2,6 +2,7 @@
 
 Commands:
     !update <assignment_id> <field> <value>
+    !update-edit <update_id> <new_value>
     !history <assignment_id>
     !status <assignment_id>
     !set-status <assignment_id> <status>
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING
 from db.auth import gate, normalize_jid
 
 from .operations import (
+    edit_update,
     get_assignment_status,
     get_update_history,
     set_assignment_status,
@@ -51,16 +53,23 @@ def _is_update_command(text: str) -> bool:
     lower = text.lower()
     return any(
         lower == command or lower.startswith(f"{command} ")
-        for command in ("!update", "!history", "!status", "!set-status", "!help-update")
+        for command in (
+            "!update",
+            "!update-edit",
+            "!history",
+            "!status",
+            "!set-status",
+            "!help-update",
+        )
     )
 
 
 def _cmd_submit_update(client, chat_jid, args: str, session_factory, sender) -> None:
+    if not gate(session_factory, sender, client, chat_jid, "member", "update.submit"):
+        return
     parts = args.split(None, 2)
     if len(parts) < 3:
         _reply(client, chat_jid, "Usage: `!update <assignment_id> <field> <value>`")
-        return
-    if not gate(session_factory, sender, client, chat_jid, "member", "update.submit"):
         return
 
     try:
@@ -75,10 +84,10 @@ def _cmd_submit_update(client, chat_jid, args: str, session_factory, sender) -> 
 
 
 def _cmd_history(client, chat_jid, args: str, session_factory, sender) -> None:
+    if not gate(session_factory, sender, client, chat_jid, "member", "update.history"):
+        return
     if not args:
         _reply(client, chat_jid, "Usage: `!history <assignment_id>`")
-        return
-    if not gate(session_factory, sender, client, chat_jid, "member", "update.history"):
         return
 
     try:
@@ -99,11 +108,30 @@ def _cmd_history(client, chat_jid, args: str, session_factory, sender) -> None:
         _reply(client, chat_jid, "❌ An error occurred while fetching history.")
 
 
+def _cmd_edit_update(client, chat_jid, args: str, session_factory, sender) -> None:
+    if not gate(session_factory, sender, client, chat_jid, "member", "update.edit"):
+        return
+    parts = args.split(None, 1)
+    if len(parts) != 2:
+        _reply(client, chat_jid, "Usage: `!update-edit <update_id> <new_value>`")
+        return
+
+    try:
+        with session_factory() as session:
+            edit_update(session, parts[0], parts[1])
+        _reply(client, chat_jid, f"✅ Update *#{parts[0]}* edited successfully.")
+    except ValueError as exc:
+        _reply(client, chat_jid, f"⚠️ {exc}")
+    except Exception:
+        log.exception("Failed to edit assignment update")
+        _reply(client, chat_jid, "❌ An error occurred while editing the update.")
+
+
 def _cmd_status(client, chat_jid, args: str, session_factory, sender) -> None:
+    if not gate(session_factory, sender, client, chat_jid, "member", "update.status"):
+        return
     if not args:
         _reply(client, chat_jid, "Usage: `!status <assignment_id>`")
-        return
-    if not gate(session_factory, sender, client, chat_jid, "member", "update.status"):
         return
 
     try:
@@ -125,11 +153,11 @@ def _cmd_status(client, chat_jid, args: str, session_factory, sender) -> None:
 
 
 def _cmd_set_status(client, chat_jid, args: str, session_factory, sender) -> None:
+    if not gate(session_factory, sender, client, chat_jid, "admin", "update.set_status"):
+        return
     parts = args.split()
     if len(parts) != 2:
         _reply(client, chat_jid, "Usage: `!set-status <assignment_id> <status>`")
-        return
-    if not gate(session_factory, sender, client, chat_jid, "admin", "update.set_status"):
         return
 
     try:
@@ -151,6 +179,9 @@ HELP_TEXT = """*Updates Module — Available Commands*
 
 `!update <assignment_id> <field> <value>`
   Submit or replace a progress update.
+
+`!update-edit <update_id> <new_value>`
+  Edit an existing update value.
 
 `!history <assignment_id>`
   View submitted updates.
@@ -201,6 +232,16 @@ def register(client: "NewClient", config: dict) -> callable:
         if lower == "!update" or lower.startswith("!update "):
             _cmd_submit_update(
                 client, chat, body[len("!update"):].strip(), session_factory, sender
+            )
+            return
+
+        if lower == "!update-edit" or lower.startswith("!update-edit "):
+            _cmd_edit_update(
+                client,
+                chat,
+                body[len("!update-edit"):].strip(),
+                session_factory,
+                sender,
             )
             return
 
