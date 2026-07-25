@@ -1,7 +1,7 @@
 """Administrative user and role commands."""
 from __future__ import annotations
 import logging
-from db.auth import (gate, normalize_jid, remove_or_demote_user, set_role, upsert_user)
+from db.auth import (gate, normalize_jid, remove_or_demote_user, upsert_user)
 from features.subgroups import _get_mentioned_jids, _get_text
 from db.models import User
 
@@ -16,7 +16,7 @@ def register(client, config):
         # Allow group chat processing for both group members and owner account
         if getattr(chat, "Server", "") != "g.us": return
         body = _get_text(message); lower = body.lower()
-        if not lower.startswith(("!add-user", "!set-role", "!remove-user", "!users", "!admins", "!admin-list", "!admins-list")): return
+        if not lower.startswith(("!add-user", "!remove-user", "!users", "!admins", "!admin-list", "!admins-list")): return
         command, _, args = body.partition(" ")
         cmd = command.lower()
 
@@ -29,7 +29,7 @@ def register(client, config):
             else: reply(chat, "*👥 Active Admins*\n" + "\n".join(f"• {u.display_name or u.jid}" for u in admins))
             return
 
-        # Commands requiring active admin access.
+        # Commands requiring active admin access (!add-user, !remove-user, !users)
         actor = gate(factory, source.Sender, client, chat, "admin", cmd)
         if not actor: return
         actor_jid = normalize_jid(source.Sender)  # for logging only
@@ -43,14 +43,6 @@ def register(client, config):
                 for jid in mentions:
                     upsert_user(factory, jid, role, actor=actor)
                 reply(chat, f"✅ add-user ({role}) completed for {len(mentions)} user(s).")
-            elif cmd == "!set-role":
-                tokens = [t.strip().lower() for t in args.replace("|", " ").split()]
-                role = next((t for t in tokens if t in ("admin", "member")), "")
-                if not mentions or not role:
-                    reply(chat, "⚠️ Usage: `!set-role @person admin|member`"); return
-                for jid in mentions:
-                    set_role(factory, jid, role, actor=actor)
-                reply(chat, f"✅ set-role ({role}) completed for {len(mentions)} user(s).")
             elif cmd == "!remove-user":
                 if not mentions:
                     reply(chat, "⚠️ Usage: `!remove-user @person`"); return

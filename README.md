@@ -99,47 +99,7 @@ Seed the first administrator after PostgreSQL is available:
 python -m db.seed_admin 919999999999@s.whatsapp.net
 ```
 
-Admins can use:
-
-| Command | Description |
-|---------|-------------|
-| `!add-user @person member|admin` | Add or reactivate a user |
-| `!set-role @person member|admin` | Change a user role |
-| `!remove-user @person` | Deactivate/demote a user |
-| `!users` | List all users |
-| `!admins` | List active administrators |
-
-Subgroup changes require an admin; subgroup listing, info, and tagging require an active user. Removing or demoting the last active administrator is refused.
-
-### 📅 Events and assignments
-
-| Command | Access | Description |
-|---------|--------|-------------|
-| `!events` | Member | List active events |
-| `!my` | Member | Show your assignments |
-| `!my-status <id> \| <status>` | Member | Update your assignment (`pending`, `in_progress`, `completed`, `cancelled`) |
-| `!create-event <type> \| <name> \| [description]` | Admin | Create an event (`participation` or `organization`) |
-| `!assign <id> \| @person` | Admin | Assign a mentioned user |
-| `!unassign <id> \| @person` | Admin | Remove an assignment |
-| `!delete-event <id>` | Admin | Delete an event |
-| `!set-status <id> \| <status>` | Admin | Change event status |
-
-Mentions use WhatsApp's exact JID, including `@lid` identities.
-
-### ✅ Tasks
-
-| Command | Access | Description |
-|---------|--------|-------------|
-| `!tasks` | Member/Admin | List your tasks or all tasks for admins |
-| `!task <id>` | Member | Show task details |
-| `!complete-task <id>` | Member | Complete your task |
-| `!add-task <title> [\| description] [\| due YYYY-MM-DD] [\| priority low\|medium\|high]` | Admin | Create a task |
-| `!assign-task <id> \| @person` | Admin | Assign a mentioned user |
-| `!unassign-task <id>` | Admin | Remove a task assignment |
-| `!update-task <id> \| field: value` | Admin | Update task fields |
-| `!delete-task <id>` | Admin | Soft-delete a task |
-
-Use `!help` for the module list and `!help <module>` for the authoritative command reference.
+Admins can use `!add-user [admin|member] @person`, `!remove-user @person`, and `!users`. Subgroup changes require an admin; subgroup listing, info, and tagging require an active user. Removing or demoting the last active administrator is refused.
 
 ## Tech Stack
 
@@ -175,10 +135,6 @@ whatsapp-bot/
 │   ├── cards.py            # Card generation
 │   ├── community_tag.py    # Community group tagging
 │   ├── subgroups.py        # Custom subgroups
-│   ├── admin.py            # User and role administration
-│   ├── events.py           # Event assignments
-│   ├── events_management.py# Event lifecycle commands
-│   ├── tasks.py            # Task management
 │   └── incidents.py        # Incident alerts
 ├── cards/
 │   ├── __init__.py
