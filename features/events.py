@@ -44,11 +44,10 @@ def _digits(text: str) -> str:
 
 
 def _resolve_mention(args: str, message: "MessageEv") -> tuple[str, str]:
-    """Return (user_id, display_name); prefers a real phone JID over typed text.
+    """Return the exact WhatsApp mentioned JID and a display label.
 
-    WhatsApp issues two JID formats in mentionedJid:
-    - ``919876543210@s.whatsapp.net`` → real phone number (use the user part)
-    - ``12345678901234567@lid``        → internal LID (skip; fall back to args)
+    ``@lid`` is a valid, stable WhatsApp identity in this runtime. It must be
+    preserved exactly, just as the subgroup feature preserves its mentions.
     """
     try:
         ctx = message.Message.extendedTextMessage.contextInfo
@@ -57,12 +56,9 @@ def _resolve_mention(args: str, message: "MessageEv") -> tuple[str, str]:
         jid = ""
 
     if jid:
-        user_part, _, domain = jid.rpartition("@")
-        if domain in ("s.whatsapp.net", ""):
-            digits = _digits(user_part or jid)
-            if digits:
-                return digits, f"@{digits}"
-        # @lid domains are internal identifiers, not phone numbers — fall through
+        jid = normalize_jid(jid)
+        if "@" in jid:
+            return jid, f"@{jid.split('@', 1)[0]}"
 
     digits = _digits(args)
     stripped = args.strip()
