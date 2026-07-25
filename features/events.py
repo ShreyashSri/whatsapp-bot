@@ -118,7 +118,7 @@ def _cmd_help(client: "NewClient", chat_jid) -> None:
 
 def _is_event_command(text: str) -> bool:
     lower = text.lower()
-    return any(lower == cmd or lower.startswith(f"{cmd} ") for cmd in ("!assign", "!unassign", "!help events"))
+    return any(lower == cmd or lower.startswith(f"{cmd} ") for cmd in ("!assign", "!unassign"))
 
 
 def register(client: "NewClient", config: dict) -> callable:
@@ -153,10 +153,6 @@ def register(client: "NewClient", config: dict) -> callable:
         if lower.startswith("!unassign "):
             args = body[len("!unassign"):].strip()
             _cmd_assign_or_unassign(client, chat, args, sender_user, store, message, assigning=False)
-            return
-
-        if lower == "!help events":
-            _cmd_help(client, chat)
             return
 
     log.info("✅ Events feature registered")
