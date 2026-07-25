@@ -10,6 +10,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import Base
+# Import feature models before metadata is created so their tables are included.
+from updates import models as update_models  # noqa: F401
 
 
 def _normalise_url(database_url: str) -> str:
