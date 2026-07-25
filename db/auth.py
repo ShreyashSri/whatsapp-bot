@@ -53,6 +53,32 @@ def require_member(session_factory, actor_jid, operation: str = "unknown") -> Us
     return authorize(session_factory, actor_jid, operation, "member")
 
 
+# Default denial messages
+_DENY_MSG = {
+    "admin": "⛔ You need to be an active administrator to use this command.",
+    "member": "⛔ An active user account is required.",
+}
+
+
+def gate(session_factory, sender, client, chat, role: str = "member", operation: str = "unknown"):
+    """Single-call auth gate for use in feature handlers.
+
+    Returns the authenticated User on success, or None after sending the
+    denial reply — so the caller just needs:
+
+        actor = gate(factory, source.Sender, client, chat, "admin", "my.op")
+        if not actor: return
+    """
+    jid = normalize_jid(sender)
+    actor = authorize(session_factory, jid, operation, role)
+    if not actor:
+        try:
+            client.send_message(chat, _DENY_MSG.get(role, "⛔ Access denied."))
+        except Exception as exc:
+            log.warning("gate: failed to send denial: %s", exc)
+    return actor
+
+
 def audit(session_factory, actor: User, operation: str, source: str, payload: dict, result: str = "success") -> None:
     with session_factory() as session:
         session.add(AuditLog(actor_jid=actor.jid, actor_role=actor.role, operation=operation,
