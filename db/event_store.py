@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .models import Assignment, Event, EventLabel, User
-from .auth import normalize_jid, require_admin
+from .auth import current_user, jid_user, normalize_jid, require_admin
 
 
 class EventTypeLockedError(ValueError):
@@ -18,7 +18,9 @@ class EventTypeLockedError(ValueError):
 def _ensure_user(session: Session, whatsapp_id: str) -> str:
     """Create a bare `users` row if one doesn't exist yet (FK prerequisite for assign)."""
     jid = normalize_jid(whatsapp_id)
-    if session.get(User, jid) is None:
+    if session.get(User, jid) is None and not any(
+        jid_user(candidate.jid) == jid_user(jid) for candidate in session.scalars(select(User)).all()
+    ):
         session.add(User(
             jid=jid,
             display_name=jid.split("@")[0],
@@ -79,9 +81,14 @@ class EventStore:
 
     def _get_assignment(self, session: Session, event_id: int, user_id: str) -> Assignment | None:
         user_id = normalize_jid(user_id)
-        return session.scalar(
+        exact = session.scalar(
             select(Assignment).where(Assignment.event_id == event_id, Assignment.user_jid == user_id)
         )
+        if exact is not None:
+            return exact
+        return next((row for row in session.scalars(
+            select(Assignment).where(Assignment.event_id == event_id)
+        ).all() if jid_user(row.user_jid) == jid_user(user_id)), None)
 
     def create_event(
         self, *, name: str, type: str, description: str | None = None,
@@ -206,7 +213,6 @@ class EventStore:
             stmt = (
                 select(Assignment, Event)
                 .join(Event, Assignment.event_id == Event.id)
-                .where(Assignment.user_jid == normalize_jid(user_id))
             )
             return [
                 {
@@ -216,6 +222,7 @@ class EventStore:
                     "status": assignment.status,
                 }
                 for assignment, event in session.execute(stmt).all()
+                if jid_user(assignment.user_jid) == jid_user(user_id)
             ]
 
     def update_user_assignment_status(self, user_id: str, event_id: int, status: str) -> bool:
@@ -230,8 +237,5 @@ class EventStore:
 
     def is_admin(self, user_id: str) -> bool:
         """Check if a specific WhatsApp ID belongs to an admin."""
-        with self.session_factory() as session:
-            user = session.scalar(
-                select(User).where(User.jid == normalize_jid(user_id), User.active.is_(True))
-            )
-            return user is not None and user.role == "admin"
+        user = current_user(self.session_factory, user_id)
+        return user is not None and user.active and user.role == "admin"

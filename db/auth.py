@@ -28,9 +28,22 @@ def normalize_jid(value) -> str:
     return value
 
 
+def jid_user(value) -> str:
+    """Return the stable user portion used to bridge phone JIDs and LIDs."""
+    return normalize_jid(value).split("@", 1)[0]
+
+
 def current_user(session_factory: Callable, jid) -> User | None:
     with session_factory() as session:
-        return session.get(User, normalize_jid(jid))
+        normalized = normalize_jid(jid)
+        user = session.get(User, normalized)
+        if user is not None:
+            return user
+        # WhatsApp can report the same person as @lid in inbound messages and
+        # @s.whatsapp.net in mentions. Bridge those representations.
+        wanted = jid_user(normalized)
+        return next((candidate for candidate in session.scalars(select(User)).all()
+                     if jid_user(candidate.jid) == wanted), None)
 
 
 def authorize(session_factory, actor_jid, operation: str, required_role: str = "member") -> User | None:
