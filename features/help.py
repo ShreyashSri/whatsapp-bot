@@ -64,9 +64,11 @@ MODULE_HELP = {
     ),
     "admin": (
         "*🔐 User Administration*\n\n"
-        "`!add-user [admin|member] @person` — add or update a user\n"
-        "`!remove-user @person` — deactivate a user\n"
-        "`!users` — list users\n\n"
+        "`!add-user @person member|admin` — add/reactivate a user\n"
+        "`!set-role @person member|admin` — change a role\n"
+        "`!remove-user @person` — deactivate/demote a user\n"
+        "`!users` — list all users\n"
+        "`!admins` — list active administrators\n\n"
         "These commands require an active administrator."
     ),
     "events": (
@@ -82,17 +84,35 @@ MODULE_HELP = {
         "*🚨 Incident Alerts*\n\n"
         "Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to the configured WhatsApp group. "
         "No chat commands required."
+    ),
+    "tasks": (
+        "*✅ Tasks*\n\n"
+        "*Member commands:*\n"
+        "`!tasks` — list your assigned tasks\n"
+        "`!task <id>` — show task detail\n"
+        "`!complete-task <id>` — mark your task done\n\n"
+        "*Admin commands:*\n"
+        "`!tasks` — list all tasks\n"
+        "`!add-task <title> [| desc] [| due YYYY-MM-DD] [| priority low|medium|high]`\n"
+        "`!assign-task <id> | @person` — assign a task\n"
+        "`!unassign-task <id>` — remove assignment\n"
+        "`!update-task <id> | field: value` — edit title/desc/due/priority/status\n"
+        "`!delete-task <id>` — soft-delete a task\n\n"
+        "Priorities: low 🟢 medium 🟡 high 🔴\n"
+        "Statuses: todo → in_progress → done / cancelled"
     )
 }
 
 GLOBAL_HELP = (
     "*🤖 Bot Help*\n\n"
     "Available modules:\n"
-    "• `!help media` — Task manager\n"
+    "• `!help media` — Media task manager\n"
     "• `!help cards` — Card generation\n"
     "• `!help community` — Community group tags\n"
     "• `!help subgroups` — Custom subgroup tags\n"
     "• `!help admin` — User and role administration\n"
+    "• `!help tasks` — Task management\n"
+    "• `!help events` — Events and assignments\n"
     "• `!help incidents` — Incident alerts\n\n"
     "Type `!help <module>` for detailed commands."
 )
@@ -129,9 +149,14 @@ def register(client: "NewClient", config: dict) -> callable:
                     "card": "cards", "card-pdf": "cards",
                     "add-subgroup": "subgroups", "remove-from-subgroup": "subgroups",
                     "delete-subgroup": "subgroups", "list-subgroups": "subgroups",
-                    "subgroup-info": "subgroups", "events": "events", "assign": "events",
+                    "subgroup-info": "subgroups", "add-user": "admin", "set-role": "admin",
+                    "remove-user": "admin", "users": "admin", "admins": "admin",
+                    "events": "events", "assign": "events",
                     "unassign": "events", "create-event": "events", "delete-event": "events",
-                    "set-status": "events", "my": "events", "my-status": "events"
+                    "set-status": "events", "my": "events", "my-status": "events",
+                    "add-task": "tasks", "assign-task": "tasks", "unassign-task": "tasks",
+                    "update-task": "tasks", "delete-task": "tasks", "complete-task": "tasks",
+                    "tasks": "tasks", "task": "tasks"
                 }
                 
                 module = cmd_to_module.get(args)
