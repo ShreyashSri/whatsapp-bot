@@ -14,6 +14,16 @@ from .models import Assignment, Event, EventLabel, User
 class EventTypeLockedError(ValueError):
     """Raised when changing an event's type after dependent data exists."""
 
+def _ensure_user(session: Session, whatsapp_id: str) -> None:
+    """Create a bare `users` row if one doesn't exist yet (FK prerequisite for assign)."""
+    if session.scalar(select(User).where(User.whatsapp_id == whatsapp_id)) is None:
+        session.add(User(
+            whatsapp_id=whatsapp_id,
+            role="member",
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        ))
+        session.flush()
 
 def _event_to_dict(session: Session, event: Event) -> dict:
     labels = session.scalars(select(EventLabel.label).where(EventLabel.event_id == event.id)).all()
@@ -155,13 +165,13 @@ class EventStore:
             return True
 
     def assign(self, event_id: int, user_id: str) -> dict:
-        """Create an assignment. Assumes the User row already exists (see UserStore.get_or_create)."""
         with self.session_factory.begin() as session:
             self._get_active_event(session, event_id)
-
             existing = self._get_assignment(session, event_id, user_id)
             if existing is not None:
                 return _assignment_to_dict(existing)
+
+            _ensure_user(session, user_id)
 
             assignment = Assignment(
                 event_id=event_id, user_id=user_id, status="pending",
@@ -170,7 +180,7 @@ class EventStore:
             session.add(assignment)
             session.flush()
             return _assignment_to_dict(assignment)
-
+    
     def unassign(self, event_id: int, user_id: str) -> bool:
         with self.session_factory.begin() as session:
             assignment = self._get_assignment(session, event_id, user_id)
