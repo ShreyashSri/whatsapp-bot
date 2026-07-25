@@ -14,8 +14,12 @@ def register_features(client, config: dict) -> Callable:
     from features.community_tag import register as register_community_tag
     from features.subgroups import register as register_subgroups
     from features.incidents import register as register_incidents
+    from features.admin import register as register_admin
+    from features.help import register as register_help
 
     handlers = [
+        register_admin(client, config),
+        register_help(client, config),
         register_media(client, config),
         register_cards(client, config),
         register_community_tag(client, config),

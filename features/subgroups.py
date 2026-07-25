@@ -28,6 +28,7 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
 )
 
 from db.subgroup_store import SubgroupStore
+from db.auth import get_active_admin_jids, normalize_jid, require_admin, require_member
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -274,6 +275,7 @@ def _detect_subgroup_mentions(text: str, subgroups: dict[str, list[str]]) -> lis
 def _is_subgroup_command(text: str) -> bool:
     """Return whether text is an explicit subgroup command.
 
+    TEST-ONLY FEATURE: own-account command handling exists only for testing.
     Own-account commands are allowed for testing, but own-account replies and
     generated mention messages must not be fed back into the feature.
     """
@@ -326,6 +328,8 @@ def register(client: "NewClient", config: dict) -> callable:
         if not body:
             return
 
+        # TEST-ONLY FEATURE: review/remove the own-account command exception
+        # for production. Production should ignore every IsFromMe message.
         # Allow explicit commands sent from the bot's own account for testing,
         # but ignore all other own-account messages. This prevents generated
         # subgroup replies/tags from triggering recursive loops.
@@ -335,7 +339,10 @@ def register(client: "NewClient", config: dict) -> callable:
         # ----- Command handling -----
         lower = body.lower()
 
+        actor = normalize_jid(sender)
+
         if lower == "!add-subgroup" or lower.startswith("!add-subgroup "):
+            if not require_admin(session_factory, actor, "subgroup.add"): _reply(client, chat, "⛔ Active admin access required."); return
             args = body[len("!add-subgroup"):].strip()
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!add-subgroup <name> | @user1 @user2 …`")
@@ -344,6 +351,7 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         if lower == "!remove-from-subgroup" or lower.startswith("!remove-from-subgroup "):
+            if not require_admin(session_factory, actor, "subgroup.remove"): _reply(client, chat, "⛔ Active admin access required."); return
             args = body[len("!remove-from-subgroup"):].strip()
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!remove-from-subgroup <name> | @user1 @user2 …`")
@@ -352,6 +360,7 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         if lower == "!delete-subgroup" or lower.startswith("!delete-subgroup "):
+            if not require_admin(session_factory, actor, "subgroup.delete"): _reply(client, chat, "⛔ Active admin access required."); return
             args = body[len("!delete-subgroup"):].strip()
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!delete-subgroup <name>`")
@@ -360,10 +369,12 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         if lower == "!list-subgroups":
+            if not require_member(session_factory, actor, "subgroup.list"): _reply(client, chat, "⛔ An active user account is required."); return
             _cmd_list_subgroups(client, chat, store)
             return
 
         if lower == "!subgroup-info" or lower.startswith("!subgroup-info "):
+            if not require_member(session_factory, actor, "subgroup.info"): _reply(client, chat, "⛔ An active user account is required."); return
             args = body[len("!subgroup-info"):].strip()
             if not args:
                 _reply(client, chat, "⚠️ Usage: `!subgroup-info <name>`")
@@ -371,16 +382,28 @@ def register(client: "NewClient", config: dict) -> callable:
                 _cmd_subgroup_info(client, chat, args, store)
             return
 
-        # ----- @subgroup tag detection -----
+        # ----- @subgroup and @admins tag detection -----
+        if not require_member(session_factory, actor, "subgroup.tag"):
+            return
         subgroups = _read_subgroups(store)
         matched = _detect_subgroup_mentions(body, subgroups)
-        if not matched:
+        has_admin_mention = bool(re.search(r"@admins?\b", body, re.IGNORECASE))
+        if not matched and not has_admin_mention:
             return
 
-        # Collect unique JIDs across all matched subgroups
+        # Collect unique JIDs across all matched subgroups and admins
         all_jids: list[str] = []
         seen: set[str] = set()
         tag_names: list[str] = []
+
+        if has_admin_mention:
+            admin_jids = get_active_admin_jids(session_factory)
+            if admin_jids:
+                tag_names.append("admins")
+                for jid in admin_jids:
+                    if jid not in seen:
+                        seen.add(jid)
+                        all_jids.append(jid)
 
         for name in matched:
             members = subgroups.get(name, [])
@@ -396,7 +419,7 @@ def register(client: "NewClient", config: dict) -> callable:
             return
 
         label = ", ".join(f"@{n}" for n in tag_names)
-        text = f"📢 Tagging subgroup: {label}"
+        text = f"📢 Tagging: {label}"
 
         proto_msg = Message(
             extendedTextMessage=ExtendedTextMessage(

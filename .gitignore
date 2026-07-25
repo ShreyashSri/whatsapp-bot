@@ -27,3 +27,6 @@ preview-card.pdf
 node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
+
+PBBot-PRD-Brief.pdf
+PRD.md

@@ -90,6 +90,17 @@ Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a
 - Deduplicates alerts — only sends on state changes (new incidents, resolved incidents)
 - Persists state across restarts
 
+### 🔐 Roles and authorization
+
+Users are keyed by normalized WhatsApp JID and have one role: `admin` or `member`.
+Seed the first administrator after PostgreSQL is available:
+
+```bash
+python -m db.seed_admin 919999999999@s.whatsapp.net
+```
+
+Admins can use `!add-user [admin|member] @person`, `!remove-user @person`, and `!users`. Subgroup changes require an admin; subgroup listing, info, and tagging require an active user. Removing or demoting the last active administrator is refused.
+
 ## Tech Stack
 
 - [neonize](https://github.com/krypton-byte/neonize) — WhatsApp Web automation (Python bindings for whatsmeow)
@@ -104,6 +115,7 @@ Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a
 |----------|-------------|
 | `GROUP_ID` | Primary WhatsApp group ID |
 | `GROUP_IDS` | Optional comma-separated extra group IDs |
+| `PBBOT_GROUP_ID` | WhatsApp group ID where inbound bot commands are allowed (defaults to `GROUP_ID`) |
 | `DATABASE_URL` | PostgreSQL connection URL |
 | `MEDIA_GROUP_ID` | WhatsApp group ID for media task manager |
 | `INCIDENT_GROUP_ID` | WhatsApp group ID for incident alerts |

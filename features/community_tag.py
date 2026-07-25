@@ -98,6 +98,7 @@ def register(client: "NewClient", config: dict) -> callable:
         if getattr(chat, "Server", "") != "g.us":
             return
 
+        # TEST-ONLY GUARD: review/remove for production routing.
         # Ignore our own messages to prevent loops
         if message.Info.MessageSource.IsFromMe:
             return

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -15,6 +15,30 @@ class Base(DeclarativeBase):
 
 # JSONB in PostgreSQL, portable JSON when the stores are exercised with SQLite.
 JsonDocument = JSON().with_variant(JSONB, "postgresql")
+
+
+class User(Base):
+    __tablename__ = "users"
+    jid: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="member")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (CheckConstraint("role IN ('admin', 'member')", name="ck_users_role"),)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_jid: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    actor_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JsonDocument, nullable=False)
+    result: Mapped[str] = mapped_column(String(32), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class MediaPost(Base):

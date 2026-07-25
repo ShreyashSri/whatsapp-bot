@@ -59,7 +59,15 @@ MODULE_HELP = {
         "`!delete-subgroup <name>` — delete entire subgroup\n"
         "`!list-subgroups` — list all subgroups\n"
         "`!subgroup-info <name>` — show members of a subgroup\n\n"
+        "Subgroup changes require an admin; listing, info, and tagging require an active user.\n\n"
         "To tag a subgroup, just write `@subgroupname` anywhere in a message."
+    ),
+    "admin": (
+        "*🔐 User Administration*\n\n"
+        "`!add-user [admin|member] @person` — add or update a user\n"
+        "`!remove-user @person` — deactivate a user\n"
+        "`!users` — list users\n\n"
+        "These commands require an active administrator."
     ),
     "incidents": (
         "*🚨 Incident Alerts*\n\n"
@@ -75,6 +83,7 @@ GLOBAL_HELP = (
     "• `!help cards` — Card generation\n"
     "• `!help community` — Community group tags\n"
     "• `!help subgroups` — Custom subgroup tags\n"
+    "• `!help admin` — User and role administration\n"
     "• `!help incidents` — Incident alerts\n\n"
     "Type `!help <module>` for detailed commands."
 )
@@ -88,9 +97,6 @@ def register(client: "NewClient", config: dict) -> callable:
         
         # Only process group messages (you can change this to allow DM if needed)
         if getattr(chat, "Server", "") != "g.us":
-            return
-
-        if message.Info.MessageSource.IsFromMe:
             return
 
         body = _get_text(message)
