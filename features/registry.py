@@ -18,6 +18,7 @@ def register_features(client, config: dict) -> Callable:
     from features.help import register as register_help
     from features.events import register as register_events
     from features.events_management import register as register_events_management
+    from updates.feature import register as register_updates
 
     handlers = [
         register_admin(client, config),
@@ -28,6 +29,7 @@ def register_features(client, config: dict) -> Callable:
         register_subgroups(client, config),
         register_events(client, config),
         register_events_management(client, config),
+        register_updates(client, config),
     ]
     # The incident feature owns its Flask listener and is not a MessageEv
     # handler, so start it after the four existing message features.

@@ -243,6 +243,10 @@ def register(client: "NewClient", config: dict) -> callable:
 
         if lower.startswith("!set-status "):
             args = body[len("!set-status"):].strip()
+            # ``!set-status <assignment> <status>`` belongs to the updates
+            # feature. Event status changes remain pipe-delimited.
+            if "|" not in args:
+                return
             _cmd_set_status(client, chat, args, sender_user, store)
             return
 
