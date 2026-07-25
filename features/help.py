@@ -32,96 +32,179 @@ def _reply(client: "NewClient", chat_jid, text: str) -> None:
 MODULE_HELP = {
     "media": (
         "*📋 Media Task Manager*\n\n"
-        "`!add <text>` — add a post to to-do\n"
-        "`!remove <id>` — remove a post\n"
-        "`!to-do` / `!todo` — list pending posts\n"
-        "`!posted <id> <stage>` — mark a stage done\n"
-        "`!unposted <id> <stage>` — un-mark a stage\n"
-        "`!posted-list` — list fully posted entries\n\n"
-        "_Stages:_ design • instagram • linkedin • twitter\n"
-        "_Card types:_ gsoc, lfx, hackathon, competitive, acm, internship, talk, custom"
+        "`!add <text>` — add a new post and return its numeric ID.\n"
+        "`!remove <id>` — remove a post from either list.\n"
+        "`!to-do` or `!todo` — list posts that are not fully posted.\n"
+        "`!posted <id> <stage>` — mark one stage complete.\n"
+        "`!unposted <id> <stage>` — undo one completed stage.\n"
+        "`!posted-list` — list posts with every stage complete.\n\n"
+        "Stages: `design`, `instagram`/`insta`, `linkedin`, `twitter`.\n\n"
+        "Examples:\n"
+        "• `!add Publish the GSoC announcement`\n"
+        "• `!remove 12`\n"
+        "• `!to-do`\n"
+        "• `!posted 12 instagram`\n"
+        "• `!unposted 12 linkedin`\n"
+        "• `!posted-list`"
     ),
     "cards": (
         "*🖼️ Card Generation*\n\n"
-        "`!card <type> | <name> | <text>` — generate a PNG card (attach photo)\n"
-        "`!card-pdf <type> | <name> | <text>` — generate PNG + editable PDF\n\n"
-        "See `!help media` for available card types."
+        "`!card <type> | <name> | <text>` — generate a PNG card.\n"
+        "`!card-pdf <type> | <name> | <text>` — generate a PNG and editable PDF.\n\n"
+        "Attach a profile photo to the command message. Types: `gsoc`, `lfx`,\n"
+        "`hackathon`, `competitive`, `acm`, `internship`, `talk`, `custom`.\n"
+        "Examples:\n"
+        "• `!card gsoc | Ananya Gupta | GSoC 2026 finalist`\n"
+        "• `!card-pdf talk | Bibisha | Building with Python | Dev Workshop | https://example.com/logo.png`"
     ),
     "community": (
         "*🏷️ Community Tagging*\n\n"
-        "When someone @mentions a group in any community chat, the bot silently pings every member of that group. "
-        "No commands required — it happens automatically."
+        "No command is required. Mention a WhatsApp community group in a\n"
+        "community message and the bot silently notifies its members.\n\n"
+        "Example: write `@community-name` in a group message."
     ),
     "subgroups": (
         "*🏷️ Custom Subgroups*\n\n"
-        "`!add-subgroup <name> | @user1 ...` — create/add members (admin)\n"
-        "`!remove-from-subgroup <name> | @user1 ...` — remove members (admin)\n"
-        "`!delete-subgroup <name>` — delete entire subgroup (admin)\n"
-        "`!list-subgroups` — list all subgroups (active user)\n"
-        "`!subgroup-info <name>` — show members of a subgroup (active user)\n\n"
-        "Subgroup mutations require an admin; listing, info, and tagging require an active user.\n\n"
-        "To tag a subgroup, just write `@subgroupname` anywhere in a message."
+        "`!add-subgroup <name> | @user1 @user2` — create a subgroup or add members (admin).\n"
+        "`!remove-from-subgroup <name> | @user1 @user2` — remove members (admin).\n"
+        "`!delete-subgroup <name>` — delete a subgroup (admin).\n"
+        "`!list-subgroups` — list subgroup names and member counts (active user).\n"
+        "`!subgroup-info <name>` — show subgroup members (active user).\n\n"
+        "Names are 2–32 characters using letters, numbers, `-`, or `_`.\n"
+        "Examples:\n"
+        "• `!add-subgroup backend | @Ananya @Bibisha`\n"
+        "• `!remove-from-subgroup backend | @Bibisha`\n"
+        "• `!delete-subgroup backend`\n"
+        "• `!list-subgroups`\n"
+        "• `!subgroup-info backend`\n"
+        "• Tag the group with `@backend` in any message."
     ),
     "admin": (
         "*🔐 User Administration*\n\n"
-        "`!add-user [admin|member] @person` — add or update a user\n"
-        "`!remove-user @person` — deactivate a user\n"
-        "`!users` — list users\n"
-        "`!admins` / `!admin-list` / `!admins-list` — list active admins\n\n"
-        "User changes and `!users` require an active administrator; admin listing requires an active user."
+        "`!add-user [admin|member] @person` — create or update a user role (admin).\n"
+        "`!remove-user @person` — deactivate a user (admin).\n"
+        "`!users` — list active and inactive users (admin).\n"
+        "`!admins`, `!admin-list`, or `!admins-list` — list active admins (active user).\n\n"
+        "Mention the person; do not type their phone number manually.\n\n"
+        "Examples:\n"
+        "• `!add-user member @Ananya`\n"
+        "• `!add-user admin @Bibisha`\n"
+        "• `!remove-user @Ananya`\n"
+        "• `!users`\n"
+        "• `!admins` (aliases: `!admin-list`, `!admins-list`)"
     ),
     "events": (
-        "*📋 Events*\n\n"
-        "`!events` — list active events (active user)\n"
-        "`!my` — show your assignments (active user)\n"
-        "`!my-status <id> | <status>` — update your assignment (active user)\n"
-        "`!create-event <type> | <name> | [description]` — create an event (admin)\n"
-        "`!delete-event <id>` — delete an event (admin)\n"
-        "`!set-status <id> | <status>` — update an event status (admin)\n"
-        "`!assign <id> | @user` or `!assign event <id> | @user` — assign to an event (admin)\n"
-        "`!unassign <id> | @user` or `!unassign event <id> | @user` — unassign from an event (admin)\n"
-        "`!assign task <id> | @user` — assign to a task (admin)\n"
-        "`!unassign task <id>` — unassign a task (admin)"
+        "*📋 Unified Work — Events, Tasks, Assignments, Progress*\n\n"
+        "*Everyone*\n"
+        "`!my` — show your assigned events and tasks. Example: `!my`\n"
+        "`!work` — show the overall work view. Example: `!work pending`\n"
+        "`!work event <id>` / `!work task <id>` — inspect one target. Example: `!work event 4`\n"
+        "`!work status event <id>` — inspect assignment status. Example: `!work status event 4`\n"
+        "`!work update event <id> <field> <value>` — record progress. Example: `!work update event 4 prs 3`\n"
+        "`!work history event <id>` — show progress revisions. Example: `!work history event 4`\n"
+        "`!work edit <revision_id> <new value>` — append a correction. Example: `!work edit 18 prs 4`\n"
+        "`!work start event <id>` — mark your assignment in progress. Example: `!work start event 4`\n"
+        "`!work complete task <id>` — mark your task completed. Example: `!work complete task 7`\n\n"
+        "`!work reminders` — show reminder status. Example: `!work reminders`\n"
+        "`!work reminders history [assignment_id]` — show reminder history. Example: `!work reminders history 22`\n\n"
+        "*Admin only*\n"
+        "`!work create event | <participation|organization> | <category> | <name> | [description]`\n"
+        "`!work create task | <title> | [description text] | [due YYYY-MM-DD] | [priority low|medium|high]`\n"
+        "`!work assign event <id> | @user` / `!work assign task <id> | @user`\n"
+        "`!work unassign event <id> | @user` / `!work unassign task <id> | @user`\n"
+        "`!work set-status event <id> [@user] <pending|in_progress|completed|cancelled>`\n\n"
+        "`!work reminders config frequency 12 | window 09:00-18:00 | threshold 3 | channel @admin`\n"
+        "`!work reminders run` — trigger an idempotent reminder run.\n\n"
+        "Admin examples:\n"
+        "• `!work create event | participation | gsoc | GSoC 2026 | Track applicants`\n"
+        "• `!work create event | organization | workshop | Backend Workshop | Intro session`\n"
+        "• `!work create task | Prepare report | Collect metrics | due 2026-08-01 | priority high`\n"
+        "• `!work assign event 4 | @Ananya`\n"
+        "• `!work assign task 7 | @Bibisha`\n"
+        "• `!work unassign task 7 | @Bibisha`\n"
+        "• `!work set-status event 4 @Ananya in_progress`\n"
+        "• `!work reminders config frequency 12 | window 09:00-18:00 | threshold 3 | channel @admin`\n"
+        "• `!work reminders run`\n\n"
+        "Participation categories: `gsoc`, `lfx`, `hacktoberfest`, `research`, `other`.\n"
+        "Organization categories: `recruitment`, `hackathon`, `workshop`, `bootcamp`, `other`.\n"
+        "Progress statuses: `pending`, `in_progress`, `completed`, `cancelled`.\n"
+        "When multiple users are assigned, an admin must mention the target user.\n"
+        "Use spaces in references (`event 4`, `task 7`); old colon forms remain accepted for compatibility."
     ),
     "tasks": (
         "*✅ Tasks*\n\n"
         "*Admin commands:*\n"
-        "`!add-task <title> [| description] [| due YYYY-MM-DD] [| priority low|medium|high]` — create a task\n"
-        "`!update-task <id> | field: value` — update title, description, due date, priority, or status\n"
-        "`!delete-task <id>` — delete a task\n"
-        "`!tasks` — list all tasks\n\n"
+        "`!add-task <title> [| description text] [| due YYYY-MM-DD] [| priority low|medium|high]` — create a task (admin).\n"
+        "`!update-task <id> | field value` — edit `title`, `description`, `due`, `priority`, or lifecycle `status` (admin).\n"
+        "`!delete-task <id>` — delete a task (admin).\n\n"
         "*Member commands:*\n"
-        "`!tasks` — list your assigned tasks\n"
-        "`!task <id>` — show task details\n"
-        "`!complete-task <id>` — mark your assigned task done"
+        "`!tasks` — compatibility alias showing task assignments.\n"
+        "`!task <id>` — show one assigned task.\n"
+        "`!complete-task <id>` — mark your assigned task completed.\n\n"
+        "Examples:\n"
+        "• `!add-task Prepare report | due 2026-08-01 | priority high`\n"
+        "• `!update-task 7 | priority high`\n"
+        "• `!delete-task 7`\n"
+        "• `!tasks`\n"
+        "• `!task 7`\n"
+        "• `!complete-task 7`"
     ),
     "updates": (
         "*📝 Assignment Updates*\n\n"
-        "`!update <assignment_id> <field> <value>` — submit a progress update\n"
-        "`!update-edit <update_id> <new_value>` — edit an update\n"
-        "`!history <assignment_id>` — view update history\n"
-        "`!status <assignment_id>` — view assignment status\n"
-        "`!set-status <assignment_id> <status>` — set assignment status (admin)\n"
-        "`!help-update` — show update help"
+        "`!update <target> <field> <value>` — append a progress revision.\n"
+        "`!update-edit <revision_id> <new value>` — append an edited revision.\n"
+        "`!history <target>` — show the complete append-only history.\n"
+        "`!status <target>` — show current progress and reminder status.\n"
+        "`!set-status <target> <status>` — set progress status (admin).\n"
+        "Targets: numeric assignment ID, `event <id>@<jid>`, or `task <id>@<jid>`.\n"
+        "Statuses: `pending`, `in_progress`, `completed`, `cancelled`.\n"
+        "Example: `!update task 7@919999999999@s.whatsapp.net note Waiting for review`\n"
+        "Examples:\n"
+        "• `!update task 7 note Waiting for review`\n"
+        "• `!update-edit 18 Waiting for approval`\n"
+        "• `!history task 7`\n"
+        "• `!status event 4`\n"
+        "• `!set-status event 4 in_progress`\n"
+        "• `!help-update`"
     ),
     "incidents": (
         "*🚨 Incident Alerts*\n\n"
         "Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to the configured WhatsApp group. "
         "No chat commands required."
+    ),
+    "reminders": (
+        "*⏰ Reminders*\n\n"
+        "Canonical commands are under `!work reminders`; the older `!reminders` aliases remain supported.\n"
+        "Members see only their own eligible assignments and history; admins see the overall system.\n\n"
+        "Frequency and threshold must be positive numbers; times use 24-hour UTC.\n\n"
+        "Examples:\n"
+        "• `!work reminders`\n"
+        "• `!work reminders history 22`\n"
+        "• `!work reminders config frequency 12 | window 09:00-18:00 | threshold 3 | channel @admin`\n"
+        "• `!work reminders run`\n"
+        "Compatibility aliases: `!reminders`, `!reminder-config`, `!reminder-run`, `!reminder-history`."
     )
 }
 
+# Work is the single documented workflow for event/task assignment and progress.
+# Keep the older module names as compatibility aliases, but avoid presenting
+# three competing command families in the top-level help.
+MODULE_HELP["work"] = MODULE_HELP["events"]
+MODULE_HELP["tasks"] = MODULE_HELP["work"]
+MODULE_HELP["updates"] = MODULE_HELP["work"]
+
 GLOBAL_HELP = (
     "*🤖 Bot Help*\n\n"
+    "Use `!help <module>` for syntax, permissions, and examples.\n\n"
+    "Examples: `!help`, `!help work`, `!help reminders`, `!help posted`.\n\n"
     "Available modules:\n"
     "• `!help media` — Task manager\n"
     "• `!help cards` — Card generation\n"
     "• `!help community` — Community group tags\n"
     "• `!help subgroups` — Custom subgroup tags\n"
     "• `!help admin` — User and role administration\n"
-    "• `!help events` — Events and assignments\n"
-    "• `!help tasks` — Task management\n"
-    "• `!help updates` — Assignment updates\n"
+    "• `!help work` — Events, tasks, assignments, and progress\n"
+    "• `!help reminders` — Scheduled reminders\n"
     "• `!help incidents` — Incident alerts\n\n"
     "Type `!help <module>` for detailed commands."
 )
@@ -158,15 +241,17 @@ def register(client: "NewClient", config: dict) -> callable:
                     "card": "cards", "card-pdf": "cards",
                     "add-subgroup": "subgroups", "remove-from-subgroup": "subgroups",
                     "delete-subgroup": "subgroups", "list-subgroups": "subgroups",
-                    "subgroup-info": "subgroups", "events": "events", "assign": "events",
-                    "unassign": "events", "create-event": "events", "delete-event": "events",
-                    "set-status": "events", "my": "events", "my-status": "events",
+                    "subgroup-info": "subgroups", "events": "work", "tasks": "work", "task": "work",
+                    "assign": "work", "unassign": "work", "work": "work", "my": "work",
+                    "update": "work", "edit": "work", "history": "work", "status": "work", "set-status": "work",
+                    "start": "work", "complete": "work", "create": "work",
+                    "create-event": "work", "delete-event": "work", "my-status": "work",
                     "add-user": "admin", "remove-user": "admin", "users": "admin",
                     "admins": "admin", "admin-list": "admin", "admins-list": "admin",
-                    "add-task": "tasks", "tasks": "tasks", "task": "tasks",
-                    "complete-task": "tasks", "update-task": "tasks", "delete-task": "tasks",
-                    "update": "updates", "update-edit": "updates", "history": "updates",
-                    "status": "updates", "help-update": "updates"
+                    "add-task": "work", "complete-task": "work", "update-task": "work", "delete-task": "work",
+                    "update-edit": "work", "help-update": "work",
+                    "reminders": "reminders", "reminder-config": "reminders",
+                    "reminder-run": "reminders", "reminder-history": "reminders"
                 }
                 
                 module = cmd_to_module.get(args)

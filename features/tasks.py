@@ -3,8 +3,8 @@
 Assignment is handled by the unified !assign / !unassign commands in events.py.
 
 Admin commands:
-  !add-task <title> [| desc] [| due YYYY-MM-DD] [| priority low|medium|high]
-  !update-task <id> | field: value  (title/desc/due/priority/status)
+  !add-task <title> [| description text] [| due YYYY-MM-DD] [| priority low|medium|high]
+  !update-task <id> | field value  (title/description/due/priority/status)
   !delete-task <id>
   !tasks                  — list all tasks
 
@@ -65,7 +65,10 @@ def _parse_date(text: str) -> datetime | None:
 
 
 def _parse_args(args: str, *, include_title: bool = True) -> dict:
-    """Parse task creation fields or update ``key: value`` fields."""
+    """Parse task fields using ``field value`` syntax.
+
+    The former ``field: value`` spelling remains accepted for compatibility.
+    """
     parts = [p.strip() for p in args.split("|")]
     result: dict = {}
     if include_title:
@@ -75,17 +78,21 @@ def _parse_args(args: str, *, include_title: bool = True) -> dict:
         if ":" in part:
             key, _, val = part.partition(":")
             key, val = key.strip().lower(), val.strip()
-            if key in ("due", "due_date", "date"):
-                result["due_date"] = _parse_date(val)
-            elif key in ("priority", "p"):
-                result["priority"] = val.lower()
-            elif key in ("status", "s"):
-                result["status"] = val.lower().replace(" ", "_")
-            elif key in ("description", "desc", "d"):
-                result["description"] = val
-            elif key == "title":
-                result["title"] = val
         else:
+            key, _, val = part.partition(" ")
+            key, val = key.strip().lower(), val.strip()
+
+        if key in ("due", "due_date", "date") and val:
+            result["due_date"] = _parse_date(val)
+        elif key in ("priority", "p") and val:
+            result["priority"] = val.lower()
+        elif key in ("status", "s") and val:
+            result["status"] = val.lower().replace(" ", "_")
+        elif key in ("description", "desc", "d") and val:
+            result["description"] = val
+        elif key == "title" and val:
+            result["title"] = val
+        elif ":" not in part and not val:
             low = part.lower().replace(" ", "_")
             if low in VALID_PRIORITIES:
                 result["priority"] = low
@@ -106,7 +113,7 @@ def _cmd_add_task(client, chat, args: str, actor_jid: str, store: TaskStore) -> 
     if not title:
         client.send_message(
             chat,
-            "⚠️ Usage: `!add-task <title> [| description] [| due YYYY-MM-DD] [| priority low|medium|high]`",
+            "⚠️ Usage: `!add-task <title> [| description text] [| due YYYY-MM-DD] [| priority low|medium|high]`",
         )
         return
     try:
@@ -142,7 +149,7 @@ def _cmd_complete_task(
 def _cmd_update_task(client, chat, args: str, store: TaskStore) -> None:
     parts = [p.strip() for p in args.split("|", 1)]
     if len(parts) != 2 or not parts[0].isdigit() or not parts[1]:
-        client.send_message(chat, "⚠️ Usage: `!update-task <id> | field: value`")
+        client.send_message(chat, "⚠️ Usage: `!update-task <id> | field value`")
         return
     task_id = int(parts[0])
     parsed = _parse_args(parts[1], include_title=False)

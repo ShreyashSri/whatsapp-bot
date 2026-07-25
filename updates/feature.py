@@ -1,11 +1,11 @@
 """WhatsApp commands for assignment progress updates.
 
 Commands:
-    !update <assignment_id> <field> <value>
+    !update <target> <field> <value>
     !update-edit <update_id> <new_value>
-    !history <assignment_id>
-    !status <assignment_id>
-    !set-status <assignment_id> <status>
+    !history <target>
+    !status <target>
+    !set-status <target> <status>
 
 The event-management feature owns ``!set-status <event_id> | <status>``;
 the space-separated form here updates an individual assignment.
@@ -64,18 +64,39 @@ def _is_update_command(text: str) -> bool:
     )
 
 
+def _parse_target(args: str) -> tuple[str, list[str]]:
+    """Parse ``event 4@jid`` / ``task 7@jid`` without colon syntax.
+
+    The old ``event:4@jid`` and ``task:7@jid`` forms are still accepted by
+    the storage resolver for compatibility.
+    """
+    tokens = args.split()
+    if not tokens:
+        return "", []
+    if tokens[0].lower() in ("event", "task"):
+        if len(tokens) < 2:
+            return "", []
+        target = f"{tokens[0]} {tokens[1]}"
+        consumed = 2
+        if consumed < len(tokens) and tokens[2].startswith("@") and "@" not in tokens[1]:
+            target += tokens[2]
+            consumed += 1
+        return target, tokens[consumed:]
+    return tokens[0], tokens[1:]
+
+
 def _cmd_submit_update(client, chat_jid, args: str, session_factory, sender) -> None:
     if not gate(session_factory, sender, client, chat_jid, "member", "update.submit"):
         return
-    parts = args.split(None, 2)
-    if len(parts) < 3:
-        _reply(client, chat_jid, "Usage: `!update <assignment_id> <field> <value>`")
+    target, parts = _parse_target(args)
+    if len(parts) < 2:
+        _reply(client, chat_jid, "Usage: `!update <target> <field> <value>`\nExample: `!update event 4@user@s.whatsapp.net note Ready`")
         return
 
     try:
         with session_factory() as session:
-            submit_update(session, parts[0], parts[1], parts[2])
-        _reply(client, chat_jid, f"✅ Update submitted for assignment *{parts[0]}*.")
+            submit_update(session, target, parts[0], " ".join(parts[1:]), normalize_jid(sender))
+        _reply(client, chat_jid, f"✅ Update submitted for assignment *{target}*.")
     except ValueError as exc:
         _reply(client, chat_jid, f"⚠️ {exc}")
     except Exception:
@@ -86,17 +107,18 @@ def _cmd_submit_update(client, chat_jid, args: str, session_factory, sender) -> 
 def _cmd_history(client, chat_jid, args: str, session_factory, sender) -> None:
     if not gate(session_factory, sender, client, chat_jid, "member", "update.history"):
         return
-    if not args:
-        _reply(client, chat_jid, "Usage: `!history <assignment_id>`")
+    target, remaining = _parse_target(args)
+    if not target or remaining:
+        _reply(client, chat_jid, "Usage: `!history <target>`\nExample: `!history task 7@user@s.whatsapp.net`")
         return
 
     try:
         with session_factory() as session:
-            history = get_update_history(session, args)
+            history = get_update_history(session, target)
         if not history:
-            _reply(client, chat_jid, f"No updates found for assignment *{args}*.")
+            _reply(client, chat_jid, f"No updates found for assignment *{target}*.")
             return
-        lines = [f"*Update history for assignment {args}*", ""]
+        lines = [f"*Update history for assignment {target}*", ""]
         for update in history:
             timestamp = update.timestamp.strftime("%Y-%m-%d %H:%M UTC")
             lines.append(f"[#{update.id}] [{timestamp}] *{update.field}*: {update.value}")
@@ -118,7 +140,7 @@ def _cmd_edit_update(client, chat_jid, args: str, session_factory, sender) -> No
 
     try:
         with session_factory() as session:
-            edit_update(session, parts[0], parts[1])
+            edit_update(session, parts[0], parts[1], normalize_jid(sender))
         _reply(client, chat_jid, f"✅ Update *#{parts[0]}* edited successfully.")
     except ValueError as exc:
         _reply(client, chat_jid, f"⚠️ {exc}")
@@ -130,17 +152,18 @@ def _cmd_edit_update(client, chat_jid, args: str, session_factory, sender) -> No
 def _cmd_status(client, chat_jid, args: str, session_factory, sender) -> None:
     if not gate(session_factory, sender, client, chat_jid, "member", "update.status"):
         return
-    if not args:
-        _reply(client, chat_jid, "Usage: `!status <assignment_id>`")
+    target, remaining = _parse_target(args)
+    if not target or remaining:
+        _reply(client, chat_jid, "Usage: `!status <target>`\nExample: `!status event 4@user@s.whatsapp.net`")
         return
 
     try:
         with session_factory() as session:
-            assignment = get_assignment_status(session, args)
+            assignment = get_assignment_status(session, target)
         _reply(
             client,
             chat_jid,
-            f"*Status for assignment {args}*\n"
+            f"*Status for assignment {target}*\n"
             f"Status: `{assignment.status}`\n"
             f"Reminder state: `{assignment.reminder_state or 'inactive'}`\n"
             f"Missed reminders: `{assignment.missed_count}`",
@@ -155,18 +178,18 @@ def _cmd_status(client, chat_jid, args: str, session_factory, sender) -> None:
 def _cmd_set_status(client, chat_jid, args: str, session_factory, sender) -> None:
     if not gate(session_factory, sender, client, chat_jid, "admin", "update.set_status"):
         return
-    parts = args.split()
-    if len(parts) != 2:
-        _reply(client, chat_jid, "Usage: `!set-status <assignment_id> <status>`")
+    target, parts = _parse_target(args)
+    if len(parts) != 1:
+        _reply(client, chat_jid, "Usage: `!set-status <target> <pending|in_progress|completed|cancelled>`")
         return
 
     try:
         with session_factory() as session:
-            set_assignment_status(session, parts[0], parts[1])
+            set_assignment_status(session, target, parts[0], normalize_jid(sender))
         _reply(
             client,
             chat_jid,
-            f"✅ Status for assignment *{parts[0]}* set to *{parts[1].lower()}*.",
+            f"✅ Status for assignment *{target}* set to *{parts[0].lower()}*.",
         )
     except ValueError as exc:
         _reply(client, chat_jid, f"⚠️ {exc}")
@@ -175,26 +198,29 @@ def _cmd_set_status(client, chat_jid, args: str, session_factory, sender) -> Non
         _reply(client, chat_jid, "❌ An error occurred while updating the status.")
 
 
-HELP_TEXT = """*Updates Module — Available Commands*
+HELP_TEXT = """*Assignment Progress — Command Reference*
 
-`!update <assignment_id> <field> <value>`
-  Submit or replace a progress update.
+Targets can be a numeric assignment ID or a space-based reference:
+`event <event_id>@<assignee_jid>` / `task <task_id>@<assignee_jid>`.
 
-`!update-edit <update_id> <new_value>`
-  Edit an existing update value.
+`!update <target> <field> <value>`
+  Append a progress revision; previous revisions are preserved.
 
-`!history <assignment_id>`
-  View submitted updates.
+`!update-edit <revision_id> <new_value>`
+  Append a corrected revision linked to the previous one.
 
-`!status <assignment_id>`
-  View assignment status.
+`!history <target>`
+  View every revision for an assignment.
 
-`!set-status <assignment_id> <status>`
-  Change an assignment status (admin only).
-  Statuses: pending, in_progress, completed, cancelled.
+`!status <target>`
+  View progress status, reminder state, and missed reminders.
 
-`!help-update`
-  Show this help message."""
+`!set-status <target> <status>`
+  Change progress status (admin only).
+  Statuses: `pending`, `in_progress`, `completed`, `cancelled`.
+
+Example: `!update event 4@919999999999@s.whatsapp.net note Ready for review`
+"""
 
 
 def register(client: "NewClient", config: dict) -> callable:

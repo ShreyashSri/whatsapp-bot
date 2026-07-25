@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from db.event_store import EventStore
 from db.auth import gate, normalize_jid
+from db.work_store import WorkStore
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -159,7 +160,12 @@ def _cmd_my_status(client: "NewClient", chat_jid, sender_jid: str, args: str, st
         return
 
     try:
-        if store.update_user_assignment_status(sender_jid, int(parts[0]), new_status):
+        try:
+            WorkStore(store.session_factory).set_status(f"event:{int(parts[0])}@{sender_jid}", new_status, sender_jid)
+            changed = True
+        except ValueError:
+            changed = False
+        if changed:
             _reply(client, chat_jid,
                    f"✅ Your assignment status for Event {parts[0]} updated to `{new_status}`!")
         else:

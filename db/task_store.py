@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from .auth import jid_user, normalize_jid
 from .models import Task, User
+from .work_store import WorkStore
 
 VALID_STATUSES = ("todo", "in_progress", "done", "cancelled")
 VALID_PRIORITIES = ("low", "medium", "high")
@@ -78,16 +79,16 @@ class TaskStore:
         assignee_jid = normalize_jid(assignee_jid) if assignee_jid else None
         task = Task(
             title=title.strip(), description=description, event_id=event_id,
-            assignee_jid=assignee_jid, status="todo", priority=priority,
+            assignee_jid=None, status="todo", priority=priority,
             due_date=due_date, created_by_jid=created_by_jid,
             created_at=now, updated_at=now,
         )
         with self._sf() as session:
-            if assignee_jid:
-                task.assignee_jid = self._ensure_user(session, assignee_jid)
             session.add(task)
             session.commit()
             session.refresh(task)
+        if assignee_jid:
+            WorkStore(self._sf).assign("task", task.id, assignee_jid)
         return task
 
     # --- Read ---
@@ -104,24 +105,9 @@ class TaskStore:
             return q.order_by(Task.id).all()
 
     def list_for_user(self, assignee_jid: str, *, status: str | None = None) -> list[Task]:
+        ids = [row["task_id"] for row in WorkStore(self._sf).overview(user_jid=assignee_jid, status=status, target_type="task")]
         with self._sf() as session:
-            q = session.query(Task).filter(
-                Task.deleted_at.is_(None), Task.assignee_jid == assignee_jid
-            )
-            if status:
-                q = q.filter(Task.status == status)
-            exact = q.order_by(Task.id).all()
-            wanted = jid_user(assignee_jid)
-            if not wanted:
-                return exact
-            equivalent = session.query(Task).filter(Task.deleted_at.is_(None)).all()
-            if status:
-                equivalent = [task for task in equivalent if task.status == status]
-            return sorted(
-                {task.id: task for task in (*exact, *equivalent)
-                 if task.assignee_jid and jid_user(task.assignee_jid) == wanted}.values(),
-                key=lambda task: task.id,
-            )
+            return [session.get(Task, task_id) for task_id in ids]
 
     # --- Update ---
 
@@ -149,24 +135,39 @@ class TaskStore:
             if description is not None:
                 task.description = description
             if assignee_jid is not None:
-                task.assignee_jid = (
-                    self._ensure_user(session, assignee_jid)
-                    if assignee_jid else None
-                )
+                # Assignment is the source of truth; keep the old column only
+                # for databases that still have it during migration.
+                task.assignee_jid = None
             if due_date is not None:
                 task.due_date = due_date
             task.updated_at = self._now()
             session.commit()
             session.refresh(task)
+        if assignee_jid is not None:
+            if assignee_jid:
+                WorkStore(self._sf).assign("task", task_id, assignee_jid)
+            else:
+                with self._sf() as session:
+                    rows = WorkStore(self._sf).overview(target_type="task", target_id=task_id, admin=True)
+                for row in rows:
+                    WorkStore(self._sf).unassign("task", task_id, row["user_jid"])
+        if status == "done":
+            for row in WorkStore(self._sf).overview(target_type="task", target_id=task_id, admin=True):
+                if row.get("status") != "completed":
+                    WorkStore(self._sf).set_status(str(row["id"]), "completed", "system@s.whatsapp.net")
         return task
 
     # --- Assign / Unassign ---
 
     def assign(self, task_id: int, assignee_jid: str) -> Task:
-        return self.update(task_id, assignee_jid=assignee_jid)
+        WorkStore(self._sf).assign("task", task_id, assignee_jid)
+        return self.get(task_id)
 
     def unassign(self, task_id: int) -> Task:
-        return self.update(task_id, assignee_jid="")
+        rows = WorkStore(self._sf).overview(target_type="task", target_id=task_id, admin=True)
+        for row in rows:
+            WorkStore(self._sf).unassign("task", task_id, row["user_jid"])
+        return self.get(task_id)
 
     # --- Complete ---
 
@@ -175,7 +176,8 @@ class TaskStore:
             task = self._get(session, task_id)
             if task is None:
                 raise ValueError(f"task #{task_id} not found")
-            if not task.assignee_jid or jid_user(task.assignee_jid) != jid_user(actor_jid):
+            assignments = WorkStore(self._sf).overview(user_jid=actor_jid, target_type="task", target_id=task_id)
+            if not assignments:
                 raise ValueError("only the assignee or an admin can complete this task")
             if task.status == "done":
                 raise ValueError("task is already completed")
@@ -185,6 +187,8 @@ class TaskStore:
             task.updated_at = self._now()
             session.commit()
             session.refresh(task)
+        for row in assignments:
+            WorkStore(self._sf).set_status(f"{row['id']}", "completed", actor_jid)
         return task
 
     # --- Delete (soft) ---

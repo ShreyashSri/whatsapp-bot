@@ -10,10 +10,28 @@ from sqlalchemy.orm import Session
 
 from .models import Assignment, Event, EventLabel, User
 from .auth import current_user, jid_user, normalize_jid, require_admin
+from .work_store import WorkStore
 
 
 class EventTypeLockedError(ValueError):
     """Raised when changing an event's type after dependent data exists."""
+
+
+EVENT_TYPES = frozenset({"participation", "organization"})
+EVENT_CATEGORIES = {
+    "participation": frozenset({"gsoc", "lfx", "hacktoberfest", "research", "other"}),
+    "organization": frozenset({"recruitment", "hackathon", "workshop", "bootcamp", "other"}),
+}
+
+
+def validate_event_type_category(event_type: str, category: str | None = None) -> tuple[str, str]:
+    event_type = event_type.strip().lower()
+    category = (category or "other").strip().lower()
+    if event_type not in EVENT_TYPES:
+        raise ValueError("event type must be `participation` or `organization`")
+    if category not in EVENT_CATEGORIES[event_type]:
+        raise ValueError(f"{event_type} event category must be one of: {', '.join(sorted(EVENT_CATEGORIES[event_type]))}")
+    return event_type, category
 
 def _ensure_user(session: Session, whatsapp_id: str) -> str:
     """Create a bare `users` row if one doesn't exist yet (FK prerequisite for assign)."""
@@ -41,6 +59,7 @@ def _event_to_dict(session: Session, event: Event) -> dict:
         "id": event.id,
         "name": event.name,
         "type": event.type,
+        "category": event.category,
         "description": event.description,
         "status": event.status,
         "start_date": event.start_date,
@@ -92,12 +111,16 @@ class EventStore:
 
     def create_event(
         self, *, name: str, type: str, description: str | None = None,
+        category: str | None = None,
         labels: list[str] | None = None, start_date: datetime | None = None,
         end_date: datetime | None = None, status: str = "draft",
     ) -> dict:
+        type, category = validate_event_type_category(type, category)
+        if not name.strip():
+            raise ValueError("event name is required")
         with self.session_factory.begin() as session:
             event = Event(
-                name=name, type=type, description=description, status=status,
+                name=name, type=type, category=category, description=description, status=status,
                 start_date=start_date, end_date=end_date, created_at=datetime.now(timezone.utc),
             )
             session.add(event)
@@ -129,11 +152,14 @@ class EventStore:
 
     def update_event(
         self, event_id: int, *, name: str | None = None, type: str | None = None,
-        description: str | None = None, labels: list[str] | None = None,
+        description: str | None = None, category: str | None = None, labels: list[str] | None = None,
         start_date: datetime | None = None, end_date: datetime | None = None,
     ) -> dict:
         with self.session_factory.begin() as session:
             event = self._get_active_event(session, event_id)
+
+            if type is not None or category is not None:
+                type, category = validate_event_type_category(type or event.type, category or event.category)
 
             if type is not None and type != event.type:
                 has_dependent_data = session.scalar(
@@ -142,6 +168,8 @@ class EventStore:
                 if has_dependent_data is not None:
                     raise EventTypeLockedError("Cannot change event type once assignments exist")
                 event.type = type
+            if category is not None:
+                event.category = category
 
             for field, value in (("name", name), ("description", description),
                                   ("start_date", start_date), ("end_date", end_date)):
@@ -178,29 +206,10 @@ class EventStore:
             return True
 
     def assign(self, event_id: int, user_id: str) -> dict:
-        with self.session_factory.begin() as session:
-            self._get_active_event(session, event_id)
-            existing = self._get_assignment(session, event_id, user_id)
-            if existing is not None:
-                return _assignment_to_dict(existing)
-
-            user_id = _ensure_user(session, user_id)
-
-            assignment = Assignment(
-                event_id=event_id, user_jid=user_id, status="pending",
-                created_at=datetime.now(timezone.utc),
-            )
-            session.add(assignment)
-            session.flush()
-            return _assignment_to_dict(assignment)
+        return WorkStore(self.session_factory).assign("event", event_id, user_id)
     
     def unassign(self, event_id: int, user_id: str) -> bool:
-        with self.session_factory.begin() as session:
-            assignment = self._get_assignment(session, event_id, user_id)
-            if assignment is None:
-                return False
-            session.delete(assignment)
-            return True
+        return WorkStore(self.session_factory).unassign("event", event_id, user_id)
 
     def list_assignments(self, event_id: int) -> list[dict]:
         with self.session_factory() as session:

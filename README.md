@@ -22,6 +22,16 @@ Track social media posts across platforms with a full to-do workflow.
 
 When all four stages are marked, the entry auto-moves to the posted list.
 
+Examples:
+
+```text
+!add Publish the GSoC announcement
+!to-do
+!posted 12 instagram
+!unposted 12 linkedin
+!posted-list
+```
+
 ### 🎨 Card Generation
 
 Generate achievement/congratulations cards as PNG images or editable PDFs.
@@ -82,6 +92,16 @@ To tag a subgroup, just write `@subgroupname` anywhere in a message — the bot 
 - A subgroup can never be empty; removing the last member auto-deletes it
 - State persisted in PostgreSQL
 
+Examples:
+
+```text
+!add-subgroup backend | @Ananya @Bibisha
+!remove-from-subgroup backend | @Bibisha
+!list-subgroups
+!subgroup-info backend
+!delete-subgroup backend
+```
+
 ### 🚨 Incident Alerts
 
 Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a WhatsApp group.
@@ -100,6 +120,79 @@ python -m db.seed_admin 919999999999@s.whatsapp.net
 ```
 
 Admins can use `!add-user [admin|member] @person`, `!remove-user @person`, and `!users`. Subgroup changes require an admin; subgroup listing, info, and tagging require an active user. Removing or demoting the last active administrator is refused.
+
+Examples:
+
+```text
+!add-user member @Ananya
+!add-user admin @Bibisha
+!remove-user @Ananya
+!users
+!admins
+```
+
+### 📌 Unified work and progress
+
+Events and tasks share one assignment system. Use `!my` for your complete
+workload and `!work` for detailed member or admin overviews. Filters include
+`pending`, `event <id>`, and `task <id>`. Use `!work update`, `!work edit`,
+`!work history`, `!work status`, and admin-only `!work set-status`; valid
+progress statuses are `pending`, `in_progress`, `completed`, and `cancelled`.
+Create events with a type and category:
+
+```text
+!work create event | <participation|organization> | <category> | <name> | [description]
+```
+
+Participation categories: `gsoc`, `lfx`, `hacktoberfest`, `research`, `other`.
+Organization categories: `recruitment`, `hackathon`, `workshop`, `bootcamp`, `other`.
+
+Reminder controls are unified under `!work`:
+
+```text
+!work reminders
+!work reminders history [assignment_id]
+!work reminders config frequency 12 | window 09:00-18:00 | threshold 3 | channel @admin
+!work reminders run
+```
+
+Members see only their own reminder status/history. The older `!reminders`,
+`!reminder-config`, `!reminder-run`, and `!reminder-history` forms remain
+compatibility aliases.
+
+Create tasks with:
+
+```text
+!work create task | <title> | [description text] | [due YYYY-MM-DD] | [priority low|medium|high]
+```
+
+Work examples:
+
+```text
+!my
+!work pending
+!work event 4
+!work update event 4 prs 3
+!work history event 4
+!work start event 4
+!work complete task 7
+!work assign task 7 | @Bibisha
+!work set-status event 4 @Ananya in_progress
+```
+
+Card and help examples:
+
+```text
+!card gsoc | Ananya Gupta | GSoC 2026 finalist
+!card-pdf talk | Bibisha | Building with Python | Dev Workshop | https://example.com/logo.png
+!help
+!help work
+!help reminders
+```
+
+The older progress, task, event, and assignment commands are routed through
+the same work handler for compatibility; `!events` and `!tasks` remain view
+aliases for the unified system.
 
 ## Tech Stack
 

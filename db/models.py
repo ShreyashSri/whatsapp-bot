@@ -47,6 +47,7 @@ class Event(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     type: Mapped[str] = mapped_column(String(16), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False, default="other")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", index=True)
     start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -65,9 +66,21 @@ class EventLabel(Base):
 
 class Assignment(Base):
     __tablename__ = "assignments"
-    __table_args__ = (UniqueConstraint("event_id", "user_jid", name="uq_event_user"),)
+    __table_args__ = (
+        UniqueConstraint("event_id", "user_jid", name="uq_event_user"),
+        UniqueConstraint("task_id", "user_jid", name="uq_task_user"),
+        CheckConstraint(
+            "(event_id IS NOT NULL AND task_id IS NULL) OR "
+            "(event_id IS NULL AND task_id IS NOT NULL)",
+            name="ck_assignment_one_target",
+        ),
+        CheckConstraint("target_type IN ('event', 'task')", name="ck_assignment_target_type"),
+        CheckConstraint("status IN ('pending', 'in_progress', 'completed', 'cancelled')", name="ck_assignment_status"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(8), nullable=False, default="event", index=True)
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True, index=True)
     user_jid: Mapped[str] = mapped_column(ForeignKey("users.jid"), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     reminder_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -139,9 +152,8 @@ class Task(Base):
     event_id: Mapped[int | None] = mapped_column(
         ForeignKey("events.id"), nullable=True, index=True
     )
-    assignee_jid: Mapped[str | None] = mapped_column(
-        ForeignKey("users.jid"), nullable=True, index=True
-    )
+    # Deprecated compatibility column. New code uses assignments.task_id.
+    assignee_jid: Mapped[str | None] = mapped_column(ForeignKey("users.jid"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="todo", index=True
     )
@@ -157,3 +169,49 @@ class Task(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class ProgressRevision(Base):
+    """Append-only history for every assignment progress field."""
+    __tablename__ = "progress_revisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    assignment_id: Mapped[int] = mapped_column(ForeignKey("assignments.id"), nullable=False, index=True)
+    field: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    author_jid: Mapped[str] = mapped_column(String(128), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    superseded_revision_id: Mapped[int | None] = mapped_column(
+        ForeignKey("progress_revisions.id"), nullable=True, index=True
+    )
+
+
+class ReminderConfig(Base):
+    """PRD FR-7: System-wide configuration for scheduled reminders."""
+
+    __tablename__ = "reminder_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    frequency_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
+    active_window_start: Mapped[str] = mapped_column(String(5), nullable=False, default="09:00")
+    active_window_end: Mapped[str] = mapped_column(String(5), nullable=False, default="18:00")
+    escalation_threshold: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    escalation_channel: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ReminderLog(Base):
+    """PRD FR-7: Immutable log of reminder attempts, outcomes, and escalations."""
+
+    __tablename__ = "reminder_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    assignment_id: Mapped[int] = mapped_column(
+        ForeignKey("assignments.id"), nullable=False, index=True
+    )
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    channel: Mapped[str] = mapped_column(String(32), nullable=False, default="whatsapp")
+    result: Mapped[str] = mapped_column(String(32), nullable=False)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -16,10 +16,10 @@ def register_features(client, config: dict) -> Callable:
     from features.incidents import register as register_incidents
     from features.admin import register as register_admin
     from features.help import register as register_help
-    from features.events import register as register_events
-    from features.events_management import register as register_events_management
-    from features.tasks import register as register_tasks
-    from updates.feature import register as register_updates
+    from features.work import register as register_work
+    from features.reminders import register as register_reminders
+
+    work_handler = register_work(client, config)
 
     handlers = [
         register_admin(client, config),
@@ -28,16 +28,17 @@ def register_features(client, config: dict) -> Callable:
         register_cards(client, config),
         register_community_tag(client, config),
         register_subgroups(client, config),
-        register_events(client, config),
-        register_events_management(client, config),
-        register_tasks(client, config),
-        register_updates(client, config),
+        register_reminders(client, config),
     ]
     # The incident feature owns its Flask listener and is not a MessageEv
     # handler, so start it after the four existing message features.
     register_incidents(client, config)
 
     def dispatch(message: MessageEv) -> None:
+        # Workload commands have one owner. Returning here is the central
+        # collision guard for the historical events/tasks handlers.
+        if work_handler and work_handler(client, message):
+            return
         for handler in handlers:
             if handler:
                 handler(client, message)

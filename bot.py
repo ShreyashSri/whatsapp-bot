@@ -19,7 +19,8 @@ from neonize.client import NewClient
 from neonize.events import ConnectedEv, MessageEv, PairStatusEv
 
 from db.database import create_database
-from db.migration import migrate_legacy_json
+from db.auth import normalize_jid
+from db.migration import migrate_legacy_json, migrate_unified_work, upgrade_unified_schema
 from features.registry import register_features
 
 logging.basicConfig(
@@ -86,7 +87,9 @@ def main() -> None:
     """Initialise all runtime dependencies and connect Neonize."""
     database = create_database(config["database_url"])
     database.initialize()
+    upgrade_unified_schema(database)
     migrate_legacy_json(database.session_factory, Path.cwd())
+    migrate_unified_work(database.session_factory)
 
     runtime_config = {
         **config,
@@ -108,15 +111,27 @@ def main() -> None:
     original_send_message = client.send_message
 
     def guarded_send_message(chat_jid, *args, **kwargs):
+        if isinstance(chat_jid, str):
+            chat_str = normalize_jid(chat_jid)
+            if "@" in chat_str:
+                u, s = chat_str.split("@", 1)
+            else:
+                u, s = chat_str, "s.whatsapp.net"
+            try:
+                from neonize.utils import build_jid
+                chat_jid = build_jid(u, s)
+            except Exception as e:
+                log.warning("Failed to build JID for %s: %s", chat_jid, e)
+
         chat_id = _jid_string(chat_jid) if chat_jid else ""
         if (
-            not allowed_group
-            or not chat_id.endswith("@g.us")
-            or chat_id != allowed_group
+            chat_id.endswith("@s.whatsapp.net")
+            or chat_id.endswith("@lid")
+            or (allowed_group and chat_id.endswith("@g.us") and chat_id == allowed_group)
         ):
-            log.warning("Blocked outbound message to non-PBBot chat: %s", chat_id or "(unknown)")
-            return None
-        return original_send_message(chat_jid, *args, **kwargs)
+            return original_send_message(chat_jid, *args, **kwargs)
+        log.warning("Blocked outbound message to non-PBBot chat: %s", chat_id or "(unknown)")
+        return None
 
     client.send_message = guarded_send_message
 
@@ -130,9 +145,46 @@ def main() -> None:
     def on_pair_status(_client: NewClient, event: PairStatusEv):
         log.info("📱 Pair status: %s", event)
 
+    def _start_reminder_scheduler(client: NewClient, session_factory) -> None:
+        import threading
+        from db.auth import upsert_user, current_user
+        from db.reminder_store import ReminderStore
+
+        # ConnectedEv can fire again after a reconnect. Keep exactly one
+        # scheduler thread attached to the bot process.
+        if getattr(client, "_pbbot_reminder_scheduler_started", False):
+            log.info("⏰ Reminder scheduler already running; skipping duplicate start.")
+            return
+        client._pbbot_reminder_scheduler_started = True
+
+        def run_scheduler_loop():
+            # Wait a bit for the system to settle down after connection
+            time.sleep(30)
+            try:
+                upsert_user(session_factory, "system@s.whatsapp.net", role="admin")
+            except Exception as e:
+                log.warning("Could not upsert system user: %s", e)
+
+            store = ReminderStore(session_factory)
+            while True:
+                try:
+                    system_user = current_user(session_factory, "system@s.whatsapp.net")
+                    if system_user:
+                        log.info("⏰ Running background reminders check...")
+                        res = store.run_reminders(client, system_user, force_ignore_window=False, source="system")
+                        log.info("⏰ Background reminders run result: %s", res)
+                except Exception as exc:
+                    log.exception("Error in background reminder scheduler loop: %s", exc)
+                time.sleep(900)
+
+        thread = threading.Thread(target=run_scheduler_loop, name="ReminderScheduler", daemon=True)
+        thread.start()
+        log.info("⏰ Background reminder scheduler thread started.")
+
     @client.event(ConnectedEv)
     def on_connected(_client: NewClient, _event: ConnectedEv):
         log.info("✅ Bot connected to WhatsApp — all features active")
+        _start_reminder_scheduler(client, runtime_config["db_session_factory"])
 
     dispatch = register_features(client, runtime_config)
 
