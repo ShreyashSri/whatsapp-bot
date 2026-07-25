@@ -69,6 +69,15 @@ MODULE_HELP = {
         "`!users` — list users\n\n"
         "These commands require an active administrator."
     ),
+    "events": (
+        "*📋 Events*\n\n"
+        "`!events` — list active events\n"
+        "`!my` — show your assignments\n"
+        "`!my-status <id> | <status>` — update your assignment\n"
+        "`!create-event <type> | <name> | [description]` — create an event (admin)\n"
+        "`!assign <id> | @user` / `!unassign <id> | @user` — manage assignments (admin)\n"
+        "`!delete-event <id>` / `!set-status <id> | <status>` — manage events (admin)"
+    ),
     "incidents": (
         "*🚨 Incident Alerts*\n\n"
         "Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to the configured WhatsApp group. "
@@ -120,7 +129,9 @@ def register(client: "NewClient", config: dict) -> callable:
                     "card": "cards", "card-pdf": "cards",
                     "add-subgroup": "subgroups", "remove-from-subgroup": "subgroups",
                     "delete-subgroup": "subgroups", "list-subgroups": "subgroups",
-                    "subgroup-info": "subgroups"
+                    "subgroup-info": "subgroups", "events": "events", "assign": "events",
+                    "unassign": "events", "create-event": "events", "delete-event": "events",
+                    "set-status": "events", "my": "events", "my-status": "events"
                 }
                 
                 module = cmd_to_module.get(args)
