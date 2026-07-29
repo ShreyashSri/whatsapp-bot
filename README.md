@@ -147,6 +147,68 @@ Create events with a type and category:
 Participation categories: `gsoc`, `lfx`, `hacktoberfest`, `research`, `other`.
 Organization categories: `recruitment`, `hackathon`, `workshop`, `bootcamp`, `other`.
 
+Create also accepts `start`, `end`, and `labels` fields, and `!update-event`
+edits an existing event:
+
+```text
+!work create event | participation | lfx | LFX Term 3 2026 | Apps | start 2026-01-01 | end 2026-06-01 | labels ml,backend
+!update-event 4 | name LFX Term 3 2026 (Revised) | end 2026-07-01
+```
+
+Assign several people at once, or a whole label:
+
+```text
+!work assign event 4 | @Ananya @Bibisha
+!work assign event 4 | @third-years
+```
+
+### 🧩 Event field schemas
+
+Participation events define their own fields, and submitted values are validated
+against them. Events with no schema stay free-form.
+
+| Command | Description |
+|---------|-------------|
+| `!schema event <id>` | Show an event's fields |
+| `!schema create event <id> \| <name> <type> \| …` | Define the schema (replaces it) |
+| `!schema update event <id> \| <name> <type>` | Add or retype one field |
+| `!schema delete event <id> [\| <name>]` | Delete one field, or the whole schema |
+
+**Field types:** `text` • `number` • `boolean` • `date` • `url` • `single_select` • `multi_select` • `list`
+
+Select types carry their options in brackets. Values are canonicalised, so
+`LINKERD` records as `linkerd`.
+
+```text
+!schema create event 4 | org single_select(linkerd,istio) | prs number | accepted boolean | proposal url
+!work update event 4 prs 3
+!work update event 4 prs banana     → rejected: expected a number
+```
+
+### 📊 Reports and audit
+
+Admin-only. `!reports progress` renders the whole cohort as a table with the
+current value of every field.
+
+| Command | Description |
+|---------|-------------|
+| `!reports` | Counts across events, tasks, and assignments |
+| `!reports progress event <id>` | Cohort table of current field values |
+| `!reports pending` / `!reports completed` | Assignments by progress status |
+| `!audit [<operation>]` | Recent operations with actor attribution |
+
+### 🏷️ User labels
+
+Labels are stored as subgroups, so a label is also mentionable.
+
+| Command | Description |
+|---------|-------------|
+| `!labels` | List labels with member counts |
+| `!labels of @user` | Show one user's labels |
+| `!labels create <name> \| @user …` | Create a label or add members |
+| `!labels remove <name> \| @user …` | Remove members (deletes the label when empty) |
+| `!labels delete <name>` | Delete a label |
+
 Reminder controls are unified under `!work`:
 
 ```text
