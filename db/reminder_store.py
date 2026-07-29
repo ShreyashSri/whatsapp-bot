@@ -13,6 +13,9 @@ from .auth import audit, normalize_jid
 from .models import Assignment, Event, ReminderConfig, ReminderLog, Task, User
 
 log = logging.getLogger(__name__)
+# Reminders keep going until the work is closed or deleted.
+CLOSED_EVENT_STATUSES = frozenset({"completed", "cancelled"})
+CLOSED_TASK_STATUSES = frozenset({"done", "cancelled"})
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -198,10 +201,14 @@ class ReminderStore:
                     target = session.get(Event, assignment.event_id)
                     if target is None or target.deleted_at is not None:
                         continue
+                    if (target.status or "").lower() in CLOSED_EVENT_STATUSES:
+                        continue
                     target_name = target.name
                 elif assignment.target_type == "task":
                     target = session.get(Task, assignment.task_id)
                     if target is None or target.deleted_at is not None:
+                        continue
+                    if (target.status or "").lower() in CLOSED_TASK_STATUSES:
                         continue
                     target_name = target.title
                 else:

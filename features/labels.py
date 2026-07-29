@@ -54,11 +54,11 @@ def register(client: "NewClient", config: dict) -> callable:
         action, _, rest = args.partition(" ")
         action, rest = action.lower(), rest.strip()
         mentions = _get_mentioned_jids(message)
-        reading = not action or action == "list" or (action in ("of", "for") or mentions and not action)
-        role = "member" if reading else "admin"
-        actor = gate(factory, source.Sender, client, chat, role, f"label.{action or 'list'}")
+        actor = gate(factory, source.Sender, client, chat, "member", f"label.{action or 'list'}")
         if not actor:
             return
+        is_admin = actor.role == "admin"
+        self_jid = normalize_jid(source.Sender)
         store = SubgroupStore(factory)
 
         try:
@@ -85,6 +85,9 @@ def register(client: "NewClient", config: dict) -> callable:
             data = store.read()
 
             if action == "delete":
+                if not is_admin:
+                    client.send_message(chat, "⛔ Only administrators can delete a label.")
+                    return
                 if name not in data:
                     client.send_message(chat, f"📭 No label named `{name}`.")
                     return
@@ -95,6 +98,15 @@ def register(client: "NewClient", config: dict) -> callable:
                 return
 
             targets = [normalize_jid(jid) for jid in mentions if normalize_jid(jid)]
+            if not is_admin:
+                # Anyone may opt themselves into or out of a label, but only an
+                # admin may move other people.
+                if not targets:
+                    targets = [self_jid]
+                if [jid_user(jid) for jid in targets] != [jid_user(self_jid)]:
+                    client.send_message(chat, "⛔ You can only add or remove yourself. "
+                                              "Ask an admin to change someone else's labels.")
+                    return
             if action in ("create", "add", "assign"):
                 members = data.get(name, [])
                 added = [jid for jid in targets

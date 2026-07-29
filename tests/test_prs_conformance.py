@@ -274,6 +274,23 @@ def test_cohort_report_omits_duplicate_status_column(bot, users, schema_event):
     assert reply.count("status") == 1
 
 
+def test_cohort_table_stays_phone_readable(bot, users):
+    """Lists of PR links must collapse to a count instead of blowing out the width."""
+    bot("!work create event | participation | lfx | LFX Term 3 2026 | Apps", users["admin"].jid)
+    bot("!schema create event 1 | orgs list | prs_opened list", users["admin"].jid)
+    bot("!work assign event 1 | @Ananya", users["admin"].jid, [users["ananya"].jid])
+    bot("!work update event 1 orgs fluentd,keploy,istio", users["ananya"].jid)
+    bot("!work update event 1 prs_opened https://github.com/fluent/fluentd/pull/4412,"
+        "https://github.com/keploy/keploy/pull/2201,https://github.com/istio/istio/pull/51203",
+        users["ananya"].jid)
+    reply = bot("!reports progress event 1", users["admin"].jid)
+    assert "3 items" in reply
+    assert max(len(line) for line in reply.splitlines()) < 110
+    # The full links stay retrievable for the individual.
+    history = bot(f"!work history event 1 @{users['ananya'].jid}", users["admin"].jid)
+    assert "pull/2201" in history
+
+
 def test_report_summary_and_status_lists(bot, users, schema_event):
     assert "📈 *Work Report*" in bot("!reports", users["admin"].jid)
     assert "Ananya" in bot("!reports pending", users["admin"].jid)
@@ -323,8 +340,33 @@ def test_user_can_hold_multiple_labels(factory, bot, users):
     assert "backend" in reply and "third-years" in reply
 
 
-def test_label_mutation_requires_admin(bot, users):
-    assert "⛔" in bot("!labels create x | @Ananya", users["ananya"].jid, [users["ananya"].jid])
+def test_member_can_self_serve_labels(factory, bot, users):
+    """Anyone may opt themselves into or out of a label."""
+    reply = bot("!labels add lfx-applicants | @Ananya", users["ananya"].jid, [users["ananya"].jid])
+    assert "now has 1 member(s)" in reply
+    # A bare add with no mention means "add me".
+    assert "now has 1 member(s)" in bot("!labels add gsoc-hopefuls", users["bibisha"].jid)
+    assert "gsoc-hopefuls" in bot("!labels of @Bibisha", users["bibisha"].jid, [users["bibisha"].jid])
+    assert "Removed 1" in bot("!labels remove lfx-applicants", users["ananya"].jid)
+
+
+def test_member_cannot_move_someone_else(bot, users):
+    reply = bot("!labels add lfx-applicants | @Bibisha", users["ananya"].jid, [users["bibisha"].jid])
+    assert "only add or remove yourself" in reply
+    assert "`lfx-applicants`" not in bot("!labels", users["ananya"].jid)
+
+
+def test_member_cannot_delete_a_label(bot, users):
+    bot("!labels create lfx-applicants | @Ananya @Bibisha", users["admin"].jid,
+        [users["ananya"].jid, users["bibisha"].jid])
+    assert "⛔" in bot("!labels delete lfx-applicants", users["ananya"].jid)
+    assert "`lfx-applicants`" in bot("!labels", users["admin"].jid)
+
+
+def test_admin_can_still_move_anyone(bot, users):
+    reply = bot("!labels create lfx-applicants | @Ananya @Bibisha", users["admin"].jid,
+                [users["ananya"].jid, users["bibisha"].jid])
+    assert "now has 2 member(s)" in reply
 
 
 def test_invalid_label_name_rejected(bot, users):

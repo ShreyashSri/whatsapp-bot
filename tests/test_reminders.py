@@ -336,3 +336,61 @@ def test_unified_reminders_config(db_session_factory, admin_user):
     call_args = mock_client.send_message.call_args[0][1]
     assert "✅ Reminder config updated!" in call_args
     assert "6h" in call_args
+
+
+def test_reminders_stop_when_event_is_closed(db_session_factory, reminder_store, admin_user, member_user):
+    """Reminders run daily until the work is closed or deleted."""
+    event_store = EventStore(db_session_factory)
+    for lifecycle in ("completed", "cancelled"):
+        evt = event_store.create_event(name=f"Event {lifecycle}", type="organization", status="active")
+        event_store.assign(evt["id"], member_user.jid)
+        event_store.set_status(evt["id"], lifecycle)
+        mock_client = MagicMock()
+        result = reminder_store.run_reminders(mock_client, admin_user, force_ignore_window=True)
+        assert result["eligible"] == 0, f"{lifecycle} event still reminded"
+        mock_client.send_message.assert_not_called()
+
+
+def test_reminders_stop_when_event_is_deleted(db_session_factory, reminder_store, admin_user, member_user):
+    event_store = EventStore(db_session_factory)
+    evt = event_store.create_event(name="Deleted Event", type="organization", status="active")
+    event_store.assign(evt["id"], member_user.jid)
+    event_store.delete_event(evt["id"])
+    mock_client = MagicMock()
+    assert reminder_store.run_reminders(mock_client, admin_user, force_ignore_window=True)["eligible"] == 0
+    mock_client.send_message.assert_not_called()
+
+
+def test_reminders_stop_when_task_is_closed(db_session_factory, reminder_store, admin_user, member_user):
+    from db.task_store import TaskStore
+    from db.work_store import WorkStore
+    for lifecycle in ("done", "cancelled"):
+        task = TaskStore(db_session_factory).create(f"Task {lifecycle}", admin_user.jid)
+        WorkStore(db_session_factory).assign("task", task.id, member_user.jid)
+        TaskStore(db_session_factory).update(task.id, status=lifecycle, force_status=True)
+        mock_client = MagicMock()
+        result = reminder_store.run_reminders(mock_client, admin_user, force_ignore_window=True)
+        assert result["eligible"] == 0, f"{lifecycle} task still reminded"
+
+
+def test_active_work_still_reminds(db_session_factory, reminder_store, admin_user, member_user):
+    event_store = EventStore(db_session_factory)
+    evt = event_store.create_event(name="Open Event", type="organization", status="active")
+    event_store.assign(evt["id"], member_user.jid)
+    mock_client = MagicMock()
+    assert reminder_store.run_reminders(mock_client, admin_user, force_ignore_window=True)["sent"] == 1
+
+
+def test_default_cadence_is_daily(reminder_store):
+    assert reminder_store.get_config()["frequency_hours"] == 24
+
+
+def test_reminder_is_delivered_to_the_member_dm(db_session_factory, reminder_store, admin_user, member_user):
+    event_store = EventStore(db_session_factory)
+    evt = event_store.create_event(name="DM Event", type="organization", status="active")
+    event_store.assign(evt["id"], member_user.jid)
+    mock_client = MagicMock()
+    reminder_store.run_reminders(mock_client, admin_user, force_ignore_window=True)
+    recipient = mock_client.send_message.call_args[0][0]
+    assert getattr(recipient, "Server", "") == "s.whatsapp.net"
+    assert member_user.jid.split("@")[0] in str(getattr(recipient, "User", ""))

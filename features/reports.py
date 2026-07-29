@@ -15,10 +15,25 @@ log = logging.getLogger(__name__)
 REPORT_CMDS = ("!reports", "!report", "!audit")
 
 
+_MAX_CELL = 24
+
+
+def _cell(value: str) -> str:
+    """Keep columns phone-readable: long lists collapse to a count, and the full
+    values stay available through `!work history`."""
+    text = str(value)
+    if len(text) <= _MAX_CELL:
+        return text
+    items = [item for item in text.split(",") if item.strip()]
+    if len(items) > 1:
+        return f"{len(items)} items"
+    return text[:_MAX_CELL - 1] + "…"
+
+
 def _table(fields: list[str], rows: list[dict]) -> str:
     """Render a fixed-width table so WhatsApp's monospace block keeps columns aligned."""
     headers = ["member"] + fields + ["status"]
-    body = [[row["name"]] + [row["values"].get(field, "-") for field in fields] + [row["status"]]
+    body = [[row["name"]] + [_cell(row["values"].get(field, "-")) for field in fields] + [row["status"]]
             for row in rows]
     widths = [max(len(str(cell)) for cell in column) for column in zip(headers, *body)] if body \
         else [len(header) for header in headers]
