@@ -183,7 +183,47 @@ MODULE_HELP = {
         "• `!work reminders config frequency 12 | window 09:00-18:00 | threshold 3 | channel @admin`\n"
         "• `!work reminders run`\n"
         "Compatibility aliases: `!reminders`, `!reminder-config`, `!reminder-run`, `!reminder-history`."
-    )
+    ),
+    "labels": (
+        "*🏷️ Labels*\n\n"
+        "Labels group people, and a label can be assigned work in one command.\n"
+        "Anyone may add or remove themselves; only admins may move other people or delete a label.\n"
+        "A bare `!labels add <name>` means \"add me\".\n\n"
+        "Examples:\n"
+        "• `!labels`\n"
+        "• `!labels add lfx-applicants`\n"
+        "• `!labels of @Ananya`\n"
+        "• `!labels create backend | @Ananya @Bibisha` _(admin)_\n"
+        "• `!labels remove lfx-applicants`\n"
+        "• `!labels delete backend` _(admin)_\n"
+        "Then assign the whole label: `!work assign event 4 | @lfx-applicants`"
+    ),
+    "schema": (
+        "*🧩 Event field schemas*\n\n"
+        "Participation events define their own fields, and submitted values are checked against them. "
+        "Events with no schema accept any field.\n"
+        "Field types: `text`, `number`, `boolean`, `date`, `url`, `single_select`, `multi_select`, `list`.\n"
+        "Select types carry options in brackets. Admin only, except viewing.\n\n"
+        "Examples:\n"
+        "• `!schema event 4`\n"
+        "• `!schema create event 4 | orgs list | prs_opened number | accepted boolean`\n"
+        "• `!schema create event 4 | org single_select(linkerd,istio)`\n"
+        "• `!schema update event 4 | mentor text`\n"
+        "• `!schema delete event 4 | mentor`\n"
+        "• `!schema delete event 4` _(clears the whole schema)_"
+    ),
+    "reports": (
+        "*📊 Reports and audit*\n\n"
+        "Admin only. `!reports progress` shows every assignee's current field values as a table; "
+        "long lists collapse to a count, and `!work history` has the full values.\n\n"
+        "Examples:\n"
+        "• `!reports`\n"
+        "• `!reports progress event 4`\n"
+        "• `!reports pending`\n"
+        "• `!reports completed`\n"
+        "• `!audit`\n"
+        "• `!audit update` _(filter by operation)_"
+    ),
 }
 
 # Work is the single documented workflow for event/task assignment and progress.
@@ -204,6 +244,9 @@ GLOBAL_HELP = (
     "• `!help subgroups` — Custom subgroup tags\n"
     "• `!help admin` — User and role administration\n"
     "• `!help work` — Events, tasks, assignments, and progress\n"
+    "• `!help labels` — Group people and assign work by label\n"
+    "• `!help schema` — Event field definitions and validation\n"
+    "• `!help reports` — Progress tables and audit log\n"
     "• `!help reminders` — Scheduled reminders\n"
     "• `!help incidents` — Incident alerts\n\n"
     "Type `!help <module>` for detailed commands."
