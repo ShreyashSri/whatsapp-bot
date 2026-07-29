@@ -64,6 +64,18 @@ class EventLabel(Base):
     label: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
 
+class EventFieldSchema(Base):
+    """PRS 7.4: per-event dynamic form definition for participation events."""
+    __tablename__ = "event_field_schemas"
+    __table_args__ = (UniqueConstraint("event_id", "name", name="uq_event_field_name"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    field_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    options: Mapped[list | None] = mapped_column(JsonDocument, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class Assignment(Base):
     __tablename__ = "assignments"
     __table_args__ = (

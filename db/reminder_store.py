@@ -15,6 +15,13 @@ from .models import Assignment, Event, ReminderConfig, ReminderLog, Task, User
 log = logging.getLogger(__name__)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Backends without timezone support return naive datetimes; treat them as UTC."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
 def _make_neonize_jid(jid_str: str) -> Any:
     norm = normalize_jid(jid_str)
     if "@" in norm:
@@ -171,7 +178,8 @@ class ReminderStore:
             for assignment in rows:
                 if wanted_user and normalize_jid(assignment.user_jid) != wanted_user:
                     continue
-                if assignment.last_update_at and assignment.last_update_at >= freq_cutoff:
+                last_update_at = _as_utc(assignment.last_update_at)
+                if last_update_at and last_update_at >= freq_cutoff:
                     continue
 
                 recent_log = session.scalar(
@@ -209,7 +217,7 @@ class ReminderStore:
                     "status": assignment.status,
                     "reminder_state": assignment.reminder_state,
                     "missed_count": assignment.missed_count,
-                    "last_update_at": assignment.last_update_at,
+                    "last_update_at": last_update_at,
                 })
 
             return eligible

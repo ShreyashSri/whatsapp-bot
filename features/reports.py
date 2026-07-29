@@ -1,0 +1,129 @@
+"""Reporting and audit surfaces for admins (PRS 7.8 and 7.9)."""
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+from db.auth import gate, normalize_jid
+from db.report_store import ReportStore
+from features.subgroups import _get_mentioned_jids, _get_text
+
+if TYPE_CHECKING:
+    from neonize.client import NewClient
+
+log = logging.getLogger(__name__)
+REPORT_CMDS = ("!reports", "!report", "!audit")
+
+
+def _table(fields: list[str], rows: list[dict]) -> str:
+    """Render a fixed-width table so WhatsApp's monospace block keeps columns aligned."""
+    headers = ["member"] + fields + ["status"]
+    body = [[row["name"]] + [row["values"].get(field, "-") for field in fields] + [row["status"]]
+            for row in rows]
+    widths = [max(len(str(cell)) for cell in column) for column in zip(headers, *body)] if body \
+        else [len(header) for header in headers]
+    lines = ["  ".join(str(cell).ljust(width) for cell, width in zip(row, widths)).rstrip()
+             for row in [headers] + body]
+    return "```\n" + "\n".join(lines) + "\n```"
+
+
+def _cmd_progress(client, chat, store: ReportStore, args: str) -> None:
+    tokens = args.split()
+    if len(tokens) < 2 or tokens[0].lower() != "event" or not tokens[1].isdigit():
+        client.send_message(chat, "Usage: `!reports progress event <id>`")
+        return
+    data = store.cohort(int(tokens[1]))
+    if not data["rows"]:
+        client.send_message(chat, f"📭 Nobody is assigned to *{data['event_name']}* yet.")
+        return
+    client.send_message(chat, f"📊 *{data['event_name']}* — {len(data['rows'])} assigned\n"
+                              + _table(data["fields"], data["rows"]))
+
+
+def _cmd_status_list(client, chat, store: ReportStore, status: str) -> None:
+    rows = store.by_status(status)
+    if not rows:
+        client.send_message(chat, f"📭 Nothing is `{status}`.")
+        return
+    lines = [f"📋 *{status.replace('_', ' ').title()}* — {len(rows)}"]
+    for row in rows:
+        missed = f" | missed {row['missed_count']}" if row["missed_count"] else ""
+        lines.append(f"• `{row['target_type']} {row['target_id']}` *{row['title']}* — {row['name']}{missed}")
+    client.send_message(chat, "\n".join(lines))
+
+
+def _cmd_summary(client, chat, store: ReportStore) -> None:
+    data = store.summary()
+    counts = ", ".join(f"{status}={count}" for status, count in sorted(data["counts"].items())) or "none"
+    client.send_message(chat, "\n".join([
+        "📈 *Work Report*",
+        f"• Events: `{data['events']}` (unassigned: `{data['unassigned_events']}`)",
+        f"• Tasks: `{data['tasks']}`",
+        f"• Assignments: `{data['assignments']}`",
+        f"• By status: {counts}",
+        "",
+        "Try `!reports progress event <id>`, `!reports pending`, or `!reports completed`.",
+    ]))
+
+
+def _cmd_audit(client, chat, store: ReportStore, args: str, mentions: list[str]) -> None:
+    tokens = args.split()
+    actor_jid = normalize_jid(mentions[0]) if mentions else None
+    operation = None
+    if tokens and tokens[0].lower() in ("op", "operation") and len(tokens) > 1:
+        operation = tokens[1].lower()
+    elif tokens and tokens[0].lower() not in ("user", "actor"):
+        operation = tokens[0].lower()
+    entries = store.audit_entries(actor_jid=actor_jid, operation=operation)
+    if not entries:
+        client.send_message(chat, "📭 No audit entries match.")
+        return
+    lines = ["🧾 *Audit Log*"]
+    for entry in entries:
+        stamp = entry["timestamp"].strftime("%Y-%m-%d %H:%M")
+        lines.append(f"• `{entry['operation']}` by {entry['actor']} ({entry['actor_role']}) "
+                     f"via {entry['source']} — {entry['result']} _{stamp}_")
+    client.send_message(chat, "\n".join(lines))
+
+
+def register(client: "NewClient", config: dict) -> callable:
+    factory = config.get("db_session_factory")
+    if factory is None:
+        raise RuntimeError("Reports feature requires db_session_factory")
+
+    def on_message(client: "NewClient", message) -> None:
+        if not message.Info or not message.Info.MessageSource:
+            return
+        source = message.Info.MessageSource
+        chat = source.Chat
+        if getattr(chat, "Server", "") != "g.us":
+            return
+        body = _get_text(message)
+        command, _, args = body.partition(" ")
+        command = command.lower()
+        if command not in REPORT_CMDS:
+            return
+        actor = gate(factory, source.Sender, client, chat, "admin", f"report.{command[1:]}")
+        if not actor:
+            return
+        store = ReportStore(factory)
+        args = args.strip()
+        try:
+            if command == "!audit":
+                _cmd_audit(client, chat, store, args, _get_mentioned_jids(message))
+                return
+            action, _, rest = args.partition(" ")
+            action = action.lower()
+            if action == "progress":
+                _cmd_progress(client, chat, store, rest.strip())
+            elif action in ("pending", "in_progress", "completed", "cancelled"):
+                _cmd_status_list(client, chat, store, action)
+            elif not action or action in ("generate", "summary"):
+                _cmd_summary(client, chat, store)
+            else:
+                client.send_message(chat, "Usage: `!reports [progress event <id>|pending|completed]`")
+        except Exception as exc:
+            log.info("report command failed: %s", exc)
+            client.send_message(chat, f"⚠️ {exc}")
+
+    return on_message

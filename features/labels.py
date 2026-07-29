@@ -1,0 +1,135 @@
+"""User labels (PRS 7.2).
+
+Labels reuse the existing subgroup table: a subgroup is already a named set of
+users, which is exactly a label with its members. That keeps one store for both
+and means a label is also mentionable, so `@backend` still pings the group.
+"""
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+from db.auth import audit, gate, jid_user, normalize_jid
+from db.subgroup_store import SubgroupStore
+from features.subgroups import _NAME_RE, _get_mentioned_jids, _get_text
+
+if TYPE_CHECKING:
+    from neonize.client import NewClient
+
+log = logging.getLogger(__name__)
+LABEL_CMDS = ("!labels", "!label")
+
+
+def _valid_name(raw: str) -> str:
+    name = raw.strip().lstrip("@").lower()
+    if not _NAME_RE.match(name):
+        raise ValueError("label names must be 2-32 characters: letters, digits, hyphens, or underscores")
+    return name
+
+
+def _labels_of(store: SubgroupStore, jid: str) -> list[str]:
+    wanted = jid_user(jid)
+    return sorted(name for name, members in store.read().items()
+                  if any(jid_user(member) == wanted for member in members))
+
+
+def register(client: "NewClient", config: dict) -> callable:
+    factory = config.get("db_session_factory")
+    if factory is None:
+        raise RuntimeError("Labels feature requires db_session_factory")
+
+    def on_message(client: "NewClient", message) -> None:
+        if not message.Info or not message.Info.MessageSource:
+            return
+        source = message.Info.MessageSource
+        chat = source.Chat
+        if getattr(chat, "Server", "") != "g.us":
+            return
+        body = _get_text(message)
+        command, _, args = body.partition(" ")
+        if command.lower() not in LABEL_CMDS:
+            return
+
+        args = args.strip()
+        action, _, rest = args.partition(" ")
+        action, rest = action.lower(), rest.strip()
+        mentions = _get_mentioned_jids(message)
+        reading = not action or action == "list" or (action in ("of", "for") or mentions and not action)
+        role = "member" if reading else "admin"
+        actor = gate(factory, source.Sender, client, chat, role, f"label.{action or 'list'}")
+        if not actor:
+            return
+        store = SubgroupStore(factory)
+
+        try:
+            if action in ("of", "for") or (mentions and action not in
+                                           ("create", "add", "assign", "remove", "delete")):
+                target = normalize_jid(mentions[0]) if mentions else normalize_jid(source.Sender)
+                names = _labels_of(store, target)
+                client.send_message(chat, f"🏷️ Labels for @{target.split('@')[0]}: "
+                                          + (", ".join(f"`{name}`" for name in names) if names else "_none_"))
+                return
+
+            if not action or action == "list":
+                data = store.read()
+                if not data:
+                    client.send_message(chat, "📭 No labels yet. Create one with `!labels create <name> | @user`.")
+                    return
+                lines = [f"🏷️ *Labels ({len(data)})*"]
+                lines += [f"• `{name}` — {len(members)} member(s)" for name, members in sorted(data.items())]
+                client.send_message(chat, "\n".join(lines))
+                return
+
+            head, _, member_text = rest.partition("|")
+            name = _valid_name(head)
+            data = store.read()
+
+            if action == "delete":
+                if name not in data:
+                    client.send_message(chat, f"📭 No label named `{name}`.")
+                    return
+                del data[name]
+                store.write(data)
+                audit(factory, actor, "label.delete", "whatsapp", {"label": name})
+                client.send_message(chat, f"🗑️ Label `{name}` deleted.")
+                return
+
+            targets = [normalize_jid(jid) for jid in mentions if normalize_jid(jid)]
+            if action in ("create", "add", "assign"):
+                members = data.get(name, [])
+                added = [jid for jid in targets
+                         if not any(jid_user(existing) == jid_user(jid) for existing in members)]
+                data[name] = members + added
+                store.write(data)
+                audit(factory, actor, "label.create" if action == "create" else "label.assign",
+                      "whatsapp", {"label": name, "added": added})
+                client.send_message(chat, f"✅ Label `{name}` now has {len(data[name])} member(s)."
+                                    + (f" Added {len(added)}." if added else " No new members."))
+                return
+
+            if action == "remove":
+                if name not in data:
+                    client.send_message(chat, f"📭 No label named `{name}`.")
+                    return
+                if not targets:
+                    raise ValueError("mention at least one user to remove from the label")
+                wanted = {jid_user(jid) for jid in targets}
+                kept = [jid for jid in data[name] if jid_user(jid) not in wanted]
+                removed = len(data[name]) - len(kept)
+                # A label with no members carries no meaning, so drop it.
+                if kept:
+                    data[name] = kept
+                else:
+                    del data[name]
+                store.write(data)
+                audit(factory, actor, "label.remove", "whatsapp", {"label": name, "removed": removed})
+                client.send_message(chat, f"✅ Removed {removed} member(s) from `{name}`."
+                                    + ("" if kept else " Label deleted (now empty)."))
+                return
+
+            client.send_message(chat, "Usage: `!labels [list|create|assign|remove|delete] <name> | @user`")
+        except Exception as exc:
+            log.info("label command failed: %s", exc)
+            client.send_message(chat, f"⚠️ {exc}")
+
+    return on_message

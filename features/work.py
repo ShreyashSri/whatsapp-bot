@@ -6,8 +6,10 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from db.auth import gate, normalize_jid
+from db.auth import audit, gate, jid_user, normalize_jid
 from db.event_store import EventStore, validate_event_type_category
+from db.schema_store import FIELD_TYPES, SchemaStore
+from db.subgroup_store import SubgroupStore
 from db.task_store import TaskStore
 from db.work_store import PROGRESS_STATUSES, WorkStore
 from db.reminder_store import ReminderStore
@@ -20,8 +22,9 @@ log = logging.getLogger(__name__)
 WORK_COMMANDS = ("!my", "!work", "!events", "!tasks", "!task",
                  "!update", "!update-edit", "!history", "!status", "!set-status",
                  "!complete-task", "!assign", "!unassign", "!add-task",
-                 "!update-task", "!delete-task", "!create-event", "!delete-event")
-WORK_SUBCOMMANDS = {"assign", "unassign", "update", "edit", "history", "status", "set-status", "complete", "start", "create", "reminders", "reminder"}
+                 "!update-task", "!delete-task", "!create-event", "!delete-event",
+                 "!update-event", "!schema")
+WORK_SUBCOMMANDS = {"assign", "unassign", "update", "edit", "history", "status", "set-status", "complete", "start", "create", "reminders", "reminder", "schema"}
 
 
 def _format(row: dict) -> str:
@@ -89,6 +92,23 @@ def _target(tokens: list[str], start: int = 0):
     return typ, ident, jid, next_index
 
 
+def _assign_targets(message, remainder: str, inline_jid: str | None, factory) -> list[str]:
+    """Collect every assignee from an inline jid, real mentions, and @subgroup names."""
+    candidates = []
+    if inline_jid:
+        candidates.append(inline_jid)
+    candidates.extend(_get_mentioned_jids(message))
+    subgroups = SubgroupStore(factory).read()
+    for name in re.findall(r"@([A-Za-z0-9_-]{2,32})", remainder or ""):
+        candidates.extend(subgroups.get(name.lower(), []))
+    unique = {}
+    for candidate in candidates:
+        normalized = normalize_jid(candidate)
+        if normalized:
+            unique.setdefault(jid_user(normalized), normalized)
+    return list(unique.values())
+
+
 def _reference(typ: str, ident: int, jid: str | None, sender: str, *, use_sender: bool = True) -> str:
     target_jid = jid or (sender if use_sender else None)
     return f"{typ} {ident}" + (f" @{target_jid}" if target_jid else "")
@@ -110,6 +130,13 @@ def _send(client, chat, text: str) -> None:
     client.send_message(chat, text)
 
 
+def _parse_date(label: str, value: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"{label} must use YYYY-MM-DD")
+
+
 def _legacy_field_args(raw: str) -> dict:
     result = {}
     for part in raw.split("|")[1:]:
@@ -121,13 +148,26 @@ def _legacy_field_args(raw: str) -> dict:
             result["description"] = value
         elif key == "title":
             result["title"] = value
+        elif key == "name":
+            result["name"] = value
         elif key in ("priority", "p"):
             result["priority"] = value.lower()
         elif key in ("due", "due_date", "date"):
-            try:
-                result["due_date"] = datetime.strptime(value, "%Y-%m-%d")
-            except ValueError:
-                raise ValueError("due date must use YYYY-MM-DD")
+            result["due_date"] = _parse_date("due date", value)
+        elif key in ("start", "start_date"):
+            result["start_date"] = _parse_date("start date", value)
+        elif key in ("end", "end_date"):
+            result["end_date"] = _parse_date("end date", value)
+        elif key in ("labels", "label"):
+            result["labels"] = [item.strip().lower() for item in value.split(",") if item.strip()]
+        elif key == "category":
+            result["category"] = value.lower()
+        elif key == "type":
+            result["type"] = value.lower()
+        elif key == "event":
+            if not value.isdigit():
+                raise ValueError("event must be a numeric event id")
+            result["event_id"] = int(value)
         elif key in ("status", "s"):
             result["status"] = value.lower().replace(" ", "_")
     return result
@@ -140,7 +180,8 @@ def _create_task(store: TaskStore, raw: str, sender: str):
         raise ValueError("task title is required")
     fields = _legacy_field_args("|" + "|".join(parts[1:]))
     return store.create(title, sender, description=fields.get("description"),
-                        due_date=fields.get("due_date"), priority=fields.get("priority", "medium"))
+                        due_date=fields.get("due_date"), priority=fields.get("priority", "medium"),
+                        event_id=fields.get("event_id"))
 
 
 def _overview(client, chat, store: WorkStore, actor, sender: str, command: str, args: str) -> None:
@@ -230,17 +271,76 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                 if len(parts) < 4:
                     raise ValueError("event creation needs a type, category, and name")
                 event_type, category = validate_event_type_category(parts[1], parts[2])
-                event = EventStore(factory).create_event(name=parts[3], type=event_type, category=category, description=parts[4] if len(parts) > 4 else "", status="active")
+                # Everything after the description may carry `start`, `end`, and
+                # `labels` fields, so parse the tail the same way tasks do.
+                extras = _legacy_field_args("|" + "|".join(parts[5:])) if len(parts) > 5 else {}
+                event = EventStore(factory).create_event(
+                    name=parts[3], type=event_type, category=category,
+                    description=parts[4] if len(parts) > 4 else "", status="active",
+                    labels=extras.get("labels"), start_date=extras.get("start_date"),
+                    end_date=extras.get("end_date"))
+                audit(factory, actor, "event.create", "whatsapp", {"event_id": event["id"], "name": event["name"]})
                 _send(client, chat, f"✅ Event `{event['id']}` created: *{event['name']}*")
             else:
                 task = _create_task(TaskStore(factory), "|".join(parts[1:]), sender)
+                audit(factory, actor, "task.create", "whatsapp", {"task_id": task.id, "title": task.title})
                 _send(client, chat, f"✅ Task `{task.id}` created: *{task.title}*")
+            return True
+
+        if action == "schema":
+            remainder = args[len(tokens[0]):].strip()
+            verb, _, rest = remainder.partition(" ")
+            # PRS names these schema.create/update/delete; keep those spellings
+            # working alongside the shorter set/add/remove forms.
+            verb = {"create": "set", "update": "add"}.get(verb.lower(), verb.lower())
+            store_schema = SchemaStore(factory)
+            if verb in ("event", "task", "fields"):
+                head = rest if verb == "fields" else remainder
+                typ, ident, _, _ = _target(head.split(), 0)
+                fields = store_schema.list_fields(ident)
+                if not fields:
+                    _send(client, chat, f"📭 No schema defined for {typ} {ident}. Admins can add one with "
+                                        f"`!schema set {typ} {ident} | org text | prs number`.")
+                    return True
+                lines = [f"📐 *Schema — {typ} {ident}*"]
+                lines += [f"• `{item['name']}` {item['field_type']}"
+                          + (f" — {', '.join(item['options'])}" if item["options"] else "")
+                          for item in fields]
+                _send(client, chat, "\n".join(lines))
+                return True
+            if not is_admin:
+                _send(client, chat, "⛔ Only administrators can change event schemas.")
+                return True
+            head, _, spec_text = rest.partition("|")
+            typ, ident, _, _ = _target(head.split(), 0)
+            if verb in ("set", "add"):
+                specs = [part for part in spec_text.split("|") if part.strip()]
+                if not specs:
+                    raise ValueError(f"usage: !schema {verb} {typ} {ident} | <name> <type>  (types: "
+                                     + ", ".join(FIELD_TYPES) + ")")
+                fields = (store_schema.set_fields(ident, specs) if verb == "set"
+                          else store_schema.add_field(ident, specs[0]))
+                audit(factory, actor, f"schema.{verb}", "whatsapp", {"event_id": ident, "specs": specs})
+                _send(client, chat, f"✅ Schema for `{typ} {ident}` now has "
+                                    + ", ".join(f"`{item['name']}`" for item in fields) + ".")
+            elif verb in ("remove", "delete") and spec_text.strip():
+                removed = store_schema.remove_field(ident, spec_text)
+                audit(factory, actor, "schema.delete", "whatsapp", {"event_id": ident, "field": spec_text.strip().lower()})
+                _send(client, chat, f"🗑️ Field `{spec_text.strip().lower()}` removed."
+                      if removed else "📭 No such field on this event.")
+            elif verb in ("clear", "delete", "remove"):
+                count = store_schema.clear(ident)
+                audit(factory, actor, "schema.delete", "whatsapp", {"event_id": ident, "cleared": count})
+                _send(client, chat, f"🗑️ Cleared {count} field(s) from `{typ} {ident}`.")
+            else:
+                raise ValueError("usage: !schema <set|add|remove|clear|fields> event <id> | <name> <type>")
             return True
 
         if action == "edit":
             if len(tokens) < 3 or not tokens[1].isdigit():
                 raise ValueError("usage: !work edit <revision_id> <new value>")
             revision = store.edit_update(int(tokens[1]), " ".join(tokens[2:]), sender)
+            audit(factory, actor, "update.edit", "whatsapp", {"revision_id": revision["id"]})
             _send(client, chat, f"✅ Update `{revision['id']}` edited successfully.")
             return True
 
@@ -250,16 +350,18 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             if not is_admin:
                 _send(client, chat, "⛔ Only administrators can change assignments.")
                 return True
-            mentions = _get_mentioned_jids(message)
-            target_jid = jid or (normalize_jid(mentions[0]) if mentions else None)
-            if not target_jid:
-                raise ValueError("mention one user to assign or unassign")
+            targets = _assign_targets(message, " ".join(tokens[next_index:]), jid, factory)
+            if not targets:
+                raise ValueError("mention at least one user or subgroup to assign or unassign")
             if action == "assign":
-                row = store.assign(typ, ident, target_jid)
-                _send(client, chat, f"✅ Assigned `{typ} {ident}` to @{row['user_jid'].split('@')[0]}.")
+                names = [store.assign(typ, ident, target)["user_jid"].split("@")[0] for target in targets]
+                audit(factory, actor, f"{typ}.assign", "whatsapp", {"target_id": ident, "users": targets})
+                _send(client, chat, f"✅ Assigned `{typ} {ident}` to " + ", ".join(f"@{name}" for name in names) + ".")
             else:
-                removed = store.unassign(typ, ident, target_jid)
-                _send(client, chat, "✅ Assignment removed." if removed else "📭 That user is not assigned to this item.")
+                removed = [target for target in targets if store.unassign(typ, ident, target)]
+                audit(factory, actor, f"{typ}.unassign", "whatsapp", {"target_id": ident, "users": removed})
+                _send(client, chat, f"✅ Removed {len(removed)} assignment(s) from `{typ} {ident}`."
+                      if removed else "📭 No matching assignments found.")
             return True
 
         if action == "history":
@@ -284,6 +386,7 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             if not value:
                 raise ValueError("update value is required")
             result = store.submit_update(_reference(typ, ident, target_jid, sender, use_sender=not is_admin), field, value, sender)
+            audit(factory, actor, "update.submit", "whatsapp", {"target": f"{typ} {ident}", "field": field, "revision_id": result["id"]})
             _send(client, chat, f"✅ Update `{result['id']}` recorded for `{typ} {ident}`.")
             return True
 
@@ -306,6 +409,7 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             if action == "start" and is_admin:
                 target_jid = _resolve_admin_target(store, typ, ident, target_jid)
             result = store.set_status(_reference(typ, ident, target_jid, sender, use_sender=not is_admin), status, sender)
+            audit(factory, actor, f"{typ}.status", "whatsapp", {"target_id": ident, "status": result["status"]})
             if action == "complete" and typ == "task":
                 # Keep the task lifecycle in sync with the assignee's
                 # completed progress while retaining separate status fields.
@@ -316,6 +420,7 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             if is_admin:
                 target_jid = _resolve_admin_target(store, typ, ident, target_jid)
             result = store.set_status(_reference(typ, ident, target_jid, sender, use_sender=not is_admin), status, sender)
+            audit(factory, actor, f"{typ}.status", "whatsapp", {"target_id": ident, "status": result["status"]})
             _send(client, chat, f"✅ `{typ} {ident}` set to `{result['status']}`.")
             return True
     except Exception as exc:
@@ -350,18 +455,18 @@ def handle(client, message, session_factory) -> bool:
         head = parts[0].split()
         typ = head[0].lower() if head and head[0].lower() in ("event", "task") else "event"
         ident_token = head[1] if typ in ("event", "task") and len(head) > 1 else (head[0] if head else "")
-        mentions = _get_mentioned_jids(message)
-        if not ident_token.isdigit() or not mentions:
+        targets = _assign_targets(message, parts[1] if len(parts) > 1 else "", None, session_factory)
+        if not ident_token.isdigit() or not targets:
             _send(client, chat, f"Usage: `{command} {typ} <id> | @user`")
             return True
-        target_jid = normalize_jid(mentions[0])
         try:
+            store = WorkStore(session_factory)
             if command == "!assign":
-                row = WorkStore(session_factory).assign(typ, int(ident_token), target_jid)
-                _send(client, chat, f"✅ Assigned `{typ} {ident_token}` to @{row['user_jid'].split('@')[0]}.")
+                names = [store.assign(typ, int(ident_token), target)["user_jid"].split("@")[0] for target in targets]
+                _send(client, chat, f"✅ Assigned `{typ} {ident_token}` to " + ", ".join(f"@{name}" for name in names) + ".")
             else:
-                removed = WorkStore(session_factory).unassign(typ, int(ident_token), target_jid)
-                _send(client, chat, "✅ Assignment removed." if removed else "📭 Assignment not found.")
+                removed = [target for target in targets if store.unassign(typ, int(ident_token), target)]
+                _send(client, chat, f"✅ Removed {len(removed)} assignment(s)." if removed else "📭 Assignment not found.")
         except Exception as exc:
             _send(client, chat, f"⚠️ {exc}")
         return True
@@ -378,6 +483,7 @@ def handle(client, message, session_factory) -> bool:
                 if not args.strip().isdigit():
                     raise ValueError("usage: !delete-task <id>")
                 tasks.delete(int(args.strip()))
+                audit(session_factory, actor, "task.delete", "whatsapp", {"task_id": int(args.strip())})
                 _send(client, chat, f"🗑️ Task `{args.strip()}` deleted.")
             else:
                 parts = [part.strip() for part in args.split("|", 1)]
@@ -386,17 +492,31 @@ def handle(client, message, session_factory) -> bool:
                 fields = _legacy_field_args("|" + parts[1])
                 task = tasks.update(int(parts[0]), title=fields.get("title"), description=fields.get("description"),
                                     due_date=fields.get("due_date"), priority=fields.get("priority"), status=fields.get("status"), force_status=True)
+                audit(session_factory, actor, "task.update", "whatsapp", {"task_id": task.id, "fields": sorted(fields)})
                 _send(client, chat, f"✅ Task `{task.id}` updated.")
         except Exception as exc:
             _send(client, chat, f"⚠️ {exc}")
         return True
-    if command in ("!create-event", "!delete-event"):
+    if command in ("!create-event", "!delete-event", "!update-event"):
         if actor.role != "admin":
             _send(client, chat, "⛔ Only administrators can manage events.")
             return True
         try:
             events = EventStore(session_factory)
-            if command == "!create-event":
+            if command == "!update-event":
+                parts = [part.strip() for part in args.split("|", 1)]
+                if len(parts) != 2 or not parts[0].isdigit():
+                    raise ValueError("usage: !update-event <id> | name <value> [| desc <value>] [| start YYYY-MM-DD] [| end YYYY-MM-DD] [| labels a,b]")
+                fields = _legacy_field_args("|" + parts[1])
+                if not fields:
+                    raise ValueError("nothing to update; use name, desc, type, category, start, end, or labels")
+                event = events.update_event(int(parts[0]), name=fields.get("name"), type=fields.get("type"),
+                                            description=fields.get("description"), category=fields.get("category"),
+                                            labels=fields.get("labels"), start_date=fields.get("start_date"),
+                                            end_date=fields.get("end_date"))
+                audit(session_factory, actor, "event.update", "whatsapp", {"event_id": event["id"], "fields": sorted(fields)})
+                _send(client, chat, f"✅ Event `{event['id']}` updated: *{event['name']}*")
+            elif command == "!create-event":
                 parts = [part.strip() for part in args.split("|")]
                 if len(parts) < 2:
                     raise ValueError("usage: !create-event <type> | <name> | [description]")
@@ -408,6 +528,7 @@ def handle(client, message, session_factory) -> bool:
                     raise ValueError("usage: !delete-event <id>")
                 if not events.delete_event(int(args.strip())):
                     raise ValueError("event not found")
+                audit(session_factory, actor, "event.delete", "whatsapp", {"event_id": int(args.strip())})
                 _send(client, chat, f"🗑️ Event `{args.strip()}` deleted.")
         except Exception as exc:
             _send(client, chat, f"⚠️ {exc}")
@@ -436,6 +557,9 @@ def handle(client, message, session_factory) -> bool:
     if command == "!complete-task":
         return _handle_work_subcommand(client, chat, message, actor, sender,
                                        f"complete task {args}".strip(), session_factory)
+    if command == "!schema":
+        return _handle_work_subcommand(client, chat, message, actor, sender,
+                                       f"schema {args}".strip(), session_factory)
     _overview(client, chat, WorkStore(session_factory), actor, sender, command, args)
     return True
 

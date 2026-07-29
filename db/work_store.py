@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from .auth import jid_user, normalize_jid
 from .models import Assignment, Event, ProgressRevision, Task, User
+from .schema_store import validate_submission
 
 PROGRESS_STATUSES = frozenset({"pending", "in_progress", "completed", "cancelled"})
 
@@ -160,11 +161,15 @@ class WorkStore:
         return row
 
     def submit_update(self, reference: str, field: str, value: str, author_jid: str) -> dict:
-        field, value = field.strip(), value.strip()
+        # Field names are case-insensitive so a cohort typing "prs" and "PRs"
+        # does not split one metric across two revision chains.
+        field, value = field.strip().lower(), value.strip()
         if not field or not value:
             raise ValueError("Both update field and value are required.")
         with self.session_factory.begin() as session:
             row = self._resolve_in(session, reference)
+            if row.target_type == "event" and row.event_id:
+                field, value = validate_submission(session, row.event_id, field, value)
             previous = session.scalar(select(ProgressRevision).where(ProgressRevision.assignment_id == row.id,
                                                                       ProgressRevision.field == field).order_by(ProgressRevision.id.desc()))
             now = self._now(); row.last_update_at = now
@@ -185,11 +190,13 @@ class WorkStore:
             value = value.strip()
             if not value: raise ValueError("The new update value is required.")
             now = self._now()
+            assignment = session.get(Assignment, old.assignment_id)
+            if assignment is not None and assignment.target_type == "event" and assignment.event_id:
+                _, value = validate_submission(session, assignment.event_id, old.field, value)
             revision = ProgressRevision(assignment_id=old.assignment_id, field=old.field, value=value,
                                         author_jid=normalize_jid(author_jid), timestamp=now,
                                         superseded_revision_id=old.id)
             session.add(revision); session.flush()
-            assignment = session.get(Assignment, old.assignment_id)
             if assignment is not None:
                 assignment.last_update_at = now
                 assignment.missed_count = 0
