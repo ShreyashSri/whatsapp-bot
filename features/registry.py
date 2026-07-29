@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Callable
 
 from neonize.events import MessageEv
+
+log = logging.getLogger(__name__)
 
 
 def register_features(client, config: dict) -> Callable:
@@ -41,10 +44,20 @@ def register_features(client, config: dict) -> Callable:
     def dispatch(message: MessageEv) -> None:
         # Workload commands have one owner. Returning here is the central
         # collision guard for the historical events/tasks handlers.
-        if work_handler and work_handler(client, message):
-            return
+        try:
+            if work_handler and work_handler(client, message):
+                return
+        except Exception:
+            log.exception("work handler failed")
         for handler in handlers:
-            if handler:
+            if not handler:
+                continue
+            # One failing feature must not silence the features registered
+            # after it, and the failure has to be visible in the logs.
+            try:
                 handler(client, message)
+            except Exception:
+                log.exception("feature handler %s failed",
+                              getattr(handler, "__module__", handler))
 
     return dispatch
