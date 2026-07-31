@@ -36,8 +36,22 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Subgroup names: alphanumeric, hyphens, underscores (2-32 chars)
-_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{1,31}$")
+# Subgroup names: alphanumeric, hyphens, underscores (2-32 chars).
+# Natural-language compilation normalizes spaces/punctuation to hyphens before
+# reaching this validator, so names such as "2nd year" become "2nd-year".
+_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,31}$")
+
+
+def normalize_collection_name(raw: str) -> str | None:
+    """Convert a natural-language collection name to the stored name grammar."""
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lstrip("@").casefold()
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    value = re.sub(r"-+", "-", value).strip("-")
+    if not _NAME_RE.fullmatch(value):
+        return None
+    return value[:32].rstrip("-_") or None
 
 # ---------------------------------------------------------------------------
 # Persistence
@@ -70,6 +84,7 @@ def _get_text(message: "MessageEv") -> str:
 def _get_mentioned_jids(message: "MessageEv") -> list[str]:
     """Extract mentionedJID strings from the message's contextInfo."""
     msg = message.Message
+    mentions: list[str] = []
 
     # Walk through wrapper layers (ephemeral, viewOnce, etc.)
     for _ in range(5):
@@ -95,8 +110,17 @@ def _get_mentioned_jids(message: "MessageEv") -> list[str]:
         if field_desc.name.endswith("Message"):
             ctx = getattr(value, "contextInfo", None)
             if ctx is not None and ctx.ListFields():
-                return list(ctx.mentionedJID)
-    return []
+                mentions.extend(ctx.mentionedJID)
+                break
+
+    # Natural-language test messages may use the literal ``@me`` alias even
+    # when WhatsApp has not produced mention metadata for it. The translator
+    # attaches the sender JID to the cloned message so normal command handlers
+    # can resolve the alias exactly like a native WhatsApp mention.
+    sender_alias = getattr(message, "_pbbot_me_jid", "")
+    if sender_alias and sender_alias not in mentions:
+        mentions.append(sender_alias)
+    return mentions
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +134,38 @@ def _reply(client: "NewClient", chat_jid, text: str) -> None:
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
+
+def add_subgroup_members(
+    store: SubgroupStore,
+    name: str,
+    member_jids: list[str],
+) -> tuple[int, int]:
+    """Create/update a subgroup from concrete runtime member JIDs.
+
+    This is the domain operation shared by the legacy command handler and the
+    natural-language executor. It deliberately does not depend on a WhatsApp
+    message or synthetic mention metadata.
+    """
+    name = name.strip().lstrip("@").lower()
+    if not _NAME_RE.fullmatch(name):
+        raise ValueError(
+            "Subgroup name must be 2-32 characters: letters, digits, hyphens, "
+            "or underscores, starting with a letter."
+        )
+    members = list(dict.fromkeys(
+        normalize_jid(jid) for jid in member_jids if normalize_jid(jid)
+    ))
+    if not members:
+        raise ValueError("Mention at least one user after the pipe.")
+
+    subgroups = _read_subgroups(store)
+    existing = list(subgroups.get(name, []))
+    existing_keys = {normalize_jid(jid) for jid in existing}
+    added = [jid for jid in members if jid not in existing_keys]
+    subgroups[name] = existing + added
+    _write_subgroups(store, subgroups)
+    return len(added), len(subgroups[name])
+
 
 def _cmd_add_subgroup(
     client, chat_jid, body: str, mentioned_jids: list[str], store: SubgroupStore
@@ -132,21 +188,16 @@ def _cmd_add_subgroup(
         )
         return
 
-    if not mentioned_jids:
-        _reply(client, chat_jid, "⚠️ Mention at least one user after the `|`.")
+    try:
+        added_count, total = add_subgroup_members(store, name, mentioned_jids)
+    except ValueError as exc:
+        _reply(client, chat_jid, f"⚠️ {exc}")
         return
 
-    subgroups = _read_subgroups(store)
-    existing = set(subgroups.get(name, []))
-    added = [j for j in mentioned_jids if j not in existing]
-    subgroups[name] = list(existing | set(mentioned_jids))
-    _write_subgroups(store, subgroups)
-
-    total = len(subgroups[name])
-    if added:
+    if added_count:
         _reply(
             client, chat_jid,
-            f"✅ Added {len(added)} member(s) to *@{name}* (total: {total}).",
+            f"✅ Added {added_count} member(s) to *@{name}* (total: {total}).",
         )
     else:
         _reply(client, chat_jid, f"ℹ️ All mentioned users are already in *@{name}* ({total} members).")

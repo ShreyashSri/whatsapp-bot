@@ -83,6 +83,39 @@ def _get_group_mentions(ctx: ContextInfo) -> list[tuple[str, str]]:
     return mentions
 
 
+def get_group_member_jids(client: "NewClient", group_jid) -> list[str]:
+    """Return the current human participant JIDs for a joined WhatsApp group.
+
+    Community tagging already needs this information.  Keep the lookup in a
+    shared helper so other features can resolve semantic targets such as
+    ``everyone in this group`` without exposing participant data to the LLM.
+    The caller remains responsible for excluding the bot and applying policy.
+    """
+    groups = client.get_joined_groups()
+    wanted = str(group_jid)
+    wanted_user = getattr(group_jid, "User", "")
+    for group in groups:
+        candidate = getattr(group, "JID", None)
+        if candidate is None:
+            continue
+        candidate_user = getattr(candidate, "User", "")
+        if candidate_user and wanted_user:
+            matches = candidate_user == wanted_user
+        else:
+            matches = Jid2String(JIDToNonAD(candidate)) == wanted
+        if not matches:
+            continue
+
+        members: list[str] = []
+        for participant in getattr(group, "Participants", []):
+            jid = getattr(participant, "JID", None)
+            if jid is None or not getattr(jid, "User", ""):
+                continue
+            members.append(Jid2String(JIDToNonAD(jid)))
+        return list(dict.fromkeys(members))
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Feature registration
 # ---------------------------------------------------------------------------
@@ -141,15 +174,11 @@ def register(client: "NewClient", config: dict) -> callable:
             # Collect participant JIDs as full strings (user@server)
             mentioned_jids: list[str] = []
 
-            for p in getattr(ginfo, "Participants", []):
-                jid = getattr(p, "JID", None)
-                if jid is None:
-                    continue
-                user = getattr(jid, "User", "")
-                if not user:
-                    continue
-                # Convert to non-AD form and then to string
-                mentioned_jids.append(Jid2String(JIDToNonAD(jid)))
+            try:
+                mentioned_jids = get_group_member_jids(client, ginfo.JID)
+            except Exception as exc:
+                log.error("Failed to resolve participants for group %s: %s", group_subject, exc)
+                continue
 
             if not mentioned_jids:
                 log.warning("No participants found in group %s", group_subject)

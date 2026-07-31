@@ -53,9 +53,12 @@ MODULE_HELP = {
         "`!card-pdf <type> | <name> | <text>` — generate a PNG and editable PDF.\n\n"
         "Attach a profile photo to the command message. Types: `gsoc`, `lfx`,\n"
         "`hackathon`, `competitive`, `acm`, `internship`, `talk`, `custom`.\n"
+        "You can also tag the bot and describe a card naturally; it will choose\n"
+        "the closest template or use a controlled custom design.\n"
         "Examples:\n"
         "• `!card gsoc | Ananya Gupta | GSoC 2026 finalist`\n"
-        "• `!card-pdf talk | Bibisha | Building with Python | Dev Workshop | https://example.com/logo.png`"
+        "• `!card-pdf talk | Bibisha | Building with Python | Dev Workshop | https://example.com/logo.png`\n"
+        "• `@bot create a sarcastic congratulations card for Zodiak for PBCTF 5.0; use https://example.com/logo.svg as the logo`"
     ),
     "community": (
         "*🏷️ Community Tagging*\n\n"
@@ -71,6 +74,8 @@ MODULE_HELP = {
         "`!list-subgroups` — list subgroup names and member counts (active user).\n"
         "`!subgroup-info <name>` — show subgroup members (active user).\n\n"
         "Names are 2–32 characters using letters, numbers, `-`, or `_`.\n"
+        "Natural-language requests normalize names such as `2nd year` to `2nd-year`;\n"
+        "existing close matches are reused unless you explicitly say `new` or `create`.\n"
         "Examples:\n"
         "• `!add-subgroup backend | @Ananya @Bibisha`\n"
         "• `!remove-from-subgroup backend | @Bibisha`\n"
@@ -236,6 +241,9 @@ MODULE_HELP["updates"] = MODULE_HELP["work"]
 GLOBAL_HELP = (
     "*🤖 Bot Help*\n\n"
     "Use `!help <module>` for syntax, permissions, and examples.\n\n"
+    "You can also tag the bot and describe an existing command naturally, "
+    "for example: `@bot show my pending work`. The request is translated "
+    "into a normal command and still uses the usual permissions.\n\n"
     "Examples: `!help`, `!help work`, `!help reminders`, `!help posted`.\n\n"
     "Available modules:\n"
     "• `!help media` — Task manager\n"
