@@ -1493,53 +1493,51 @@ def _resolve_runtime_target_scope(
     return list(resolution.members), error
 
 
-def _execute_direct_collection_add(
-    client, message, intent: dict, members: list[str], factory, text: str
+def _execute_direct_operation(
+    client,
+    message,
+    intent: dict,
+    members: list[str],
+    factory,
+    text: str,
 ) -> bool:
-    """Execute subgroup membership through the domain service.
-
-    NL mutations must not depend on synthetic WhatsApp mention metadata.
-    """
-    chat = message.Info.MessageSource.Chat
-    if factory is None:
-        client.send_message(chat, "⚠️ Subgroup storage is unavailable.")
-        return True
-    collection = _resolve_or_create_collection_name(
-        factory, intent.get("arguments", {}).get("collection"), text
+    """Route every audience-based mutation through a domain operation."""
+    from features.nl_operations import (
+        execute_collection_mutation,
+        execute_label_mutation,
+        execute_work_assignment,
     )
-    if not collection:
-        client.send_message(chat, "⚠️ I couldn't resolve the subgroup name.")
-        return True
-    from db.auth import gate
-    from db.subgroup_store import SubgroupStore
-    from features.subgroups import add_subgroup_members
 
-    actor = gate(
-        factory,
-        message.Info.MessageSource.Sender,
-        client,
-        chat,
-        "admin",
-        "subgroup.add",
-    )
-    if not actor:
-        return True
-    try:
-        added, total = add_subgroup_members(
-            SubgroupStore(factory), collection, members
+    capability = intent.get("capability")
+    if capability.startswith(("collections.", "labels.")):
+        action = capability.split(".", 1)[1]
+
+        def resolve_collection(current_factory, requested):
+            if action == "add":
+                return _resolve_or_create_collection_name(
+                    current_factory, requested, text
+                )
+            return _resolve_collection_name(current_factory, requested)
+
+        if capability.startswith("collections."):
+            return execute_collection_mutation(
+                client, message, intent, members, factory, resolve_collection
+            )
+        return execute_label_mutation(
+            client, message, intent, members, factory, resolve_collection
         )
-    except ValueError as exc:
-        client.send_message(chat, f"⚠️ {exc}")
-        return True
-    if added:
-        client.send_message(
-            chat, f"✅ Added {added} member(s) to *@{collection}* (total: {total})."
+    if capability in {"work.assign", "work.unassign"}:
+        arguments = _target_arguments(intent.get("arguments", {}), text)
+        intent = {**intent, "arguments": arguments}
+        return execute_work_assignment(
+            client,
+            message,
+            intent,
+            members,
+            factory,
+            lambda values: _resolve_target_reference(factory, values),
         )
-    else:
-        client.send_message(
-            chat, f"ℹ️ All mentioned users are already in *@{collection}* ({total} members)."
-        )
-    return True
+    return False
 
 
 def register(client, config: dict) -> Callable:
@@ -1646,10 +1644,19 @@ def register(client, config: dict) -> Callable:
                         return True
                     card_design = None
                     direct_operation = (
-                        step if step.get("capability") == "collections.add" else None
+                        step
+                        if step.get("capability") in {
+                            "collections.add",
+                            "collections.remove",
+                            "labels.add",
+                            "labels.remove",
+                            "work.assign",
+                            "work.unassign",
+                        }
+                        else None
                     )
                     if direct_operation is not None:
-                        command = "<direct collections.add>"
+                        command = f"<direct {step.get('capability')}>"
                     elif _is_card_design_intent(step):
                         design_translation = step
                         if card_designer is not None:
@@ -1748,7 +1755,7 @@ def register(client, config: dict) -> Callable:
                 command,
             )
             if direct_operation is not None:
-                _execute_direct_collection_add(
+                _execute_direct_operation(
                     client,
                     message,
                     direct_operation,

@@ -317,7 +317,7 @@ def test_group_audience_repair_reaches_dispatch_with_resolved_members():
              "features.community_tag.get_group_member_jids",
              return_value=["111@s.whatsapp.net", "222@s.whatsapp.net"],
          ), patch(
-             "features.natural_language._execute_direct_collection_add",
+             "features.natural_language._execute_direct_operation",
              return_value=True,
          ) as execute:
         handler = register(client, {"mistral_api_key": "secret"})

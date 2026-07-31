@@ -33,6 +33,51 @@ def _labels_of(store: SubgroupStore, jid: str) -> list[str]:
                   if any(jid_user(member) == wanted for member in members))
 
 
+def add_label_members(
+    store: SubgroupStore,
+    name: str,
+    targets: list[str],
+) -> tuple[list[str], int]:
+    """Create/update a label from concrete runtime JIDs."""
+    name = _valid_name(name)
+    data = store.read()
+    members = data.get(name, [])
+    added: list[str] = []
+    existing_users = {jid_user(jid) for jid in members}
+    for target in targets:
+        normalized = normalize_jid(target)
+        if normalized and jid_user(normalized) not in existing_users:
+            members.append(normalized)
+            existing_users.add(jid_user(normalized))
+            added.append(normalized)
+    data[name] = members
+    store.write(data)
+    return added, len(members)
+
+
+def remove_label_members(
+    store: SubgroupStore,
+    name: str,
+    targets: list[str],
+) -> tuple[int, bool]:
+    """Remove concrete runtime JIDs and report (removed, label_deleted)."""
+    name = _valid_name(name)
+    if not targets:
+        raise ValueError("mention at least one user to remove from the label")
+    data = store.read()
+    if name not in data:
+        raise ValueError("label not found")
+    wanted = {jid_user(jid) for jid in targets if normalize_jid(jid)}
+    kept = [jid for jid in data[name] if jid_user(jid) not in wanted]
+    removed = len(data[name]) - len(kept)
+    if kept:
+        data[name] = kept
+    else:
+        del data[name]
+    store.write(data)
+    return removed, not kept
+
+
 def register(client: "NewClient", config: dict) -> callable:
     factory = config.get("db_session_factory")
     if factory is None:
@@ -108,35 +153,18 @@ def register(client: "NewClient", config: dict) -> callable:
                                               "Ask an admin to change someone else's labels.")
                     return
             if action in ("create", "add", "assign"):
-                members = data.get(name, [])
-                added = [jid for jid in targets
-                         if not any(jid_user(existing) == jid_user(jid) for existing in members)]
-                data[name] = members + added
-                store.write(data)
+                added, total = add_label_members(store, name, targets)
                 audit(factory, actor, "label.create" if action == "create" else "label.assign",
                       "whatsapp", {"label": name, "added": added})
-                client.send_message(chat, f"✅ Label `{name}` now has {len(data[name])} member(s)."
-                                    + (f" Added {len(added)}." if added else " No new members."))
+                client.send_message(chat, f"✅ Label `{name}` now has {total} member(s)."
+                                   + (f" Added {len(added)}." if added else " No new members."))
                 return
 
             if action == "remove":
-                if name not in data:
-                    client.send_message(chat, f"📭 No label named `{name}`.")
-                    return
-                if not targets:
-                    raise ValueError("mention at least one user to remove from the label")
-                wanted = {jid_user(jid) for jid in targets}
-                kept = [jid for jid in data[name] if jid_user(jid) not in wanted]
-                removed = len(data[name]) - len(kept)
-                # A label with no members carries no meaning, so drop it.
-                if kept:
-                    data[name] = kept
-                else:
-                    del data[name]
-                store.write(data)
+                removed, deleted = remove_label_members(store, name, targets)
                 audit(factory, actor, "label.remove", "whatsapp", {"label": name, "removed": removed})
                 client.send_message(chat, f"✅ Removed {removed} member(s) from `{name}`."
-                                    + ("" if kept else " Label deleted (now empty)."))
+                                    + ("" if not deleted else " Label deleted (now empty)."))
                 return
 
             client.send_message(chat, "Usage: `!labels [list|create|assign|remove|delete] <name> | @user`")

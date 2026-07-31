@@ -9,6 +9,7 @@ from features.nl_runtime import (
     target_is_required_and_missing,
     validate_execution_ready,
 )
+from features.labels import add_label_members, remove_label_members
 from features.subgroups import add_subgroup_members
 
 
@@ -234,3 +235,21 @@ def test_subgroup_domain_operation_persists_resolved_members_directly():
     store.write.assert_called_once_with({
         "everyone": ["111@s.whatsapp.net", "222@s.whatsapp.net"],
     })
+
+
+def test_label_domain_operations_accept_resolved_members_directly():
+    store = MagicMock()
+    store.read.return_value = {}
+    added, total = add_label_members(
+        store, "everybody", ["111@s.whatsapp.net", "222@s.whatsapp.net"]
+    )
+    assert added == ["111@s.whatsapp.net", "222@s.whatsapp.net"]
+    assert total == 2
+
+    store.read.return_value = {
+        "everybody": ["111@s.whatsapp.net", "222@s.whatsapp.net"]
+    }
+    removed, deleted = remove_label_members(
+        store, "everybody", ["111@s.whatsapp.net"]
+    )
+    assert (removed, deleted) == (1, False)

@@ -167,6 +167,37 @@ def add_subgroup_members(
     return len(added), len(subgroups[name])
 
 
+def remove_subgroup_members(
+    store: SubgroupStore,
+    name: str,
+    member_jids: list[str],
+) -> tuple[int, int, bool]:
+    """Remove concrete members and report (removed, remaining, deleted)."""
+    name = name.strip().lstrip("@").lower()
+    if not _NAME_RE.fullmatch(name):
+        raise ValueError("invalid subgroup name")
+    members = {
+        normalize_jid(jid) for jid in member_jids if normalize_jid(jid)
+    }
+    if not members:
+        raise ValueError("Mention at least one user after the pipe.")
+    subgroups = _read_subgroups(store)
+    if name not in subgroups:
+        raise ValueError(f"Subgroup {name} does not exist.")
+    original = subgroups[name]
+    remaining = [
+        jid for jid in original if normalize_jid(jid) not in members
+    ]
+    removed = len(original) - len(remaining)
+    deleted = not remaining
+    if deleted:
+        del subgroups[name]
+    else:
+        subgroups[name] = remaining
+    _write_subgroups(store, subgroups)
+    return removed, len(remaining), deleted
+
+
 def _cmd_add_subgroup(
     client, chat_jid, body: str, mentioned_jids: list[str], store: SubgroupStore
 ) -> None:
@@ -215,30 +246,20 @@ def _cmd_remove_from_subgroup(
         _reply(client, chat_jid, "⚠️ Usage: `!remove-from-subgroup <name> | @user1 @user2 …`")
         return
 
-    subgroups = _read_subgroups(store)
-    if name not in subgroups:
-        _reply(client, chat_jid, f"⚠️ Subgroup *@{name}* does not exist.")
+    try:
+        removed_count, remaining_count, deleted = remove_subgroup_members(
+            store, name, mentioned_jids
+        )
+    except ValueError as exc:
+        _reply(client, chat_jid, f"⚠️ {exc}")
         return
 
-    if not mentioned_jids:
-        _reply(client, chat_jid, "⚠️ Mention at least one user after the `|`.")
-        return
-
-    to_remove = set(mentioned_jids)
-    remaining = [j for j in subgroups[name] if j not in to_remove]
-    removed_count = len(subgroups[name]) - len(remaining)
-
-    if remaining:
-        subgroups[name] = remaining
-        _write_subgroups(store, subgroups)
+    if not deleted:
         _reply(
             client, chat_jid,
-            f"✅ Removed {removed_count} member(s) from *@{name}* ({len(remaining)} remaining).",
+            f"✅ Removed {removed_count} member(s) from *@{name}* ({remaining_count} remaining).",
         )
     else:
-        # Last members removed — auto-delete the subgroup
-        del subgroups[name]
-        _write_subgroups(store, subgroups)
         _reply(
             client, chat_jid,
             f"🗑️ Subgroup *@{name}* deleted (no members remaining).",
