@@ -68,6 +68,7 @@ async def _handle_card_command(
     body = _get_text(message)
     chat_jid = message.Info.MessageSource.Chat
     rest = body[len(cmd_prefix):].strip()
+    design = getattr(message, "_pbbot_card_design", None)
 
     # Split on newlines or pipes
     if "\n" in rest:
@@ -143,6 +144,7 @@ async def _handle_card_command(
             logo_url=logo_url,
             event_name=event_name,
             event_logo_urls=event_logo_urls,
+            design=design,
             formats=formats,
         )
 
@@ -166,7 +168,13 @@ async def _handle_card_command(
             )
             client.send_message(chat_jid, doc_msg)
 
-        log.info("Card rendered: type=%s name=%r formats=%s", card_type, name, "+".join(formats))
+        log.info(
+            "Card rendered: type=%s template=%s name=%r formats=%s",
+            card_type,
+            (design or {}).get("base_template", card_type),
+            name,
+            "+".join(formats),
+        )
 
     except Exception as exc:
         log.error("Card render error: %s", exc)
