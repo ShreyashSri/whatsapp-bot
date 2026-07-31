@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import jid_user, normalize_jid
-from .models import Task, User
+from .models import Event, Task, User
 from .work_store import WorkStore
 
 VALID_STATUSES = ("todo", "in_progress", "done", "cancelled")
@@ -77,6 +77,11 @@ class TaskStore:
         now = self._now()
         created_by_jid = normalize_jid(created_by_jid)
         assignee_jid = normalize_jid(assignee_jid) if assignee_jid else None
+        if event_id is not None:
+            with self._sf() as session:
+                event = session.get(Event, event_id)
+                if event is None or event.deleted_at is not None:
+                    raise ValueError(f"event #{event_id} not found")
         task = Task(
             title=title.strip(), description=description, event_id=event_id,
             assignee_jid=None, status="todo", priority=priority,
@@ -103,6 +108,19 @@ class TaskStore:
             if status:
                 q = q.filter(Task.status == status)
             return q.order_by(Task.id).all()
+
+    def list_for_event(self, event_id: int, *, status: str | None = None) -> list[Task]:
+        """List active tasks linked to one active event."""
+        with self._sf() as session:
+            event = session.get(Event, event_id)
+            if event is None or event.deleted_at is not None:
+                raise ValueError(f"event #{event_id} not found")
+            query = session.query(Task).filter(
+                Task.event_id == event_id, Task.deleted_at.is_(None)
+            )
+            if status:
+                query = query.filter(Task.status == status)
+            return query.order_by(Task.id).all()
 
     def list_for_user(self, assignee_jid: str, *, status: str | None = None) -> list[Task]:
         ids = [row["task_id"] for row in WorkStore(self._sf).overview(user_jid=assignee_jid, status=status, target_type="task")]

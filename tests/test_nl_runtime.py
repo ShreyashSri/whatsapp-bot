@@ -1,8 +1,13 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message
 
+from db.auth import upsert_user
+from db.models import Base, Event, Task
+from features.natural_language import MistralCommandTranslator, register
 from features.nl_runtime import (
     TargetResolution,
     resolve_target,
@@ -82,6 +87,104 @@ def test_explicit_mentions_are_resolved_and_bot_is_removed():
     )
     assert result.ready
     assert result.members == ("111@s.whatsapp.net",)
+
+
+def test_explicit_mention_indices_select_only_the_requested_people():
+    message = make_group_message()
+    result = resolve_target(
+        MagicMock(),
+        message,
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "audience": {"resolver": "explicit_mentions"},
+                "mention_indices": [1],
+            },
+        },
+        set(),
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+    )
+    assert result.members == ("222@s.whatsapp.net",)
+
+
+def test_unavailable_explicit_mention_index_fails_closed():
+    result = resolve_target(
+        MagicMock(),
+        make_group_message(),
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "audience": {"resolver": "explicit_mentions"},
+                "mention_indices": [4],
+            },
+        },
+        set(),
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net"],
+    )
+    assert "unavailable" in result.error
+
+
+def test_multi_step_plan_links_tasks_to_the_event_created_by_step_one():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+    client = MagicMock()
+    client.get_me.return_value = SimpleNamespace(
+        JID="bot@s.whatsapp.net", LID="999999@lid"
+    )
+    message = make_group_message(admin.jid)
+    message.Message.conversation = "@me create an event and tasks"
+    plan = {
+        "plan": [
+            {
+                "step_id": "event",
+                "capability": "work.create_event",
+                "arguments": {
+                    "name": "Zenith 27",
+                },
+            },
+            {
+                "step_id": "money",
+                "capability": "work.create_task",
+                "arguments": {
+                    "title": "Raise lots of money",
+                    "event_id": "$event.event_id",
+                },
+            },
+            {
+                "step_id": "participants",
+                "capability": "work.create_task",
+                "arguments": {
+                    "title": "Get lots of participants",
+                    "event_id": "$event.event_id",
+                },
+            },
+        ]
+    }
+    with patch("features.natural_language._get_mentioned_jids", return_value=[]), \
+         patch.object(MistralCommandTranslator, "translate", return_value=(plan, "")):
+        handler = register(
+            client,
+            {"mistral_api_key": "secret", "db_session_factory": factory},
+        )
+        assert handler(client, message, MagicMock()) is True
+
+    with factory() as session:
+        event = session.query(Event).one()
+        tasks = session.query(Task).order_by(Task.id).all()
+        assert event.name == "Zenith 27"
+        assert (event.type, event.category) == ("organization", "other")
+        assert [task.title for task in tasks] == [
+            "Raise lots of money", "Get lots of participants"
+        ]
+        assert all(task.event_id == event.id for task in tasks)
 
 
 def test_current_group_lookup_exception_is_controlled():

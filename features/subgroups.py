@@ -158,6 +158,11 @@ def add_subgroup_members(
     if not members:
         raise ValueError("Mention at least one user after the pipe.")
 
+    result = store.add_members(name, members)
+    if isinstance(result, tuple) and len(result) == 2:
+        added, total = result
+        return len(added), total
+    # Compatibility for lightweight store doubles and old integrations.
     subgroups = _read_subgroups(store)
     existing = list(subgroups.get(name, []))
     existing_keys = {normalize_jid(jid) for jid in existing}
@@ -181,13 +186,18 @@ def remove_subgroup_members(
     }
     if not members:
         raise ValueError("Mention at least one user after the pipe.")
+    try:
+        result = store.remove_members(name, members)
+        if isinstance(result, tuple) and len(result) == 3:
+            return result
+    except ValueError as exc:
+        raise ValueError(f"Subgroup {name} does not exist.") from exc
+    # Compatibility for lightweight store doubles and old integrations.
     subgroups = _read_subgroups(store)
     if name not in subgroups:
         raise ValueError(f"Subgroup {name} does not exist.")
     original = subgroups[name]
-    remaining = [
-        jid for jid in original if normalize_jid(jid) not in members
-    ]
+    remaining = [jid for jid in original if normalize_jid(jid) not in members]
     removed = len(original) - len(remaining)
     deleted = not remaining
     if deleted:

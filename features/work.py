@@ -24,7 +24,7 @@ WORK_COMMANDS = ("!my", "!work", "!events", "!tasks", "!task",
                  "!complete-task", "!assign", "!unassign", "!add-task",
                  "!update-task", "!delete-task", "!create-event", "!delete-event",
                  "!update-event", "!schema")
-WORK_SUBCOMMANDS = {"assign", "unassign", "update", "edit", "history", "status", "set-status", "complete", "start", "create", "reminders", "reminder", "schema"}
+WORK_SUBCOMMANDS = {"assign", "unassign", "update", "edit", "history", "status", "set-status", "complete", "start", "create", "tasks", "reminders", "reminder", "schema"}
 
 
 def _format(row: dict) -> str:
@@ -178,10 +178,19 @@ def _create_task(store: TaskStore, raw: str, sender: str):
     title = parts[0].strip()
     if not title:
         raise ValueError("task title is required")
-    fields = _legacy_field_args("|" + "|".join(parts[1:]))
-    return store.create(title, sender, description=fields.get("description"),
+    tail = parts[1:]
+    description = None
+    if tail and tail[0] and not re.match(
+        r"^(description|desc|due|due_date|date|priority|p|event|status|s)\b",
+        tail[0],
+        re.IGNORECASE,
+    ):
+        description = tail.pop(0)
+    fields = _legacy_field_args("|" + "|".join(tail))
+    return store.create(title, sender, description=fields.get("description") or description,
                         due_date=fields.get("due_date"), priority=fields.get("priority", "medium"),
-                        event_id=fields.get("event_id"))
+                        event_id=fields.get("event_id"),
+                        )
 
 
 def _overview(client, chat, store: WorkStore, actor, sender: str, command: str, args: str) -> None:
@@ -207,11 +216,38 @@ def _overview(client, chat, store: WorkStore, actor, sender: str, command: str, 
         return
     event_rows = [r for r in rows if r["target_type"] == "event"]
     task_rows = [r for r in rows if r["target_type"] == "task"]
+    events_by_id = {
+        row.get("event_id"): row
+        for row in event_rows
+        if row.get("event_id") is not None
+    }
+    tasks_by_event: dict[int, list[dict]] = {}
+    standalone_tasks: list[dict] = []
+    for row in task_rows:
+        parent_id = row.get("parent_event_id")
+        if parent_id is None:
+            standalone_tasks.append(row)
+            continue
+        tasks_by_event.setdefault(parent_id, []).append(row)
+        if parent_id not in events_by_id:
+            events_by_id[parent_id] = {
+                "target_type": "event",
+                "event_id": parent_id,
+                "title": row.get("parent_event_name", f"Event {parent_id}"),
+                "name": row.get("parent_event_name", f"Event {parent_id}"),
+                "status": None,
+                "user_jid": None,
+                "lifecycle_status": row.get("parent_event_status"),
+            }
     lines = [heading]
-    if event_rows:
-        lines += ["", "*Events*"] + [_format(r) for r in event_rows]
-    if task_rows:
-        lines += ["", "*Tasks*"] + [_format(r) for r in task_rows]
+    if events_by_id:
+        lines += ["", "*Events*"]
+        for event_id, event_row in events_by_id.items():
+            lines.append(_format(event_row))
+            for task_row in tasks_by_event.get(event_id, []):
+                lines.append("  └─ " + _format(task_row).lstrip())
+    if standalone_tasks:
+        lines += ["", "*Tasks*"] + [_format(r) for r in standalone_tasks]
     totals = {s: sum(1 for r in rows if r.get("status") == s) for s in PROGRESS_STATUSES}
     lines += ["", "Totals: " + ", ".join(f"{s}={n}" for s, n in sorted(totals.items()))]
     _send(client, chat, "\n".join(lines))
@@ -228,6 +264,35 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
     is_admin = actor.role == "admin"
 
     try:
+        if action == "tasks":
+            remainder = args[len(tokens[0]):].strip()
+            parts = remainder.split()
+            if len(parts) < 2 or parts[0].lower() != "event" or not parts[1].isdigit():
+                raise ValueError("usage: !work tasks event <id> [todo|in_progress|done|cancelled]")
+            event_id = int(parts[1])
+            status = parts[2].lower() if len(parts) > 2 else None
+            if status is not None and status not in ("todo", "in_progress", "done", "cancelled"):
+                raise ValueError("status must be todo, in_progress, done, or cancelled")
+            tasks = TaskStore(factory).list_for_event(event_id, status=status)
+            if not tasks:
+                _send(client, chat, f"📭 No tasks found under event {event_id}.")
+                return True
+            lines = [f"🧩 *Tasks under event {event_id}*"]
+            for task in tasks:
+                assignments = WorkStore(factory).overview(
+                    target_type="task", target_id=task.id, admin=True
+                )
+                assignees = ", ".join(
+                    f"@{row['user_jid'].split('@', 1)[0]}" for row in assignments
+                ) or "unassigned"
+                due = f" | due {task.due_date.strftime('%Y-%m-%d')}" if task.due_date else ""
+                lines.append(
+                    f"• `task {task.id}` *{task.title}* — `{task.status}` "
+                    f"({task.priority}){due} | {assignees}"
+                )
+            _send(client, chat, "\n".join(lines))
+            return True
+
         if action in ("reminders", "reminder"):
             # Reminder controls are part of the unified work workflow. The
             # old !reminders commands remain aliases in features/reminders.
@@ -354,11 +419,12 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             if not targets:
                 raise ValueError("mention at least one user or subgroup to assign or unassign")
             if action == "assign":
-                names = [store.assign(typ, ident, target)["user_jid"].split("@")[0] for target in targets]
+                rows = store.assign_many(typ, ident, targets)
+                names = [row["user_jid"].split("@")[0] for row in rows]
                 audit(factory, actor, f"{typ}.assign", "whatsapp", {"target_id": ident, "users": targets})
                 _send(client, chat, f"✅ Assigned `{typ} {ident}` to " + ", ".join(f"@{name}" for name in names) + ".")
             else:
-                removed = [target for target in targets if store.unassign(typ, ident, target)]
+                removed = store.unassign_many(typ, ident, targets)
                 audit(factory, actor, f"{typ}.unassign", "whatsapp", {"target_id": ident, "users": removed})
                 _send(client, chat, f"✅ Removed {len(removed)} assignment(s) from `{typ} {ident}`."
                       if removed else "📭 No matching assignments found.")
@@ -462,10 +528,11 @@ def handle(client, message, session_factory) -> bool:
         try:
             store = WorkStore(session_factory)
             if command == "!assign":
-                names = [store.assign(typ, int(ident_token), target)["user_jid"].split("@")[0] for target in targets]
+                rows = store.assign_many(typ, int(ident_token), targets)
+                names = [row["user_jid"].split("@")[0] for row in rows]
                 _send(client, chat, f"✅ Assigned `{typ} {ident_token}` to " + ", ".join(f"@{name}" for name in names) + ".")
             else:
-                removed = [target for target in targets if store.unassign(typ, int(ident_token), target)]
+                removed = store.unassign_many(typ, int(ident_token), targets)
                 _send(client, chat, f"✅ Removed {len(removed)} assignment(s)." if removed else "📭 Assignment not found.")
         except Exception as exc:
             _send(client, chat, f"⚠️ {exc}")

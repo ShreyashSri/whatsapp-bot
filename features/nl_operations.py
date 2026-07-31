@@ -9,6 +9,91 @@ from __future__ import annotations
 
 from typing import Callable
 
+
+# Mutating capabilities use this module as their single semantic execution
+# boundary. Legacy command handlers call the same feature-domain services.
+DIRECT_CAPABILITIES = frozenset({
+    "collections.add",
+    "collections.remove",
+    "labels.add",
+    "labels.remove",
+    "work.assign",
+    "work.unassign",
+    "work.create_event",
+    "work.create_task",
+})
+
+
+def is_direct_capability(capability: str) -> bool:
+    return capability in DIRECT_CAPABILITIES
+
+
+def _parse_date(value):
+    if not value:
+        return None
+    from datetime import datetime
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("dates must use YYYY-MM-DD") from exc
+
+
+def execute_work_creation(client, message, intent: dict, factory) -> dict | None:
+    """Create an event/task and return its durable identifiers to the plan."""
+    source = message.Info.MessageSource
+    chat = source.Chat
+    capability = intent["capability"]
+    arguments = intent.get("arguments", {})
+    from db.auth import audit, gate
+
+    actor = gate(factory, source.Sender, client, chat, "admin", capability)
+    if not actor:
+        return None
+
+    try:
+        if capability == "work.create_event":
+            from db.event_store import EventStore
+            labels = arguments.get("labels") or []
+            if isinstance(labels, str):
+                labels = [item.strip() for item in labels.split(",") if item.strip()]
+            event = EventStore(factory).create_event(
+                name=str(arguments.get("name") or "").strip(),
+                type=str(arguments.get("type") or "organization").strip(),
+                category=str(arguments.get("category") or "other").strip(),
+                description=arguments.get("description"),
+                labels=labels,
+                start_date=_parse_date(arguments.get("start")),
+                end_date=_parse_date(arguments.get("end")),
+                status="active",
+            )
+            audit(factory, actor, "event.create", "natural_language", {
+                "event_id": event["id"], "name": event["name"],
+            })
+            client.send_message(chat, f"✅ Event `{event['id']}` created: *{event['name']}*")
+            return {"event_id": event["id"], "event": event}
+
+        from db.task_store import TaskStore
+        event_id = arguments.get("event_id")
+        task = TaskStore(factory).create(
+            title=str(arguments.get("title") or "").strip(),
+            created_by_jid=source.Sender,
+            description=arguments.get("description"),
+            event_id=int(event_id) if event_id is not None else None,
+            due_date=_parse_date(arguments.get("due")),
+            priority=str(arguments.get("priority") or "medium").lower(),
+        )
+        audit(factory, actor, "task.create", "natural_language", {
+            "task_id": task.id, "title": task.title, "event_id": task.event_id,
+        })
+        parent = f" under event {task.event_id}" if task.event_id else ""
+        client.send_message(chat, f"✅ Task `{task.id}` created{parent}: *{task.title}*")
+        return {"task_id": task.id, "event_id": task.event_id, "task": {
+            "id": task.id, "title": task.title, "event_id": task.event_id,
+        }}
+    except (TypeError, ValueError) as exc:
+        client.send_message(chat, f"⚠️ {exc}")
+        return None
+
 def execute_collection_mutation(
     client,
     message,
@@ -169,7 +254,7 @@ def execute_work_assignment(
     action = intent["capability"].split(".", 1)[1]
     try:
         if action == "assign":
-            rows = [store.assign(target_type, int(target_id), member) for member in targets]
+            rows = store.assign_many(target_type, int(target_id), targets)
             assigned = [row["user_jid"].split("@", 1)[0] for row in rows]
             audit(
                 factory,
@@ -185,11 +270,7 @@ def execute_work_assignment(
                 + ".",
             )
         else:
-            removed = [
-                member
-                for member in targets
-                if store.unassign(target_type, int(target_id), member)
-            ]
+            removed = store.unassign_many(target_type, int(target_id), targets)
             audit(
                 factory,
                 actor,

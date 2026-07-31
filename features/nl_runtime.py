@@ -24,6 +24,9 @@ class CapabilityContract:
     """Execution requirements for one semantic capability."""
 
     target: str = "none"  # none, optional, or required
+    entity_scope: bool = False  # operation should honor a named entity scope
+    repeatable: bool = True  # may appear multiple times in one plan
+    produces: frozenset[str] = frozenset()  # durable fields exposed to later steps
 
 
 CAPABILITY_CONTRACTS: dict[str, CapabilityContract] = {
@@ -35,6 +38,19 @@ CAPABILITY_CONTRACTS: dict[str, CapabilityContract] = {
     "work.unassign": CapabilityContract("required"),
     # A bare label add intentionally preserves legacy "add myself" semantics.
     "labels.add": CapabilityContract("optional"),
+    # Scoped reads must not silently degrade to a global overview when the
+    # user's wording names an event, task, label, or other stored entity.
+    "work.overview": CapabilityContract(entity_scope=True),
+    "work.history": CapabilityContract(entity_scope=True),
+    "work.status": CapabilityContract(entity_scope=True),
+    "work.start": CapabilityContract(entity_scope=True),
+    "work.complete": CapabilityContract(entity_scope=True),
+    "work.update": CapabilityContract(entity_scope=True),
+    "work.list_event_tasks": CapabilityContract(entity_scope=True),
+    "reports.progress": CapabilityContract(entity_scope=True),
+    "schema.show": CapabilityContract(entity_scope=True),
+    "work.create_event": CapabilityContract(produces=frozenset({"event_id"})),
+    "work.create_task": CapabilityContract(produces=frozenset({"task_id"})),
 }
 
 TARGET_RESOLVERS = frozenset(
@@ -61,6 +77,28 @@ class TargetResolution:
 
 def contract_for(capability: str) -> CapabilityContract:
     return CAPABILITY_CONTRACTS.get(capability, CapabilityContract())
+
+
+def verify_operation_result(intent: dict, result: object) -> str | None:
+    """Check deterministic postconditions before exposing a tool result."""
+    capability = str(intent.get("capability") or "")
+    if capability not in {"work.create_event", "work.create_task"}:
+        return None
+    if not isinstance(result, dict):
+        return "the operation returned no structured result"
+    arguments = intent.get("arguments", {})
+    if capability == "work.create_event" and not result.get("event_id"):
+        return "event creation returned no event ID"
+    if capability == "work.create_task":
+        if not result.get("task_id"):
+            return "task creation returned no task ID"
+        expected_event = arguments.get("event_id")
+        if (
+            expected_event is not None
+            and str(result.get("event_id")) != str(expected_event)
+        ):
+            return "task was not linked to the requested event"
+    return None
 
 
 def target_expression(arguments: dict) -> tuple[str, str]:
@@ -104,6 +142,20 @@ def target_is_required_and_missing(
     )
 
 
+def entity_scope_is_missing(intent: dict, entity_candidates: list[dict]) -> bool:
+    """Detect a scoped operation that discarded a named runtime entity."""
+    if not entity_candidates:
+        return False
+    contract = contract_for(str(intent.get("capability") or ""))
+    if not contract.entity_scope:
+        return False
+    arguments = intent.get("arguments", {})
+    return not any(
+        arguments.get(key)
+        for key in ("target_id", "target_name", "event_id", "task_id", "collection")
+    )
+
+
 def _dedupe_members(members, self_jids: set[str]) -> tuple[str, ...]:
     result: list[str] = []
     seen: set[str] = set()
@@ -122,7 +174,7 @@ def resolve_target(
     intent: dict,
     self_jids: set[str],
     factory,
-    resolve_collection: Callable[[object], str | None],
+    resolve_collection: Callable[[object], str | list[str] | None],
     visible_mentions: list[str] | None = None,
 ) -> TargetResolution:
     """Resolve a declared semantic audience to concrete JIDs."""
@@ -138,7 +190,16 @@ def resolve_target(
 
     try:
         if resolver == "explicit_mentions":
-            members = visible_mentions or []
+            mention_indices = arguments.get("mention_indices")
+            if mention_indices is None:
+                members = visible_mentions or []
+            else:
+                try:
+                    members = [visible_mentions[index] for index in mention_indices]
+                except (IndexError, TypeError):
+                    return TargetResolution(
+                        error="One or more requested mentions are unavailable."
+                    )
         elif resolver == "sender":
             members = [message.Info.MessageSource.Sender]
         elif resolver == "active_admins":
@@ -148,10 +209,17 @@ def resolve_target(
         elif resolver == "collection_members":
             if factory is None or not value:
                 return TargetResolution(error="The referenced member collection is missing.")
-            resolved_name = resolve_collection(value)
-            if not resolved_name:
+            resolved_names = resolve_collection(value)
+            if isinstance(resolved_names, str):
+                resolved_names = [resolved_names]
+            if not resolved_names:
                 return TargetResolution(error="The referenced member collection was not found.")
-            members = SubgroupStore(factory).read().get(resolved_name, [])
+            collections = SubgroupStore(factory).read()
+            members = [
+                member
+                for name in resolved_names
+                for member in collections.get(name, [])
+            ]
         elif resolver == "current_chat_members":
             chat = message.Info.MessageSource.Chat
             if getattr(chat, "Server", "") != "g.us":

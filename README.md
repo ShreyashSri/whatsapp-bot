@@ -125,16 +125,17 @@ Admins can use `!add-user [admin|member] @person`, `!remove-user @person`, and `
 
 ### 💬 Natural-language commands
 
-Tag the bot in the configured PBBot group and describe an existing command in
-normal language. Mistral translates the request into one canonical PBBot
-command, which then goes through the same existing authorization and argument
-validation as an explicit command.
+Tag the bot in the configured PBBot group and describe a workflow in normal
+language. Mistral produces a bounded semantic plan; the runtime resolves
+database entities and IDs between steps before invoking the existing domain
+operations and authorization rules.
 
 ```text
 @bot show my pending work
 @bot mark task 7 complete
 @bot add @Ananya to the backend label
 @bot create a sarcastic congratulations card for Zodiak for PBCTF 5.0; use https://example.com/logo.svg as the logo
+@bot create an event called Zenith 27 and add tasks: raise lots of money, get lots of participants, shoot lots of content
 ```
 
 Configure `MISTRAL_API_KEY`, `MISTRAL_MODEL` (default:
@@ -266,10 +267,12 @@ Members see only their own reminder status/history. The older `!reminders`,
 `!reminder-config`, `!reminder-run`, and `!reminder-history` forms remain
 compatibility aliases.
 
-Create tasks with:
+Create standalone or event-linked tasks with:
 
 ```text
 !work create task | <title> | [description text] | [due YYYY-MM-DD] | [priority low|medium|high]
+!work create task | Print merch | description Order shirts | event 4 | priority high
+!work tasks event 4
 ```
 
 Work examples:

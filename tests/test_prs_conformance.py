@@ -144,6 +144,11 @@ def test_task_links_to_organization_event(factory, bot, users):
         task = session.get(Task, 1)
         assert task.event_id == 1
         assert task.priority == "high"
+    assert "Screening round" in bot("!work tasks event 1", users["admin"].jid)
+    overview = bot("!work", users["admin"].jid)
+    assert "Recruitment 2026" in overview
+    assert "Screening round" in overview
+    assert "└─" in overview
 
 
 def test_task_event_link_rejects_non_numeric(bot, users):

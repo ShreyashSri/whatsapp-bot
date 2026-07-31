@@ -16,6 +16,8 @@ from features.natural_language import (
     validate_command,
     validate_plan,
     _needs_target_repair,
+    _inherit_plan_context,
+    _target_arguments,
 )
 from features.subgroups import _get_mentioned_jids, normalize_collection_name
 
@@ -178,7 +180,7 @@ def test_work_assignment_preserves_label_and_explicit_task_type():
             object(),
             [],
         )
-    assert command == "!work assign task 7 | @media"
+    assert command == "!work assign event 7 | @media"
 
 
 def test_leading_me_trigger_is_not_forwarded_as_a_target():
@@ -590,7 +592,7 @@ def test_misclassified_unknown_card_type_is_promoted_to_design_mode():
     assert design["base_template"] == "custom"
 
 
-def test_invalid_or_missing_model_command_falls_back_without_clarification():
+def test_invalid_or_missing_model_command_is_rejected_without_guessing():
     http = FakeHttpClient(
         FakeResponse({"choices": [{"message": {"content": '{"command":null,"clarification":"Please clarify"}'}}]})
     )
@@ -598,8 +600,76 @@ def test_invalid_or_missing_model_command_falls_back_without_clarification():
 
     command, clarification = translator.translate("make the thing", [])
 
-    assert command == "!help"
+    assert command is None
     assert clarification == ""
+
+
+def test_translation_failure_does_not_reenter_dispatch_with_a_guessed_command():
+    client = MagicMock()
+    client.get_me.return_value = SimpleNamespace(
+        JID="bot@s.whatsapp.net", LID="999999@lid"
+    )
+    message = make_message("@me please do something", "member@s.whatsapp.net")
+    dispatch = MagicMock()
+
+    with patch.object(
+        MistralCommandTranslator,
+        "translate",
+        side_effect=RuntimeError("Mistral unavailable"),
+    ):
+        handler = register(client, {"mistral_api_key": "secret"})
+        assert handler(client, message, dispatch) is True
+
+    dispatch.assert_not_called()
+    assert "safely resolve" in str(client.send_message.call_args)
+
+
+def test_scoped_capability_is_reviewed_when_model_drops_named_entity():
+    client = MagicMock()
+    client.get_me.return_value = SimpleNamespace(
+        JID="bot@s.whatsapp.net", LID="999999@lid"
+    )
+    message = make_message("@me what are the tasks left under Zenith 27")
+    dispatch = MagicMock()
+    candidate = {
+        "capability": "work.overview",
+        "arguments": {"status": "pending"},
+    }
+    repaired = {
+        "capability": "work.list_event_tasks",
+        "arguments": {"target_type": "event", "target_id": 10},
+    }
+    with patch("features.natural_language._get_mentioned_jids", return_value=[]), \
+         patch("features.natural_language._named_entity_candidates", return_value=[{
+             "type": "event", "id": 10, "name": "Zenith 27", "category": "other",
+         }]), \
+         patch.object(MistralCommandTranslator, "translate", return_value=(candidate, "")), \
+         patch.object(MistralCommandTranslator, "repair_intent", return_value=repaired):
+        handler = register(
+            client,
+            {"mistral_api_key": "secret", "db_session_factory": MagicMock()},
+        )
+        assert handler(client, message, dispatch) is True
+
+    translated = dispatch.call_args.args[0]
+    assert translated.Message.conversation == "!work tasks event 10"
+
+
+def test_task_step_inherits_unique_event_created_by_same_plan():
+    intent = {
+        "capability": "work.create_task",
+        "arguments": {"title": "Raise funds"},
+    }
+    linked = _inherit_plan_context(intent, {"event": {"event_id": 10}})
+    assert linked["arguments"]["event_id"] == 10
+
+
+def test_full_message_target_extraction_does_not_override_explicit_step_target():
+    arguments = _target_arguments(
+        {"target_type": "task", "target_id": 13},
+        "assign task 12 and 13 to @Deval PB",
+    )
+    assert arguments["target_id"] == 13
 
 
 def test_fallback_selects_closest_existing_command():

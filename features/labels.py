@@ -40,16 +40,32 @@ def add_label_members(
 ) -> tuple[list[str], int]:
     """Create/update a label from concrete runtime JIDs."""
     name = _valid_name(name)
-    data = store.read()
-    members = data.get(name, [])
-    added: list[str] = []
-    existing_users = {jid_user(jid) for jid in members}
+    normalized_targets: list[str] = []
+    existing_users: set[str] = set()
     for target in targets:
         normalized = normalize_jid(target)
         if normalized and jid_user(normalized) not in existing_users:
-            members.append(normalized)
+            normalized_targets.append(normalized)
             existing_users.add(jid_user(normalized))
-            added.append(normalized)
+
+    data = store.read()
+    existing_users = {jid_user(jid) for jid in data.get(name, [])}
+    normalized_targets = [
+        target for target in normalized_targets
+        if jid_user(target) not in existing_users
+    ]
+    result = store.add_members(name, normalized_targets)
+    if isinstance(result, tuple) and len(result) == 2:
+        return result
+    # Compatibility for lightweight store doubles and old integrations.
+    members = data.get(name, [])
+    added: list[str] = []
+    existing_users = {jid_user(jid) for jid in members}
+    for target in normalized_targets:
+        if jid_user(target) not in existing_users:
+            members.append(target)
+            existing_users.add(jid_user(target))
+            added.append(target)
     data[name] = members
     store.write(data)
     return added, len(members)
@@ -68,6 +84,11 @@ def remove_label_members(
     if name not in data:
         raise ValueError("label not found")
     wanted = {jid_user(jid) for jid in targets if normalize_jid(jid)}
+    result = store.remove_members(name, wanted)
+    if isinstance(result, tuple) and len(result) == 3:
+        removed, _remaining, deleted = result
+        return removed, deleted
+    # Compatibility for lightweight store doubles and old integrations.
     kept = [jid for jid in data[name] if jid_user(jid) not in wanted]
     removed = len(data[name]) - len(kept)
     if kept:
@@ -127,17 +148,13 @@ def register(client: "NewClient", config: dict) -> callable:
 
             head, _, member_text = rest.partition("|")
             name = _valid_name(head)
-            data = store.read()
-
             if action == "delete":
                 if not is_admin:
                     client.send_message(chat, "⛔ Only administrators can delete a label.")
                     return
-                if name not in data:
+                if not store.delete(name):
                     client.send_message(chat, f"📭 No label named `{name}`.")
                     return
-                del data[name]
-                store.write(data)
                 audit(factory, actor, "label.delete", "whatsapp", {"label": name})
                 client.send_message(chat, f"🗑️ Label `{name}` deleted.")
                 return

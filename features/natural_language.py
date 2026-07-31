@@ -151,7 +151,7 @@ Work and progress:
   !work edit <revision_id> <new value>
   !work set-status <event|task> <id> [@user] <pending|in_progress|completed|cancelled>
   !work create event | <participation|organization> | <category> | <name> | [description]
-  !work create task | <title> | [description] | [due YYYY-MM-DD] | [priority low|medium|high]
+  !work create task | <title> | [description] | [due YYYY-MM-DD] | [priority low|medium|high] | [event <id>]
   !work assign|unassign <event|task> <id> | @user
   !work reminders [status|history [assignment_id]|run]
   !work reminders config frequency <hours> | window HH:MM-HH:MM | threshold <n> | channel @admin
@@ -189,7 +189,8 @@ Return an intent capability from this registry:
   work.update(target, field, value) | work.edit(revision_id, value)
   work.assign(target, mentions?, collections?, audience?) | work.unassign(target, mentions?, collections?, audience?)
   work.create_event(type?, category?, name?, description?, start?, end?, labels?)
-  work.create_task(title?, description?, due?, priority?)
+  work.create_task(title?, description?, due?, priority?, event_id?)
+  work.list_event_tasks(event, status?)
   reports.summary | reports.progress(target) | reports.status(status) | audit.list(operation?)
   media.add(text) | media.remove(id) | media.todo | media.posted(id, stage) | media.unposted(id, stage) | media.posted_list
   card.create(type, name, text, event_name?, logo_urls?) | card.create_pdf(type, name, text, event_name?, logo_urls?)
@@ -209,10 +210,18 @@ is present.
 For work.assign and work.unassign, preserve any label, subgroup, or
 collection named by the user in ``collections``. Never drop that target. If
 the user explicitly says event or task, preserve that target type.
+For compound requests, represent every action/object/audience relationship
+explicitly in the ordered plan. Each step must be independently executable;
+never rely on sentence order or require the executor to reinterpret the raw
+message to recover a missing relationship.
 When the user refers to a semantic audience, set audience to an object whose
 resolver is one of current_chat_members, collection_members, active_admins,
 sender, or explicit_mentions. Include value for a named collection. Do not
 place resolved member JIDs in the arguments; runtime resolvers supply them.
+For multi-step plans, assign stable step_id values and use exact local
+references such as "$event.event_id" or "$step1.event_id" when a later step
+needs an ID produced by an earlier step. Never invent those IDs. A task that
+belongs under a newly created event must use event_id with that reference.
 """.strip()
 
 CAPABILITIES = frozenset(
@@ -221,7 +230,7 @@ CAPABILITIES = frozenset(
         "labels.list", "labels.of", "labels.add", "labels.remove", "labels.delete",
         "collections.add", "collections.remove", "collections.delete", "collections.list", "collections.info",
         "work.overview", "work.history", "work.status", "work.start", "work.complete", "work.update", "work.edit",
-        "work.assign", "work.unassign", "work.create_event", "work.create_task",
+        "work.assign", "work.unassign", "work.create_event", "work.create_task", "work.list_event_tasks",
         "reports.summary", "reports.progress", "reports.status", "audit.list",
         "media.add", "media.remove", "media.todo", "media.posted", "media.unposted", "media.posted_list",
         "card.create", "card.create_pdf", "card.design", "card.design_pdf",
@@ -521,6 +530,28 @@ def _resolve_collection_name(factory, requested: object) -> str | None:
     return ranked[0][0]
 
 
+def _resolve_collection_names(factory, requested: object) -> list[str]:
+    """Resolve one or more stored collection names from a natural reference."""
+    if not isinstance(requested, str) or not requested.strip() or not factory:
+        return []
+    try:
+        from db.subgroup_store import SubgroupStore
+
+        names = list(SubgroupStore(factory).read())
+    except Exception:
+        log.info("Could not resolve collection names", exc_info=True)
+        return []
+    wanted = normalize_collection_name(requested).casefold()
+    matches = [
+        name for name in names
+        if normalize_collection_name(name).casefold() in wanted
+    ]
+    if matches:
+        return sorted(matches, key=lambda name: (-len(name), name))
+    single = _resolve_collection_name(factory, requested)
+    return [single] if single else []
+
+
 def _resolve_or_create_collection_name(
     factory,
     requested: object,
@@ -556,10 +587,34 @@ def _collection_argument_values(arguments: dict) -> list[str]:
 def _target_arguments(arguments: dict, text: str) -> dict:
     """Prefer an explicit task/event reference in the user's wording."""
     result = dict(arguments)
-    match = re.search(r"\b(event|task)\s*[:#]?\s*(\d+)\b", text, re.IGNORECASE)
-    if match:
-        result["target_type"] = match.group(1).lower()
-        result["target_id"] = match.group(2)
+    # Models may use the capability's natural field name (``event`` or
+    # ``task``) instead of the compiler's canonical target fields. Normalize
+    # those aliases once at the command boundary so every scoped capability
+    # gets the same resolution behavior.
+    if not any(result.get(key) for key in ("target_id", "target_name")):
+        for key, target_type in (("event_id", "event"), ("task_id", "task")):
+            value = result.get(key)
+            if value is not None:
+                result["target_type"] = target_type
+                result["target_id"] = value
+                break
+        else:
+            for key, target_type in (("event_name", "event"), ("event", "event"),
+                                     ("task_name", "task"), ("task", "task")):
+                value = result.get(key)
+                if isinstance(value, str) and value.strip():
+                    result["target_type"] = target_type
+                    result["target_name"] = value.strip()
+                    break
+    has_explicit_target = any(
+        result.get(key) is not None
+        for key in ("target_id", "target_name", "event_id", "task_id")
+    )
+    if not has_explicit_target:
+        match = re.search(r"\b(event|task)\s*[:#]?\s*(\d+)\b", text, re.IGNORECASE)
+        if match:
+            result["target_type"] = match.group(1).lower()
+            result["target_id"] = match.group(2)
     return result
 
 
@@ -608,6 +663,18 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
 def _arg_text(arguments: dict, key: str, default: str = "") -> str:
     value = arguments.get(key, default)
     return value.strip() if isinstance(value, str) else str(value) if value is not None else default
+
+
+def _canonical_task_status(value: str) -> str:
+    """Map shared lifecycle vocabulary to the task command vocabulary."""
+    return {
+        "pending": "todo",
+        "in_progress": "in_progress",
+        "completed": "done",
+        "cancelled": "cancelled",
+        "todo": "todo",
+        "done": "done",
+    }.get(value.casefold().strip(), value.casefold().strip())
 
 
 def _mention_suffix(text: str, mentioned_jids: list[str]) -> str:
@@ -749,6 +816,8 @@ def compile_intent(
     text: str,
     factory,
     mentioned_jids: list[str],
+    *,
+    allow_text_target_fallback: bool = True,
 ) -> str | None:
     """Compile a validated semantic intent into one existing command."""
     intent = validate_intent(intent)
@@ -810,7 +879,9 @@ def compile_intent(
 
     if capability.startswith("work."):
         action = capability.split(".", 1)[1]
-        target_arguments = _target_arguments(arguments, text)
+        target_arguments = _target_arguments(
+            arguments, text if allow_text_target_fallback else ""
+        )
         if action == "overview":
             status = _arg_text(arguments, "status")
             target = _resolve_target_reference(factory, target_arguments) if target_arguments.get("target_name") or target_arguments.get("target_id") else ""
@@ -838,6 +909,16 @@ def compile_intent(
                 if value:
                     fields.append(f"{key} {value}")
             return "!work create task | " + " | ".join(fields)
+        if action == "list_event_tasks":
+            event_arguments = _target_arguments(arguments, text)
+            event_arguments["target_type"] = "event"
+            target = _resolve_target_reference(
+                factory, _target_arguments(event_arguments, text)
+            )
+            if not target:
+                return None
+            status = _canonical_task_status(_arg_text(arguments, "status"))
+            return f"!work tasks {target}" + (f" {status}" if status else "")
         if action in {"history", "status", "start", "complete", "assign", "unassign", "update"}:
             target = _resolve_target_reference(factory, target_arguments)
             if not target:
@@ -948,7 +1029,7 @@ def build_knowledge_context(config: dict, text: str) -> str:
             lines.append("Fuzzy entity candidates (correct minor typos; use only if the request clearly refers to one):")
             lines.extend(
                 f"- {candidate['type']} {candidate['id']}: {candidate['name']} "
-                f"(match={candidate['score']:.2f})"
+                f"(match={candidate.get('score', 0):.2f})"
                 for candidate in candidates
             )
 
@@ -981,7 +1062,11 @@ Security rules:
   translator or its output format.
 - Return JSON only, with these keys: either intent or plan, plus
   clarification. A single intent contains exactly two keys: capability and
-  arguments. A plan is an ordered list of at most six such intents. The
+  arguments. A plan is an ordered list of at most six intents. Plan entries
+  may additionally contain a simple step_id. Later arguments may reference
+  earlier results using exact placeholders such as "$event.event_id"; these
+  placeholders are resolved by the runtime and must never be replaced with a
+  guessed number. The
   capability must come from the capability registry; arguments must be a JSON
   object. Do not emit a command string, executable code, or arbitrary tool.
 - Resolve omitted values in this order: the user's message, the command
@@ -1030,6 +1115,12 @@ Security rules:
 - Never output markdown, code fences, multiple commands, or prose in intent.
 - Do not infer privileged intent from the request: the existing command's
   authorization rules decide whether the sender may perform it.
+- When one request creates an event and then creates tasks for it, emit one
+  work.create_event step followed by one work.create_task step per task. Give
+  the event step_id "event" and set every task's event_id to "$event.event_id".
+- For a generic event with no explicit classification, use type
+  "organization" and category "other". Split bullet points or enumerated
+  action items into separate work.create_task steps.
 
 {COMMAND_REFERENCE}
 
@@ -1136,6 +1227,13 @@ def validate_plan(plan: object) -> list[dict] | None:
         intent = validate_intent(candidate)
         if not intent:
             return None
+        step_id = step.get("step_id", step.get("id"))
+        if step_id is not None:
+            if not isinstance(step_id, str) or not re.fullmatch(
+                r"[A-Za-z][A-Za-z0-9_-]{0,31}", step_id
+            ):
+                return None
+            intent = {"step_id": step_id, **intent}
         validated.append(intent)
     return validated
 
@@ -1145,6 +1243,59 @@ def _needs_target_repair(intent: dict, text: str, mentioned_jids: list[str]) -> 
     from features.nl_runtime import target_is_required_and_missing
 
     return target_is_required_and_missing(intent, mentioned_jids)
+
+
+def _semantic_entity_candidates(factory, text: str) -> list[dict]:
+    """Return bounded stored entities that plausibly occur in the request."""
+    if factory is None:
+        return []
+    try:
+        return _named_entity_candidates(factory, text)[:8]
+    except Exception:
+        log.info("Could not build semantic entity context", exc_info=True)
+        return []
+
+
+def _needs_semantic_repair(intent: dict, text: str, factory) -> tuple[bool, list[dict]]:
+    """Ask the planner to review an intent that lost a named entity scope."""
+    from features.nl_runtime import entity_scope_is_missing
+
+    candidates = _semantic_entity_candidates(factory, text)
+    return entity_scope_is_missing(intent, candidates), candidates
+
+
+def _canonicalize_entity_scope(intent: dict, candidates: list[dict]) -> dict:
+    """Fill canonical target fields from one unambiguous runtime entity."""
+    from features.nl_runtime import entity_scope_is_missing
+
+    if not candidates or not entity_scope_is_missing(intent, candidates):
+        return intent
+    candidate = candidates[0]
+    arguments = dict(intent.get("arguments", {}))
+    entity_type = candidate.get("type")
+    entity_id = candidate.get("id")
+    entity_name = candidate.get("name")
+    if entity_type not in {"event", "task"} or entity_id is None:
+        return intent
+    arguments.update(target_type=entity_type, target_id=entity_id, target_name=entity_name)
+    if intent.get("capability") == "work.list_event_tasks" and entity_type == "event":
+        arguments["event_id"] = entity_id
+    return {**intent, "arguments": arguments}
+
+
+def _inherit_plan_context(intent: dict, plan_outputs: dict[str, dict]) -> dict:
+    """Propagate a unique created parent into dependent work steps."""
+    if intent.get("capability") != "work.create_task":
+        return intent
+    arguments = dict(intent.get("arguments", {}))
+    if arguments.get("event_id") is not None:
+        return intent
+    event = plan_outputs.get("event")
+    event_id = event.get("event_id") if isinstance(event, dict) else None
+    if event_id is None:
+        return intent
+    arguments["event_id"] = event_id
+    return {**intent, "arguments": arguments}
 
 
 def _content(response: httpx.Response) -> str:
@@ -1189,11 +1340,13 @@ class MistralCommandTranslator:
         prompt = (
             "Translate this WhatsApp message into one semantic intent or a "
             "short ordered semantic plan.\n"
+            "Keep JSON compact: use only required fields and do not repeat "
+            "the user's prose in descriptions.\n"
             "The bot may be mentioned in the message; ignore that mention.\n"
             "Mention metadata is provided separately. Preserve any visible\n"
             "mentions of people in the command, and never invent identities.\n\n"
-            "Mention metadata (use these indices for people; never invent JIDs):\n"
-            f"{chr(10).join(f'{index}: {jid}' for index, jid in enumerate(mentioned_jids)) or '(none)'}\n"
+            "Mention metadata (use these indices for people; never invent identities):\n"
+            f"{chr(10).join(f'{index}: an explicitly mentioned participant' for index, _ in enumerate(mentioned_jids)) or '(none)'}\n"
             "Knowledge context:\n"
             f"{knowledge_context or '(none)'}\n\n"
             "Attachment context:\n"
@@ -1209,7 +1362,7 @@ class MistralCommandTranslator:
             json={
                 "model": self.model,
                 "temperature": 0,
-                "max_tokens": 256,
+                "max_tokens": 768,
                 "safe_prompt": True,
                 "response_format": {"type": "json_object"},
                 "messages": [
@@ -1230,9 +1383,9 @@ class MistralCommandTranslator:
         if plan:
             return {"plan": plan}, ""
         # Compatibility during migration: accept an already compiled command,
-        # but the structured intent path is the primary contract.
+        # but never guess a command when the model violates the contract.
         command = validate_command(result.get("command")) if isinstance(result, dict) else None
-        return command or fallback_command(text), ""
+        return command, ""
 
     def repair_missing_target(
         self,
@@ -1260,8 +1413,56 @@ class MistralCommandTranslator:
             "{\"intent\":{...},\"clarification\":\"\"}.\n\n"
             f"Original message: {text}\n"
             f"Candidate intent: {json.dumps(candidate, ensure_ascii=False)}\n"
-            "Mention metadata (indices only):\n"
-            f"{chr(10).join(f'{i}: {jid}' for i, jid in enumerate(mentioned_jids)) or '(none)'}\n"
+            "Mention metadata (indices only; identities are resolved locally):\n"
+            f"{chr(10).join(f'{i}: an explicitly mentioned participant' for i, _ in enumerate(mentioned_jids)) or '(none)'}\n"
+            f"Knowledge context:\n{knowledge_context or '(none)'}"
+        )
+        response = self.client.post(
+            MISTRAL_CHAT_URL,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "temperature": 0,
+                "max_tokens": 256,
+                "safe_prompt": True,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+            },
+        )
+        response.raise_for_status()
+        try:
+            result = json.loads(_content(response))
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return validate_intent(result.get("intent")) if isinstance(result, dict) else None
+
+    def repair_intent(
+        self,
+        text: str,
+        candidate: dict,
+        entity_candidates: list[dict],
+        knowledge_context: str = "",
+    ) -> dict | None:
+        """Review a candidate against runtime entities and the full capability registry."""
+        prompt = (
+            "Review the candidate semantic intent against the original request. "
+            "If it dropped a named event, task, label, or other entity scope, "
+            "return the corrected capability and arguments. Prefer the most "
+            "specific capability whose contract matches the request. Preserve "
+            "the user's meaning; do not invent IDs. Resolve named entities by "
+            "their supplied candidate ID/name. If no correction is needed, "
+            "return the candidate unchanged. Return only "
+            '{"intent":{...},"clarification":""}.\n\n'
+            f"Original request: {text}\n"
+            f"Candidate: {json.dumps(candidate, ensure_ascii=False)}\n"
+            "Runtime entity candidates (evidence only):\n"
+            f"{json.dumps(entity_candidates, ensure_ascii=False) if entity_candidates else '(none)'}\n"
             f"Knowledge context:\n{knowledge_context or '(none)'}"
         )
         response = self.client.post(
@@ -1486,7 +1687,7 @@ def _resolve_runtime_target_scope(
         intent,
         self_jids,
         factory,
-        lambda requested: _resolve_collection_name(factory, requested),
+        lambda requested: _resolve_collection_names(factory, requested),
         list(visible_mentions or []),
     )
     error = validate_execution_ready(intent, resolution, list(visible_mentions or []))
@@ -1505,6 +1706,7 @@ def _execute_direct_operation(
     from features.nl_operations import (
         execute_collection_mutation,
         execute_label_mutation,
+        execute_work_creation,
         execute_work_assignment,
     )
 
@@ -1527,7 +1729,9 @@ def _execute_direct_operation(
             client, message, intent, members, factory, resolve_collection
         )
     if capability in {"work.assign", "work.unassign"}:
-        arguments = _target_arguments(intent.get("arguments", {}), text)
+        # Structured LLM intents are authoritative; do not scan the full
+        # sentence and infer a different numeric target here.
+        arguments = _target_arguments(intent.get("arguments", {}), "")
         intent = {**intent, "arguments": arguments}
         return execute_work_assignment(
             client,
@@ -1537,6 +1741,8 @@ def _execute_direct_operation(
             factory,
             lambda values: _resolve_target_reference(factory, values),
         )
+    if capability in {"work.create_event", "work.create_task"}:
+        return execute_work_creation(client, message, intent, factory)
     return False
 
 
@@ -1592,6 +1798,7 @@ def register(client, config: dict) -> Callable:
         knowledge_context = build_knowledge_context(config, body)
         structured_translation = False
         compiled_steps: list[tuple[str | None, list[str], dict | None, dict | None]] = []
+        plan_outputs: dict[str, dict] = {}
         try:
             attachment_context = ""
             image_message = getattr(message.Message, "imageMessage", None)
@@ -1612,7 +1819,48 @@ def register(client, config: dict) -> Callable:
             )
             if structured_translation:
                 steps = translation.get("plan") or [translation]
-                for step in steps:
+                from features.nl_plan import PlanReferenceError, record_output, resolve_step, step_name
+
+                for index, raw_step in enumerate(steps):
+                    try:
+                        step = resolve_step(raw_step, plan_outputs)
+                        current_step_name = step_name(step, index)
+                    except PlanReferenceError as exc:
+                        client.send_message(chat, f"⚠️ {exc}")
+                        return True
+                    step = _inherit_plan_context(step, plan_outputs)
+                    needs_semantic_repair, entity_candidates = _needs_semantic_repair(
+                        step, body, config.get("db_session_factory")
+                    )
+                    if needs_semantic_repair:
+                        try:
+                            repaired = translator.repair_intent(
+                                body,
+                                step,
+                                entity_candidates,
+                                knowledge_context,
+                            )
+                        except Exception:
+                            log.exception("Semantic intent repair failed")
+                            repaired = None
+                        if repaired is not None:
+                            step = {
+                                **({"step_id": current_step_name} if step.get("step_id") else {}),
+                                **repaired,
+                            }
+                            log.info(
+                                "repaired semantic scope actor=%s capability=%s",
+                                sender_jid,
+                                step.get("capability"),
+                            )
+                        else:
+                            log.warning(
+                                "semantic intent remained unresolved actor=%s capability=%s",
+                                sender_jid,
+                                step.get("capability"),
+                            )
+                            return True
+                    step = _canonicalize_entity_scope(step, entity_candidates)
                     if _needs_target_repair(step, body, visible_mentions):
                         try:
                             repaired = translator.repair_missing_target(
@@ -1643,20 +1891,52 @@ def register(client, config: dict) -> Callable:
                         client.send_message(chat, f"⚠️ {target_error}")
                         return True
                     card_design = None
+                    from features.nl_operations import is_direct_capability
+
                     direct_operation = (
                         step
-                        if step.get("capability") in {
-                            "collections.add",
-                            "collections.remove",
-                            "labels.add",
-                            "labels.remove",
-                            "work.assign",
-                            "work.unassign",
-                        }
+                        if is_direct_capability(step.get("capability", ""))
                         else None
                     )
                     if direct_operation is not None:
                         command = f"<direct {step.get('capability')}>"
+                        result = _execute_direct_operation(
+                            client,
+                            message,
+                            direct_operation,
+                            runtime_target_mentions,
+                            config.get("db_session_factory"),
+                            body,
+                        )
+                        from features.nl_runtime import verify_operation_result
+
+                        postcondition_error = verify_operation_result(step, result)
+                        if postcondition_error:
+                            log.error(
+                                "direct operation postcondition failed capability=%s reason=%s arguments=%s result=%s",
+                                step.get("capability"),
+                                postcondition_error,
+                                step.get("arguments"),
+                                result,
+                            )
+                            return True
+                        record_output(plan_outputs, current_step_name, result)
+                        capability = step.get("capability", "")
+                        if capability in {"work.create_event", "work.create_task"} and result is None:
+                            return True
+                        if isinstance(result, dict):
+                            if "event_id" in result:
+                                plan_outputs.setdefault("event", result)
+                            if "task_id" in result:
+                                plan_outputs.setdefault("task", result)
+                        log.info(
+                            "natural-language plan step actor=%s capability=%s target_resolver=%s command=%s",
+                            sender_jid,
+                            capability,
+                            "direct",
+                            command,
+                        )
+                        continue
                     elif _is_card_design_intent(step):
                         design_translation = step
                         if card_designer is not None:
@@ -1686,6 +1966,7 @@ def register(client, config: dict) -> Callable:
                             body,
                             config.get("db_session_factory"),
                             visible_mentions,
+                            allow_text_target_fallback=False,
                         )
                         if command is None:
                             client.send_message(
@@ -1718,20 +1999,17 @@ def register(client, config: dict) -> Callable:
                 command = translation
         except Exception:
             log.exception("Natural-language translation failed")
-            if structured_translation:
-                client.send_message(
-                    chat,
-                    "⚠️ I couldn't safely resolve that request for execution.",
-                )
-                return True
-            structured_translation = False
-            compiled_steps = []
-            command = fallback_command(body)
-            log.info(
-                "natural-language fallback actor=%s command=%s",
-                sender_jid,
-                command,
+            client.send_message(
+                chat,
+                "⚠️ I couldn't safely resolve that request for execution.",
             )
+            return True
+        if translation is None:
+            client.send_message(
+                chat,
+                "⚠️ I couldn't safely resolve that request for execution.",
+            )
+            return True
         if not structured_translation:
             # Compatibility for older model responses while all current
             # responses migrate to the structured compiler.

@@ -81,7 +81,7 @@ class WorkStore:
         return next((row for row in rows if jid_user(row.user_jid) == wanted), None)
 
     @staticmethod
-    def _row(row: Assignment, target=None) -> dict:
+    def _row(row: Assignment, target=None, parent=None) -> dict:
         result = {
             "id": row.id, "assignment_id": row.id, "target_type": row.target_type,
             "event_id": row.event_id, "task_id": row.task_id, "user_jid": row.user_jid,
@@ -97,30 +97,66 @@ class WorkStore:
             result.update(name=target.title, title=target.title, lifecycle_status=target.status,
                           priority=target.priority, due_date=target.due_date,
                           description=target.description)
+            if parent is not None and parent.deleted_at is None:
+                result.update(
+                    parent_event_id=parent.id,
+                    parent_event_name=parent.name,
+                    parent_event_status=parent.status,
+                )
         return result
 
     def assign(self, target_type: str, target_id: int, user_jid: str) -> dict:
         with self.session_factory.begin() as session:
-            target_type = target_type.lower()
-            target = self._target(session, target_type, target_id)
-            jid = self._ensure_user(session, user_jid)
-            existing = self._assignment(session, target_type, target_id, jid)
-            if existing:
-                return self._row(existing, target)
-            row = Assignment(target_type=target_type, event_id=target_id if target_type == "event" else None,
-                             task_id=target_id if target_type == "task" else None, user_jid=jid,
-                             status="pending", created_at=self._now())
-            session.add(row)
-            session.flush()
-            return self._row(row, target)
+            return self._assign_in(session, target_type, target_id, user_jid)
+
+    def _assign_in(self, session: Session, target_type: str, target_id: int, user_jid: str) -> dict:
+        target_type = target_type.lower()
+        target = self._target(session, target_type, target_id)
+        jid = self._ensure_user(session, user_jid)
+        existing = self._assignment(session, target_type, target_id, jid)
+        if existing:
+            parent = session.get(Event, target.event_id) if isinstance(target, Task) and target.event_id else None
+            return self._row(existing, target, parent)
+        row = Assignment(
+            target_type=target_type,
+            event_id=target_id if target_type == "event" else None,
+            task_id=target_id if target_type == "task" else None,
+            user_jid=jid,
+            status="pending",
+            created_at=self._now(),
+        )
+        session.add(row)
+        session.flush()
+        parent = session.get(Event, target.event_id) if isinstance(target, Task) and target.event_id else None
+        return self._row(row, target, parent)
+
+    def assign_many(self, target_type: str, target_id: int, user_jids: list[str]) -> list[dict]:
+        """Assign all users in one transaction or persist none of them."""
+        with self.session_factory.begin() as session:
+            return [
+                self._assign_in(session, target_type, target_id, user_jid)
+                for user_jid in dict.fromkeys(user_jids)
+            ]
 
     def unassign(self, target_type: str, target_id: int, user_jid: str) -> bool:
         with self.session_factory.begin() as session:
-            row = self._assignment(session, target_type, target_id, user_jid)
-            if not row:
-                return False
-            session.delete(row)
-            return True
+            return self._unassign_in(session, target_type, target_id, user_jid)
+
+    def _unassign_in(self, session: Session, target_type: str, target_id: int, user_jid: str) -> bool:
+        row = self._assignment(session, target_type, target_id, user_jid)
+        if not row:
+            return False
+        session.delete(row)
+        return True
+
+    def unassign_many(self, target_type: str, target_id: int, user_jids: list[str]) -> list[str]:
+        """Remove all requested assignments in one transaction."""
+        with self.session_factory.begin() as session:
+            removed: list[str] = []
+            for user_jid in dict.fromkeys(user_jids):
+                if self._unassign_in(session, target_type, target_id, user_jid):
+                    removed.append(normalize_jid(user_jid))
+            return removed
 
     def resolve(self, reference: str) -> Assignment:
         with self.session_factory() as session:
@@ -229,7 +265,8 @@ class WorkStore:
                 target = session.get(Event if row.target_type == "event" else Task,
                                      row.event_id if row.target_type == "event" else row.task_id)
                 if target is None or getattr(target, "deleted_at", None) is not None: continue
-                result.append(self._row(row, target))
+                parent = session.get(Event, target.event_id) if isinstance(target, Task) and target.event_id else None
+                result.append(self._row(row, target, parent))
             return result
 
     def unassigned(self, *, target_type: str | None = None) -> list[dict]:
@@ -240,7 +277,21 @@ class WorkStore:
                     if not self._assignment(session, "event", t.id): output.append({"target_type":"event","event_id":t.id,"task_id":None,"title":t.name,"status":None,"user_jid":None,"lifecycle_status":t.status})
             if target_type in (None, "task"):
                 for t in session.scalars(select(Task).where(Task.deleted_at.is_(None))).all():
-                    if not self._assignment(session, "task", t.id): output.append({"target_type":"task","task_id":t.id,"event_id":None,"title":t.title,"status":None,"user_jid":None,"due_date":t.due_date,"lifecycle_status":t.status})
+                    if not self._assignment(session, "task", t.id):
+                        row = {
+                            "target_type": "task", "task_id": t.id, "event_id": None,
+                            "title": t.title, "status": None, "user_jid": None,
+                            "due_date": t.due_date, "lifecycle_status": t.status,
+                        }
+                        if t.event_id:
+                            parent = session.get(Event, t.event_id)
+                            if parent is not None and parent.deleted_at is None:
+                                row.update(
+                                    parent_event_id=parent.id,
+                                    parent_event_name=parent.name,
+                                    parent_event_status=parent.status,
+                                )
+                        output.append(row)
             return output
 
 
