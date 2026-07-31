@@ -89,6 +89,8 @@ To tag a subgroup, just write `@subgroupname` anywhere in a message — the bot 
 
 - Subgroups are **global** — created once, usable in any group
 - Names must be 2-32 characters: letters, digits, hyphens, or underscores
+- Natural-language names are normalized (`2nd year` → `2nd-year`)
+- Existing close matches are reused; `new`/`create` explicitly forces a new subgroup
 - A subgroup can never be empty; removing the last member auto-deletes it
 - State persisted in PostgreSQL
 
@@ -120,6 +122,48 @@ python -m db.seed_admin 919999999999@s.whatsapp.net
 ```
 
 Admins can use `!add-user [admin|member] @person`, `!remove-user @person`, and `!users`. Subgroup changes require an admin; subgroup listing, info, and tagging require an active user. Removing or demoting the last active administrator is refused.
+
+### 💬 Natural-language commands
+
+Tag the bot in the configured PBBot group and describe an existing command in
+normal language. Mistral translates the request into one canonical PBBot
+command, which then goes through the same existing authorization and argument
+validation as an explicit command.
+
+```text
+@bot show my pending work
+@bot mark task 7 complete
+@bot add @Ananya to the backend label
+@bot create a sarcastic congratulations card for Zodiak for PBCTF 5.0; use https://example.com/logo.svg as the logo
+```
+
+Configure `MISTRAL_API_KEY`, `MISTRAL_MODEL` (default:
+`mistral-small-latest`), and optionally `MISTRAL_CARD_MODEL` (default:
+`mistral-medium-3-5`). Cards use a dedicated semantic design pass so their
+copy and visual tone are interpreted separately from command routing. The
+translator only runs for messages that actually
+mention the bot; for testing, the literal `@me` alias resolves to the sender.
+Explicit `!commands` continue to use the normal path.
+
+Natural-language translation first resolves a structured capability and its
+arguments, then the runtime compiler resolves database entities and emits one
+canonical command. This keeps phrasing, entity lookup, command syntax, and
+authorization separate.
+
+Natural-language requests are enriched from the command reference, high-
+confidence program mappings (for example, LFX → participation/lfx), recent
+active events in PostgreSQL, and metadata from explicit public URLs. Set
+`NATURAL_LANGUAGE_KNOWLEDGE_URLS` to a comma-separated list of trusted public
+URLs when a group has an external knowledge source. Exact dates, IDs, and
+user identities are never invented; optional fields are omitted when no
+reliable source exists.
+
+Card requests use the `card.design` capability. The model chooses the closest
+existing visual family or the controlled `custom` family, then supplies only
+bounded copy, accent, pill, logo, and highlight values to the existing
+Playwright renderer. It does not generate HTML/CSS or replace the fixed card
+templates. Attach the profile image to the natural-language message just as
+you would for `!card`.
 
 Examples:
 

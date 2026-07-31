@@ -101,9 +101,9 @@ def register(client: "NewClient", config: dict) -> callable:
             if not is_admin:
                 # Anyone may opt themselves into or out of a label, but only an
                 # admin may move other people.
-                if not targets:
+                if not targets and getattr(message, "_pbbot_nl_no_target_mentions", False) is not True:
                     targets = [self_jid]
-                if [jid_user(jid) for jid in targets] != [jid_user(self_jid)]:
+                if targets and [jid_user(jid) for jid in targets] != [jid_user(self_jid)]:
                     client.send_message(chat, "⛔ You can only add or remove yourself. "
                                               "Ask an admin to change someone else's labels.")
                     return

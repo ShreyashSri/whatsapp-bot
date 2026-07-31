@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 
 def register_features(client, config: dict) -> Callable:
     """Register features in the existing order and return the dispatcher."""
+    from features.natural_language import register as register_natural_language
     from features.media import register as register_media
     from features.cards import register as register_cards
     from features.community_tag import register as register_community_tag
@@ -25,6 +26,7 @@ def register_features(client, config: dict) -> Callable:
     from features.labels import register as register_labels
 
     work_handler = register_work(client, config)
+    natural_language_handler = register_natural_language(client, config)
 
     handlers = [
         register_admin(client, config),
@@ -42,6 +44,15 @@ def register_features(client, config: dict) -> Callable:
     register_incidents(client, config)
 
     def dispatch(message: MessageEv) -> None:
+        # Natural-language messages are translated into a normal command and
+        # re-enter this dispatcher. This keeps all existing command ownership,
+        # authorization, validation, and auditing in one path.
+        try:
+            if natural_language_handler and natural_language_handler(client, message, dispatch):
+                return
+        except Exception:
+            log.exception("natural-language handler failed")
+            return
         # Workload commands have one owner. Returning here is the central
         # collision guard for the historical events/tasks handlers.
         try:

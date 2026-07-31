@@ -59,6 +59,11 @@ def _build_config() -> dict:
         "incident_port": int(os.getenv("INCIDENT_PORT", "8081")),
         "subgroup_blocked_users": _parse_group_ids("SUBGROUP_BLOCKED_USERS"),
         "database_url": os.getenv("DATABASE_URL", "").strip(),
+        "mistral_api_key": os.getenv("MISTRAL_API_KEY", "").strip(),
+        "mistral_model": os.getenv("MISTRAL_MODEL", "mistral-small-latest").strip(),
+        "mistral_card_model": os.getenv("MISTRAL_CARD_MODEL", "mistral-medium-3-5").strip(),
+        "natural_language_knowledge_urls": os.getenv("NATURAL_LANGUAGE_KNOWLEDGE_URLS", "").strip(),
+        "bot_jid": os.getenv("BOT_JID", "").strip(),
     }
 
 
