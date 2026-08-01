@@ -51,6 +51,41 @@ def test_required_capabilities_are_incomplete_without_an_audience():
     )
 
 
+def test_user_info_requires_audience_but_accepts_semantic_resolver():
+    from features.natural_language import validate_intent
+
+    intent = {
+        "capability": "whatsapp.user_info",
+        "arguments": {"audience": {"resolver": "explicit_mentions"}},
+    }
+    assert validate_intent(intent) is not None
+    assert target_is_required_and_missing(intent, []) is True
+
+
+def test_plan_output_resolver_turns_prior_member_output_into_targets():
+    message = make_group_message()
+    result = resolve_target(
+        MagicMock(),
+        message,
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "everyone",
+                "audience": {
+                    "resolver": "plan_output",
+                    "value": ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+                },
+            },
+        },
+        {"222@s.whatsapp.net"},
+        None,
+        lambda value: value,
+        [],
+    )
+    assert result.ready
+    assert result.members == ("111@s.whatsapp.net",)
+
+
 def test_work_item_target_is_not_confused_with_an_audience():
     intent = {
         "capability": "work.assign",
@@ -356,3 +391,17 @@ def test_label_domain_operations_accept_resolved_members_directly():
         store, "everybody", ["111@s.whatsapp.net"]
     )
     assert (removed, deleted) == (1, False)
+def test_declared_tool_outputs_are_verified_for_all_producing_tools():
+    from features.nl_runtime import verify_operation_result
+
+    assert verify_operation_result(
+        {"capability": "whatsapp.joined_groups"},
+        {"groups": [], "group_count": 0},
+    ) is None
+    assert "omitted declared outputs" in verify_operation_result(
+        {"capability": "whatsapp.joined_groups"},
+        {"groups": []},
+    )
+    assert verify_operation_result(
+        {"capability": "whatsapp.send"}, {"sent": True}
+    ) is None

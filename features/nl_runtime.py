@@ -36,6 +36,13 @@ CAPABILITY_CONTRACTS: dict[str, CapabilityContract] = {
     "labels.remove": CapabilityContract("required"),
     "work.assign": CapabilityContract("required"),
     "work.unassign": CapabilityContract("required"),
+    "whatsapp.user_info": CapabilityContract("required"),
+    "whatsapp.add_group_members": CapabilityContract("required"),
+    "whatsapp.remove_group_members": CapabilityContract("required"),
+    "whatsapp.profile_pictures": CapabilityContract("required"),
+    "whatsapp.block_contacts": CapabilityContract("required"),
+    "whatsapp.unblock_contacts": CapabilityContract("required"),
+    "whatsapp.create_group": CapabilityContract("optional", produces=frozenset({"group_jid", "name", "member_jids"})),
     # A bare label add intentionally preserves legacy "add myself" semantics.
     "labels.add": CapabilityContract("optional"),
     # Scoped reads must not silently degrade to a global overview when the
@@ -60,6 +67,7 @@ TARGET_RESOLVERS = frozenset(
         "active_admins",
         "sender",
         "explicit_mentions",
+        "plan_output",
     }
 )
 
@@ -82,10 +90,21 @@ def contract_for(capability: str) -> CapabilityContract:
 def verify_operation_result(intent: dict, result: object) -> str | None:
     """Check deterministic postconditions before exposing a tool result."""
     capability = str(intent.get("capability") or "")
+    if not isinstance(result, dict):
+        from features.agent_runtime import tool_spec
+
+        if tool_spec(capability).produces:
+            return "the operation returned no structured result"
+        return None
+    from features.agent_runtime import tool_spec
+    missing_outputs = [
+        field for field in tool_spec(capability).produces
+        if field not in result
+    ]
+    if missing_outputs:
+        return "the operation omitted declared outputs: " + ", ".join(sorted(missing_outputs))
     if capability not in {"work.create_event", "work.create_task"}:
         return None
-    if not isinstance(result, dict):
-        return "the operation returned no structured result"
     arguments = intent.get("arguments", {})
     if capability == "work.create_event" and not result.get("event_id"):
         return "event creation returned no event ID"
@@ -101,13 +120,13 @@ def verify_operation_result(intent: dict, result: object) -> str | None:
     return None
 
 
-def target_expression(arguments: dict) -> tuple[str, str]:
+def target_expression(arguments: dict) -> tuple[str, object]:
     """Return the canonical (resolver, value) target expression."""
     audience = arguments.get("audience")
     if isinstance(audience, dict):
         resolver = audience.get("resolver") or audience.get("kind") or ""
         value = audience.get("value") or audience.get("name") or ""
-        return str(resolver), str(value)
+        return str(resolver), value
 
     # Transitional compatibility for early structured responses. Do not
     # interpret a work item string in arguments["target"] as an audience.
@@ -115,11 +134,11 @@ def target_expression(arguments: dict) -> tuple[str, str]:
     if isinstance(target, dict):
         resolver = target.get("resolver") or target.get("kind") or ""
         value = target.get("value") or target.get("name") or ""
-        return str(resolver), str(value)
+        return str(resolver), value
 
     resolver = arguments.get("target_scope") or ""
     value = arguments.get("target_collection") or ""
-    return str(resolver), str(value)
+    return str(resolver), value
 
 
 def target_is_declared(arguments: dict, visible_mentions: list[str]) -> bool:
@@ -227,6 +246,10 @@ def resolve_target(
             from features.community_tag import get_group_member_jids
 
             members = get_group_member_jids(client, chat)
+        elif resolver == "plan_output":
+            if not isinstance(value, list):
+                return TargetResolution(error="The referenced plan output is not a member list.")
+            members = value
         else:
             members = []
     except Exception:

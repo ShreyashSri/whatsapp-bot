@@ -18,6 +18,7 @@ from features.natural_language import (
     _needs_target_repair,
     _inherit_plan_context,
     _target_arguments,
+    _plan_completeness_issue,
 )
 from features.subgroups import _get_mentioned_jids, normalize_collection_name
 
@@ -98,6 +99,22 @@ def test_structured_intent_compiles_through_existing_command_syntax():
     with patch("features.natural_language._resolve_collection_name", return_value="team"):
         command = compile_intent(intent, "add @Person to team", object(), ["person@lid"])
     assert command == "!labels add team"
+
+
+def test_work_lifecycle_and_crud_capabilities_compile_to_legacy_handlers():
+    with patch("features.natural_language._resolve_target_reference", side_effect=["event 4", "event 4", "task 7"]):
+        assert compile_intent(
+            {"capability": "work.set_lifecycle", "arguments": {"target_type": "event", "target_id": 4, "status": "completed"}},
+            "complete event Zenith", object(), [],
+        ) == "!set-status 4 | completed"
+        assert compile_intent(
+            {"capability": "work.update_event", "arguments": {"target_type": "event", "target_id": 4, "fields": {"name": "Renamed", "category": "hackathon"}}},
+            "rename event", object(), [],
+        ) == "!update-event 4 | name Renamed | category hackathon"
+        assert compile_intent(
+            {"capability": "work.delete_task", "arguments": {"target_type": "task", "target_id": 7}},
+            "delete task 7", object(), [],
+        ) == "!delete-task 7"
 
 
 def test_natural_collection_names_are_normalized_to_stored_names():
@@ -644,15 +661,17 @@ def test_scoped_capability_is_reviewed_when_model_drops_named_entity():
              "type": "event", "id": 10, "name": "Zenith 27", "category": "other",
          }]), \
          patch.object(MistralCommandTranslator, "translate", return_value=(candidate, "")), \
-         patch.object(MistralCommandTranslator, "repair_intent", return_value=repaired):
+         patch.object(MistralCommandTranslator, "repair_intent", return_value=repaired), \
+         patch("features.natural_language._execute_direct_operation", return_value={"tasks": [], "task_count": 0}) as execute:
         handler = register(
             client,
             {"mistral_api_key": "secret", "db_session_factory": MagicMock()},
         )
         assert handler(client, message, dispatch) is True
 
-    translated = dispatch.call_args.args[0]
-    assert translated.Message.conversation == "!work tasks event 10"
+    dispatch.assert_not_called()
+    execute.assert_called_once()
+    assert execute.call_args.args[2] == repaired
 
 
 def test_task_step_inherits_unique_event_created_by_same_plan():
@@ -670,6 +689,29 @@ def test_full_message_target_extraction_does_not_override_explicit_step_target()
         "assign task 12 and 13 to @Deval PB",
     )
     assert arguments["target_id"] == 13
+
+
+def test_plan_completeness_detects_multiple_collections_in_one_relation():
+    plan = [{
+        "step_id": "add",
+        "capability": "labels.add",
+        "arguments": {
+            "collection": "congr",
+            "audience": {
+                "resolver": "collection_members",
+                "value": "2nd-yearsand careers-page",
+            },
+        },
+    }]
+    with patch(
+        "features.natural_language._named_collection_candidates",
+        return_value=[
+            {"name": "2nd-years", "score": 0.9},
+            {"name": "careers-page", "score": 0.9},
+        ],
+    ):
+        issue = _plan_completeness_issue(plan, "add both collections", object())
+    assert "multiple existing collections" in issue
 
 
 def test_fallback_selects_closest_existing_command():

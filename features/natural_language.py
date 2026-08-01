@@ -25,6 +25,7 @@ import unicodedata
 import httpx
 
 from db.auth import normalize_jid
+from features.agent_runtime import AgentTrace, CAPABILITIES, MAX_PLAN_STEPS, render_tool_catalog
 from features.subgroups import _get_mentioned_jids, _get_text, normalize_collection_name
 
 log = logging.getLogger(__name__)
@@ -146,6 +147,8 @@ person's display name into a made-up phone number.
 Work and progress:
   !my
   !work [pending|event <id>|task <id>|status event <id>|history event <id>]
+  !work update-event event <id> | name <value> | description <value>
+  !work delete-event event <id> | !work delete-task task <id>
   !work start|complete <event|task> <id>
   !work update <event|task> <id> <field> <value>
   !work edit <revision_id> <new value>
@@ -176,66 +179,18 @@ Media, cards, help, reports, and schema:
   !reports [progress event <id>|pending|completed] | !audit [operation]
 """.strip()
 
-# Machine-readable capability surface. The model selects a capability and
-# supplies data; the compiler below owns command syntax. This prevents every
-# natural-language variation from becoming a new command-specific fallback.
-CAPABILITY_REFERENCE = r"""
-Return an intent capability from this registry:
-  help.show(module?)
-  admin.add_user(role?, mentions[]) | admin.remove_user(mentions[]) | admin.list_users | admin.list_admins
-  labels.list | labels.of(mention?) | labels.add(collection) | labels.remove(collection) | labels.delete(collection)
-  collections.add(collection, mentions?, audience?) | collections.remove(collection, mentions?, audience?) | collections.delete(collection) | collections.list | collections.info(collection)
-  work.overview(status?, target?) | work.history(target) | work.status(target) | work.start(target) | work.complete(target)
-  work.update(target, field, value) | work.edit(revision_id, value)
-  work.assign(target, mentions?, collections?, audience?) | work.unassign(target, mentions?, collections?, audience?)
-  work.create_event(type?, category?, name?, description?, start?, end?, labels?)
-  work.create_task(title?, description?, due?, priority?, event_id?)
-  work.list_event_tasks(event, status?)
-  reports.summary | reports.progress(target) | reports.status(status) | audit.list(operation?)
-  media.add(text) | media.remove(id) | media.todo | media.posted(id, stage) | media.unposted(id, stage) | media.posted_list
-  card.create(type, name, text, event_name?, logo_urls?) | card.create_pdf(type, name, text, event_name?, logo_urls?)
-  card.design(base_template?, name, occasion?, tone?, headline?, body?, accent?, pill?, logo_urls?, highlight_terms?)
-  card.design_pdf(base_template?, name, occasion?, tone?, headline?, body?, accent?, pill?, logo_urls?, highlight_terms?)
-  schema.show(target) | schema.set(target, fields) | schema.add(target, field) | schema.delete(target, field?)
-
-Arguments are JSON values. Use mention_indices for people, referring to the
-numbered WhatsApp mentions supplied in the user message. Use target_name when
-the user names an event/task and target_id only when an explicit numeric ID is
-present. Never invent IDs or JIDs. Omit optional values when unavailable.
-collections.add and labels.add are create-or-add operations: preserve the
-requested collection name and let runtime resolution choose an existing fuzzy
-match or create a normalized new name. Explicit "new", "create", "make", or
-"form" language means create a new collection even if a similar existing name
-is present.
-For work.assign and work.unassign, preserve any label, subgroup, or
-collection named by the user in ``collections``. Never drop that target. If
-the user explicitly says event or task, preserve that target type.
-For compound requests, represent every action/object/audience relationship
-explicitly in the ordered plan. Each step must be independently executable;
-never rely on sentence order or require the executor to reinterpret the raw
-message to recover a missing relationship.
-When the user refers to a semantic audience, set audience to an object whose
-resolver is one of current_chat_members, collection_members, active_admins,
-sender, or explicit_mentions. Include value for a named collection. Do not
-place resolved member JIDs in the arguments; runtime resolvers supply them.
-For multi-step plans, assign stable step_id values and use exact local
-references such as "$event.event_id" or "$step1.event_id" when a later step
-needs an ID produced by an earlier step. Never invent those IDs. A task that
-belongs under a newly created event must use event_id with that reference.
-""".strip()
-
-CAPABILITIES = frozenset(
-    {
-        "help.show", "admin.add_user", "admin.remove_user", "admin.list_users", "admin.list_admins",
-        "labels.list", "labels.of", "labels.add", "labels.remove", "labels.delete",
-        "collections.add", "collections.remove", "collections.delete", "collections.list", "collections.info",
-        "work.overview", "work.history", "work.status", "work.start", "work.complete", "work.update", "work.edit",
-        "work.assign", "work.unassign", "work.create_event", "work.create_task", "work.list_event_tasks",
-        "reports.summary", "reports.progress", "reports.status", "audit.list",
-        "media.add", "media.remove", "media.todo", "media.posted", "media.unposted", "media.posted_list",
-        "card.create", "card.create_pdf", "card.design", "card.design_pdf",
-        "schema.show", "schema.set", "schema.add", "schema.delete",
-    }
+# The planner-facing tool catalog is generated from the same registry used by
+# runtime validation. Semantic rules below are stable protocol rules, not a
+# second hand-maintained capability list.
+CAPABILITY_REFERENCE = "\n".join(
+    [
+        render_tool_catalog(),
+        "Arguments are JSON values. Use mention_indices for people, referring to the numbered WhatsApp mentions supplied in the user message.",
+        "Use target_name for named entities and target_id only for explicit or runtime-resolved IDs. Never invent IDs, JIDs, or permissions.",
+        "For compound requests, represent every action/object/audience relationship explicitly in the ordered plan. Each step must be independently executable.",
+        "Use audience resolvers current_chat_members, collection_members, active_admins, sender, explicit_mentions, or plan_output; runtime resolves concrete members. For a prior read tool, use plan_output with a reference such as $group.member_jids. WhatsApp steps may set target_chat to a plan_output reference such as {\"resolver\":\"plan_output\",\"value\":\"$created.group_jid\"}; never invent a raw JID.",
+        "Assign stable step_id values and use exact local references such as $event.event_id for outputs from prior steps.",
+    ]
 )
 
 TARGET_SCOPES = frozenset(
@@ -245,6 +200,7 @@ TARGET_SCOPES = frozenset(
         "active_admins",
         "explicit_mentions",
         "sender",
+        "plan_output",
     }
 )
 
@@ -882,6 +838,9 @@ def compile_intent(
         target_arguments = _target_arguments(
             arguments, text if allow_text_target_fallback else ""
         )
+        if action == "my":
+            status = _arg_text(arguments, "status")
+            return "!my" + (f" {status}" if status else "")
         if action == "overview":
             status = _arg_text(arguments, "status")
             target = _resolve_target_reference(factory, target_arguments) if target_arguments.get("target_name") or target_arguments.get("target_id") else ""
@@ -955,6 +914,25 @@ def compile_intent(
             revision_id = _arg_text(arguments, "revision_id")
             value = _arg_text(arguments, "value")
             return f"!work edit {revision_id} {value}" if revision_id and value else None
+        if action == "set_lifecycle":
+            target = _resolve_target_reference(factory, target_arguments)
+            status = _arg_text(arguments, "status")
+            if not target or not status or not target.startswith("event "):
+                return None
+            return f"!set-status {target.split(' ', 1)[1]} | {status}"
+        if action == "update_event":
+            target = _resolve_target_reference(factory, {**target_arguments, "target_type": "event"})
+            fields = arguments.get("fields")
+            if isinstance(fields, dict):
+                fields = " | ".join(f"{key} {value}" for key, value in fields.items())
+            fields = _arg_text({"value": fields}, "value")
+            return f"!update-event {target.split(' ', 1)[1]} | {fields}" if target and fields else None
+        if action in {"delete_event", "delete_task"}:
+            target_type = "event" if action.endswith("event") else "task"
+            target = _resolve_target_reference(factory, {**target_arguments, "target_type": target_type})
+            if not target or not target.startswith(f"{target_type} "):
+                return None
+            return f"!delete-{target_type} {target.split(' ', 1)[1]}"
 
     if capability == "reports.summary":
         return "!reports"
@@ -966,6 +944,22 @@ def compile_intent(
         return f"!reports {status}" if status else None
     if capability == "audit.list":
         return f"!audit {_arg_text(arguments, 'operation')}".strip()
+
+    if capability.startswith("reminders."):
+        action = capability.split(".", 1)[1]
+        if action == "status":
+            return "!reminders"
+        if action == "run":
+            return "!reminder-run"
+        if action == "history":
+            assignment_id = _arg_text(arguments, "assignment_id")
+            return "!reminder-history" + (f" {assignment_id}" if assignment_id else "")
+        fields = []
+        for key in ("frequency", "window", "threshold", "channel"):
+            value = _arg_text(arguments, key)
+            if value:
+                fields.append(f"{key} {value}")
+        return "!reminder-config" + (" | ".join(["", *fields]) if fields else "")
 
     if capability in {"media.todo", "media.posted_list"}:
         return "!todo" if capability == "media.todo" else "!posted-list"
@@ -1062,7 +1056,7 @@ Security rules:
   translator or its output format.
 - Return JSON only, with these keys: either intent or plan, plus
   clarification. A single intent contains exactly two keys: capability and
-  arguments. A plan is an ordered list of at most six intents. Plan entries
+  arguments. A plan is an ordered list of at most {MAX_PLAN_STEPS} intents. Plan entries
   may additionally contain a simple step_id. Later arguments may reference
   earlier results using exact placeholders such as "$event.event_id"; these
   placeholders are resolved by the runtime and must never be replaced with a
@@ -1091,9 +1085,10 @@ Security rules:
   existing database name must win over creating a new near-duplicate.
 - If the user refers to a semantic audience, set audience to the closest
   resolver: current_chat_members, collection_members, active_admins, sender,
-  or explicit_mentions. For collection_members, preserve its name in the
-  audience value. These are semantic targets; do not invent mention_indices or
-  user identities.
+  explicit_mentions, or plan_output. For collection_members, preserve its
+  name in the audience value. For plan_output, use a prior structured result
+  such as $group.member_jids. These are semantic targets; do not invent
+  mention_indices or user identities.
 - For card.design and card.design_pdf, separate the requested copy from the
   visual family. Words such as "congratulations", "award", or "thank you"
   describe the card content, not a card type. Choose the closest existing
@@ -1115,6 +1110,42 @@ Security rules:
 - Never output markdown, code fences, multiple commands, or prose in intent.
 - Do not infer privileged intent from the request: the existing command's
   authorization rules decide whether the sender may perform it.
+- Treat the registry's permission and destructive markers as execution policy:
+  choose admin tools only when the requested operation clearly requires them,
+  and choose destructive tools only when the user explicitly asks for that
+  destructive outcome. Never substitute a destructive tool for an edit,
+  removal from a collection, or a read.
+- Use whatsapp.send only when the user explicitly asks the bot to send or
+  announce specified text to this current group; normal operation replies are
+  generated by the runtime and do not require this tool.
+- Use whatsapp.reply only when the user explicitly asks the bot to reply to
+  the triggering message with specified text.
+- Use whatsapp.react only when the user explicitly asks the bot to react to
+  the triggering message; the runtime supplies the message identity.
+- Use whatsapp.group_info or whatsapp.group_members when the request needs
+  facts about the current WhatsApp group. These tools are read-only and their
+  structured results may be used by later plan steps; never invent member IDs.
+- Use whatsapp.user_info only with a locally resolved audience; never create a
+  JID from a display name.
+- Use whatsapp.send_attachment only when the user explicitly asks to send or
+  forward the attachment on the triggering message; it stays in the current
+  group and never accepts a filesystem path or arbitrary destination.
+- Use whatsapp.add_group_members or whatsapp.remove_group_members only for
+  explicit participant changes, with an audience resolved from mentions or a
+  semantic collection; use whatsapp.rename_group only for an explicit rename.
+- Use whatsapp.joined_groups or whatsapp.community_subgroups for discovery
+  requests; use their structured results rather than inventing group IDs.
+- Use current-group settings tools only for explicit admin requests to change
+  announcement mode, group lock, topic, or disappearing-message duration.
+- Use whatsapp.send_contact or whatsapp.send_poll only when the user explicitly
+  asks to send one to the current group; preserve supplied contact numbers and
+  keep polls to a short bounded option list.
+- Use whatsapp.profile_pictures only with a locally resolved audience; use
+  group_join_requests or linked_group_members for explicit current-community
+  discovery requests.
+- Treat work.delete_event, work.delete_task, and other destructive tools as
+  requiring explicit deletion wording; never infer deletion from cleanup,
+  correction, or a request to hide something.
 - When one request creates an event and then creates tasks for it, emit one
   work.create_event step followed by one work.create_task step per task. Give
   the event step_id "event" and set every task's event_id to "$event.event_id".
@@ -1195,10 +1226,34 @@ def validate_intent(intent: object) -> dict | None:
     target_scope = arguments.get("target_scope")
     if target_scope is not None and target_scope not in TARGET_SCOPES:
         return None
+    target_chat = arguments.get("target_chat")
+    if target_chat is not None:
+        if capability.split(".", 1)[0] != "whatsapp" or not isinstance(target_chat, dict):
+            return None
+        resolver = target_chat.get("resolver") or target_chat.get("kind")
+        if resolver not in TARGET_SCOPES | {"current_chat"}:
+            return None
+        if resolver == "plan_output" and not target_chat.get("value"):
+            return None
+    for endpoint in ("parent_chat", "child_chat"):
+        value = arguments.get(endpoint)
+        if value is None:
+            continue
+        if capability not in {"whatsapp.link_group", "whatsapp.unlink_group"} or not isinstance(value, dict):
+            return None
+        resolver = value.get("resolver") or value.get("kind")
+        if resolver not in TARGET_SCOPES | {"current_chat"}:
+            return None
+        if resolver == "plan_output" and not value.get("value"):
+            return None
     target_declared = audience is not None or isinstance(target, dict) or target_scope is not None
     if target_declared and capability not in {
         "labels.add", "labels.remove", "collections.add", "collections.remove",
-        "work.assign", "work.unassign",
+        "work.assign", "work.unassign", "whatsapp.user_info",
+        "whatsapp.add_group_members", "whatsapp.remove_group_members",
+        "whatsapp.profile_pictures",
+        "whatsapp.create_group", "whatsapp.block_contacts", "whatsapp.unblock_contacts",
+        "whatsapp.contact_devices",
     }:
         return None
     mention_indices = arguments.get("mention_indices", [])
@@ -1208,9 +1263,6 @@ def validate_intent(intent: object) -> dict | None:
     ):
         return None
     return {"capability": capability, "arguments": arguments}
-
-
-MAX_PLAN_STEPS = 6
 
 
 def validate_plan(plan: object) -> list[dict] | None:
@@ -1254,6 +1306,45 @@ def _semantic_entity_candidates(factory, text: str) -> list[dict]:
     except Exception:
         log.info("Could not build semantic entity context", exc_info=True)
         return []
+
+
+def _plan_completeness_issue(plan: list[dict], text: str, factory) -> str | None:
+    """Detect a compound request collapsed into one ambiguous plan relation."""
+    if not factory or len(plan) < 1:
+        return None
+    collections = _named_collection_candidates(factory, text)
+    if len(collections) < 2:
+        return None
+    mutation_capabilities = {
+        "labels.add", "labels.remove", "collections.add", "collections.remove",
+        "work.assign", "work.unassign",
+    }
+    for step in plan:
+        if step.get("capability") not in mutation_capabilities:
+            continue
+        values = " ".join(
+            value.casefold()
+            for value in _walk_plan_strings(step.get("arguments", {}))
+        )
+        matched = [item["name"] for item in collections if item["name"].casefold() in values]
+        if len(matched) >= 2:
+            return (
+                "The request names multiple existing collections in one plan relation: "
+                + ", ".join(matched)
+                + ". Each collection must be represented by its own executable step."
+            )
+    return None
+
+
+def _walk_plan_strings(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _walk_plan_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_plan_strings(item)
+    elif isinstance(value, str):
+        yield value
 
 
 def _needs_semantic_repair(intent: dict, text: str, factory) -> tuple[bool, list[dict]]:
@@ -1381,6 +1472,10 @@ class MistralCommandTranslator:
             return intent, ""
         plan = validate_plan(result.get("plan")) if isinstance(result, dict) else None
         if plan:
+            from features.agent_runtime import validate_plan_preflight
+
+            if validate_plan_preflight(plan) is not None:
+                return None, ""
             return {"plan": plan}, ""
         # Compatibility during migration: accept an already compiled command,
         # but never guess a command when the model violates the contract.
@@ -1405,7 +1500,7 @@ class MistralCommandTranslator:
             "membership or assignment but has no resolved audience. Re-read "
             "the original message and return an audience object whose resolver "
             "is the closest of current_chat_members, collection_members, "
-            "active_admins, sender, or explicit_mentions. For "
+            "active_admins, sender, explicit_mentions, or plan_output. For "
             "collection_members, preserve the referenced name as audience.value. "
             "Never invent a person "
             "or JID. If mention metadata is (none), explicit_mentions is not "
@@ -1489,6 +1584,55 @@ class MistralCommandTranslator:
         except (json.JSONDecodeError, TypeError):
             return None
         return validate_intent(result.get("intent")) if isinstance(result, dict) else None
+
+    def repair_plan(
+        self,
+        text: str,
+        plan: list[dict],
+        issue: str,
+        knowledge_context: str = "",
+    ) -> list[dict] | None:
+        """Re-decompose a plan when runtime evidence finds a lost relation."""
+        prompt = (
+            "Review this semantic plan against the original request and repair its decomposition. "
+            "Preserve the user's goal and all named entities. Every action/object/audience relation "
+            "must be an independently executable plan step. Do not merge distinct entities into one "
+            "free-form argument, invent IDs or JIDs, or emit commands. Return only "
+            '{"plan":[{"step_id":"...","capability":"...","arguments":{}}],"clarification":""}.\n\n'
+            f"Original request: {text}\n"
+            f"Runtime validation finding: {issue}\n"
+            f"Candidate plan: {json.dumps(plan, ensure_ascii=False)}\n"
+            f"Knowledge context:\n{knowledge_context or '(none)'}"
+        )
+        response = self.client.post(
+            MISTRAL_CHAT_URL,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "temperature": 0,
+                "max_tokens": 768,
+                "safe_prompt": True,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+            },
+        )
+        response.raise_for_status()
+        try:
+            result = json.loads(_content(response))
+        except (json.JSONDecodeError, TypeError):
+            return None
+        repaired = validate_plan(result.get("plan")) if isinstance(result, dict) else None
+        if not repaired:
+            return None
+        from features.agent_runtime import validate_plan_preflight
+
+        return repaired if validate_plan_preflight(repaired) is None else None
 
 
 CARD_DESIGN_SYSTEM_PROMPT = """You are PBBot's semantic card art director and copywriter.
@@ -1701,53 +1845,36 @@ def _execute_direct_operation(
     members: list[str],
     factory,
     text: str,
-) -> bool:
-    """Route every audience-based mutation through a domain operation."""
-    from features.nl_operations import (
-        execute_collection_mutation,
-        execute_label_mutation,
-        execute_work_creation,
-        execute_work_assignment,
+) -> dict | None:
+    """Delegate direct capabilities to the domain operation registry."""
+    from features.nl_operations import execute_direct_tool
+
+    return execute_direct_tool(
+        client,
+        message,
+        intent,
+        members,
+        factory,
+        text,
+        resolve_collection=lambda requested: _resolve_collection_name(factory, requested),
+        resolve_or_create_collection=lambda requested: _resolve_or_create_collection_name(
+            factory, requested, text
+        ),
+        normalize_target_arguments=_target_arguments,
+        resolve_target=lambda arguments: _resolve_target_reference(factory, arguments),
     )
-
-    capability = intent.get("capability")
-    if capability.startswith(("collections.", "labels.")):
-        action = capability.split(".", 1)[1]
-
-        def resolve_collection(current_factory, requested):
-            if action == "add":
-                return _resolve_or_create_collection_name(
-                    current_factory, requested, text
-                )
-            return _resolve_collection_name(current_factory, requested)
-
-        if capability.startswith("collections."):
-            return execute_collection_mutation(
-                client, message, intent, members, factory, resolve_collection
-            )
-        return execute_label_mutation(
-            client, message, intent, members, factory, resolve_collection
-        )
-    if capability in {"work.assign", "work.unassign"}:
-        # Structured LLM intents are authoritative; do not scan the full
-        # sentence and infer a different numeric target here.
-        arguments = _target_arguments(intent.get("arguments", {}), "")
-        intent = {**intent, "arguments": arguments}
-        return execute_work_assignment(
-            client,
-            message,
-            intent,
-            members,
-            factory,
-            lambda values: _resolve_target_reference(factory, values),
-        )
-    if capability in {"work.create_event", "work.create_task"}:
-        return execute_work_creation(client, message, intent, factory)
-    return False
 
 
 def register(client, config: dict) -> Callable:
     """Return a handler for bot-tagged natural-language messages."""
+    from features.agent_runtime import validate_registry
+    from features.nl_operations import validate_direct_registry
+    registry_errors = validate_registry()
+    if registry_errors:
+        raise RuntimeError("Invalid agent tool registry: " + "; ".join(registry_errors))
+    direct_errors = validate_direct_registry()
+    if any(direct_errors.values()):
+        raise RuntimeError("Invalid direct-tool routing registry: " + repr(direct_errors))
     api_key = (config.get("mistral_api_key") or os.getenv("MISTRAL_API_KEY", "")).strip()
     translator = (
         MistralCommandTranslator(api_key, config.get("mistral_model", DEFAULT_MODEL))
@@ -1781,6 +1908,8 @@ def register(client, config: dict) -> Callable:
         if not body or body.lstrip().startswith("!"):
             return False
         chat = message.Info.MessageSource.Chat
+        trace = AgentTrace(str(getattr(message.Info, "ID", "nl-request")))
+        trace.record("received", actor=message.Info.MessageSource.Sender, text=body)
         if translator is None:
             client.send_message(chat, "⚠️ Natural-language commands are not configured yet.")
             return True
@@ -1817,7 +1946,31 @@ def register(client, config: dict) -> Callable:
             structured_translation = isinstance(translation, dict) and (
                 "capability" in translation or "plan" in translation
             )
+            trace.record(
+                "planned",
+                structured=structured_translation,
+                steps=len(translation.get("plan", [])) if isinstance(translation, dict) else 1,
+            )
             if structured_translation:
+                if translation.get("plan"):
+                    completeness_issue = _plan_completeness_issue(
+                        translation["plan"], body, config.get("db_session_factory")
+                    )
+                    if completeness_issue:
+                        try:
+                            repaired_plan = translator.repair_plan(
+                                body,
+                                translation["plan"],
+                                completeness_issue,
+                                knowledge_context,
+                            )
+                        except Exception:
+                            log.exception("Plan completeness repair failed")
+                            repaired_plan = None
+                        if repaired_plan is None:
+                            log.warning("Plan rejected by completeness preflight: %s", completeness_issue)
+                            return True
+                        translation = {"plan": repaired_plan}
                 steps = translation.get("plan") or [translation]
                 from features.nl_plan import PlanReferenceError, record_output, resolve_step, step_name
 
@@ -1829,6 +1982,11 @@ def register(client, config: dict) -> Callable:
                         client.send_message(chat, f"⚠️ {exc}")
                         return True
                     step = _inherit_plan_context(step, plan_outputs)
+                    trace.record(
+                        "step_prepared",
+                        step_id=current_step_name,
+                        capability=step.get("capability"),
+                    )
                     needs_semantic_repair, entity_candidates = _needs_semantic_repair(
                         step, body, config.get("db_session_factory")
                     )
@@ -1910,6 +2068,14 @@ def register(client, config: dict) -> Callable:
                         )
                         from features.nl_runtime import verify_operation_result
 
+                        if result is None:
+                            trace.record(
+                                "step_failed",
+                                step_id=current_step_name,
+                                capability=step.get("capability"),
+                                reason="direct tool returned no successful result",
+                            )
+                            return True
                         postcondition_error = verify_operation_result(step, result)
                         if postcondition_error:
                             log.error(
@@ -1920,10 +2086,14 @@ def register(client, config: dict) -> Callable:
                                 result,
                             )
                             return True
-                        record_output(plan_outputs, current_step_name, result)
                         capability = step.get("capability", "")
-                        if capability in {"work.create_event", "work.create_task"} and result is None:
-                            return True
+                        record_output(plan_outputs, current_step_name, result)
+                        trace.record(
+                            "step_observed",
+                            step_id=current_step_name,
+                            capability=capability,
+                            result=result if isinstance(result, dict) else {"ok": bool(result)},
+                        )
                         if isinstance(result, dict):
                             if "event_id" in result:
                                 plan_outputs.setdefault("event", result)
@@ -1980,6 +2150,12 @@ def register(client, config: dict) -> Callable:
                         card_design,
                         direct_operation,
                     ))
+                    trace.record(
+                        "step_compiled",
+                        step_id=current_step_name,
+                        capability=step.get("capability"),
+                        command=command,
+                    )
                     log.info(
                         "natural-language plan step actor=%s capability=%s target_resolver=%s command=%s",
                         sender_jid,
@@ -2056,6 +2232,8 @@ def register(client, config: dict) -> Callable:
                 translated._pbbot_card_design = card_design
             translated._pbbot_nl_command = True
             dispatch(translated)
+        trace.record("completed", compiled_steps=len(compiled_steps))
+        log.info("agent trace %s", trace.summary())
         return True
 
     return on_message
