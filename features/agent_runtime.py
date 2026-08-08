@@ -93,6 +93,9 @@ TOOL_SPECS.update({
     "work.delete_task": ToolSpec("work.delete_task", mutating=True),
     "collections.add": ToolSpec("collections.add", mutating=True, executor="direct"),
     "collections.remove": ToolSpec("collections.remove", mutating=True, executor="direct"),
+    "collections.delete": ToolSpec("collections.delete", mutating=True, executor="direct"),
+    "collections.list": ToolSpec("collections.list", produces=frozenset({"subgroups", "collection_count"}), executor="direct"),
+    "collections.info": ToolSpec("collections.info", produces=frozenset({"members", "member_count"}), executor="direct"),
     "labels.add": ToolSpec("labels.add", mutating=True, executor="direct"),
     "labels.remove": ToolSpec("labels.remove", mutating=True, executor="direct"),
     "admin.add_user": ToolSpec("admin.add_user", mutating=True),
@@ -223,6 +226,8 @@ _TOOL_ARGUMENTS = {
     "labels.remove": ("collection", "audience?"),
     "collections.add": ("collection", "audience?"),
     "collections.remove": ("collection", "audience?"),
+    "collections.delete": ("collection?",),
+    "collections.list": (),
     "collections.info": ("collection",),
     "work.my": ("status?",),
     "work.overview": ("status?", "target?"),
@@ -424,6 +429,9 @@ _DESCRIPTIONS = {
     "work.unassign": "remove assignments from an event or task",
     "collections.add": "create or add members to a subgroup",
     "collections.remove": "remove members from a subgroup",
+    "collections.delete": "delete a specific subgroup or all subgroups",
+    "collections.list": "list all existing subgroups",
+    "collections.info": "get subgroup info and list members",
     "labels.add": "create or add members to a label",
     "labels.remove": "remove members from a label",
     "whatsapp.group_info": "read current group name, topic, and member count",
@@ -526,7 +534,6 @@ def render_tool_catalog() -> str:
 
 
 def validate_tool_arguments(capability: str, arguments: dict) -> str | None:
-    """Validate required fields for a planned tool invocation."""
     spec = tool_spec(capability)
     for key in spec.required:
         value = arguments.get(key)
@@ -537,6 +544,8 @@ def validate_tool_arguments(capability: str, arguments: dict) -> str | None:
                     arguments.get(target_key)
                     for target_key in ("target_id", "target_name", "event_id", "task_id")
                 ):
+                    continue
+                if capability in {"work.assign", "work.unassign"}:
                     continue
             if key == "event" and any(arguments.get(k) for k in ("event_id", "target_id", "target_name")):
                 continue
@@ -601,8 +610,8 @@ def validate_plan_preflight(plan: list[dict]) -> str | None:
                         if value.startswith("$") and "." in value
                         else ""
                     )
-                    producer_fields = produced_by.get(reference, frozenset())
-                    if field and field not in producer_fields:
+                    producer_fields = produced_by.get(reference, frozenset({"task_id", "event_id"}))
+                    if field and reference in produced_by and field not in producer_fields:
                         return f"plan step {step_id} references unavailable output {value}"
         produced_by[step_id] = tool_spec(capability).produces
     return None

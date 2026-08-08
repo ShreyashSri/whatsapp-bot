@@ -195,19 +195,21 @@ def main() -> None:
 
     @client.event(MessageEv)
     def on_message(_client: NewClient, message: MessageEv):
+        info = getattr(message, "Info", None)
+        source = getattr(info, "MessageSource", None)
+        chat = getattr(source, "Chat", None)
+        chat_id = _jid_string(chat) if chat else ""
+        is_from_me = getattr(info, "IsFromMe", False)
+
         if time.monotonic() < accept_messages_after:
             return
 
-        info = getattr(message, "Info", None)
         message_timestamp = int(getattr(info, "Timestamp", 0) or 0)
         if message_timestamp <= startup_timestamp:
             return
 
         # TEST-ONLY GUARD: remove this exact-group check when production
         # routing is designed.
-        source = getattr(info, "MessageSource", None)
-        chat = getattr(source, "Chat", None)
-        chat_id = _jid_string(chat) if chat else ""
         if (
             not allowed_group
             or not chat_id.endswith("@g.us")

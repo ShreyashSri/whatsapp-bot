@@ -540,28 +540,73 @@ def _collection_argument_values(arguments: dict) -> list[str]:
     return list(dict.fromkeys(item.strip() for item in values if item.strip()))
 
 
-def _target_arguments(arguments: dict, text: str) -> dict:
+def _parse_compound_target(raw: object) -> tuple[str, object] | None:
+    """Parse a compound target value into (type, id_or_name) if possible.
+
+    Handles the forms the model commonly emits:
+      - "event 5" / "task 3"   → ("event", "5")
+      - {"type": "event", "id": 5}  → ("event", 5)
+      - {"target_type": "task", "target_id": 3}  → ("task", 3)
+    Returns None when the value doesn't match any known compound form.
+    """
+    if isinstance(raw, dict):
+        t = (
+            raw.get("type")
+            or raw.get("target_type")
+            or raw.get("kind")
+            or ""
+        )
+        i = raw.get("id") or raw.get("target_id") or raw.get("task_id") or raw.get("event_id")
+        if isinstance(t, str) and t.casefold() in {"event", "task"} and i is not None:
+            return t.casefold(), i
+        return None
+    if isinstance(raw, str):
+        m = re.match(r"^(event|task)\s+(\d+)$", raw.strip(), re.IGNORECASE)
+        if m:
+            return m.group(1).casefold(), m.group(2)
+    return None
+
+
+def _target_arguments(arguments: dict, text: str = "") -> dict:
     """Prefer an explicit task/event reference in the user's wording."""
     result = dict(arguments)
-    # Models may use the capability's natural field name (``event`` or
-    # ``task``) instead of the compiler's canonical target fields. Normalize
-    # those aliases once at the command boundary so every scoped capability
-    # gets the same resolution behavior.
-    if not any(result.get(key) for key in ("target_id", "target_name")):
+    raw_target = result.get("target")
+    compound = _parse_compound_target(raw_target)
+    if compound:
+        t_type, t_id = compound
+        result.setdefault("target_type", t_type)
+        result.setdefault("target_id", t_id)
+    elif isinstance(raw_target, str) and raw_target.casefold() in {"event", "task"}:
+        result.setdefault("target_type", raw_target.casefold())
+    elif isinstance(raw_target, (int, float)) or (isinstance(raw_target, str) and raw_target.strip().isdigit()):
+        result.setdefault("target_id", raw_target)
+
+    if not result.get("target_type"):
         for key, target_type in (("event_id", "event"), ("task_id", "task")):
-            value = result.get(key)
-            if value is not None:
+            if result.get(key) is not None:
                 result["target_type"] = target_type
-                result["target_id"] = value
+                if "target_id" not in result:
+                    result["target_id"] = result[key]
                 break
         else:
             for key, target_type in (("event_name", "event"), ("event", "event"),
                                      ("task_name", "task"), ("task", "task")):
                 value = result.get(key)
-                if isinstance(value, str) and value.strip():
+                if isinstance(value, str) and value.strip() and value.casefold() not in {"event", "task"}:
                     result["target_type"] = target_type
                     result["target_name"] = value.strip()
                     break
+
+    if not any(result.get(key) is not None for key in ("target_id", "target_name")):
+        for key in ("event_id", "task_id", "event", "task"):
+            value = result.get(key)
+            if value is not None and key not in ("target_type", "target"):
+                if isinstance(value, (int, float)) or (isinstance(value, str) and value.strip().isdigit()):
+                    result["target_id"] = value
+                elif isinstance(value, str) and value.strip() and value.casefold() not in {"event", "task"}:
+                    result["target_name"] = value.strip()
+                break
+
     has_explicit_target = any(
         result.get(key) is not None
         for key in ("target_id", "target_name", "event_id", "task_id")
@@ -575,44 +620,62 @@ def _target_arguments(arguments: dict, text: str) -> dict:
 
 
 def _resolve_target_reference(factory, arguments: dict) -> str | None:
-    target_type = str(arguments.get("target_type") or "event").casefold()
-    if target_type not in {"event", "task"}:
+    # First, try to decode a compound target value (e.g. "event 5" or {"type": "event", "id": 5})
+    raw_target = arguments.get("target")
+    compound = _parse_compound_target(raw_target)
+    if compound:
+        c_type, c_id = compound
+        if isinstance(c_id, (int, float)) and int(c_id) >= 0:
+            return f"{c_type} {int(c_id)}"
+        if isinstance(c_id, str) and c_id.strip().isdigit():
+            return f"{c_type} {int(c_id.strip())}"
+
+    raw_type = arguments.get("target_type") or (raw_target if isinstance(raw_target, str) and raw_target.casefold() in {"event", "task"} else None)
+    target_type = str(raw_type).casefold() if isinstance(raw_type, str) else ""
+    target_id = arguments.get("target_id") or arguments.get("task_id") or arguments.get("event_id")
+    if not target_id and isinstance(raw_target, (int, float)):
+        target_id = raw_target
+    if not target_id and isinstance(raw_target, str) and raw_target.strip().isdigit():
+        target_id = raw_target
+
+    if not target_type and target_id is not None:
+        target_type = "task"
+
+    if target_type in {"event", "task"}:
+        if isinstance(target_id, int) and target_id >= 0:
+            return f"{target_type} {target_id}"
+        if isinstance(target_id, str) and target_id.strip().isdigit():
+            return f"{target_type} {int(target_id.strip())}"
+
+    requested = arguments.get("target_name") or (str(target_id) if target_id and not str(target_id).isdigit() else None)
+    if not isinstance(requested, str) or not requested.strip() or not factory:
         return None
-    target_id = arguments.get("target_id")
-    if isinstance(target_id, int) and target_id >= 0:
-        return f"{target_type} {target_id}"
-    if isinstance(target_id, str) and target_id.strip().isdigit():
-        return f"{target_type} {int(target_id.strip())}"
-    requested = arguments.get("target_name")
-    if not isinstance(requested, str) or not factory:
-        return None
+
     try:
-        if target_type == "event":
-            from db.event_store import EventStore
-            records = [event["name"] for event in EventStore(factory).list_events(status="active")]
-        else:
-            from db.task_store import TaskStore
-            records = [task.title for task in TaskStore(factory).list_all()]
+        from db.event_store import EventStore
+        from db.task_store import TaskStore
+
+        candidates = []
+        if target_type != "task":
+            events = EventStore(factory).list_events(status="active")
+            for e in events:
+                score = _entity_match_score(requested, e["name"], e.get("category", ""))
+                if score >= 0.4:
+                    candidates.append(("event", e["id"], e["name"], score))
+        if target_type != "event":
+            tasks = TaskStore(factory).list_all()
+            for t in tasks:
+                score = _entity_match_score(requested, t.title)
+                if score >= 0.4:
+                    candidates.append(("task", t.id, t.title, score))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: -item[3])
+        best_type, best_id, _, best_score = candidates[0]
+        return f"{best_type} {best_id}"
     except Exception:
         log.info("Could not resolve target reference", exc_info=True)
-        return None
-    ranked = sorted(
-        ((name, _entity_match_score(requested, name)) for name in records),
-        key=lambda item: (-item[1], item[0]),
-    )
-    if not ranked or ranked[0][1] < 0.5:
-        return None
-    if len(ranked) > 1 and ranked[1][1] == ranked[0][1]:
-        return None
-    try:
-        if target_type == "event":
-            from db.event_store import EventStore
-            event = next(event for event in EventStore(factory).list_events(status="active") if event["name"] == ranked[0][0])
-            return f"event {event['id']}"
-        from db.task_store import TaskStore
-        task = next(task for task in TaskStore(factory).list_all() if task.title == ranked[0][0])
-        return f"task {task.id}"
-    except StopIteration:
         return None
 
 
@@ -1018,6 +1081,30 @@ def build_knowledge_context(config: dict, text: str) -> str:
         except Exception:
             log.info("Could not load event knowledge context", exc_info=True)
 
+        try:
+            from db.task_store import TaskStore
+            from db.work_store import WorkStore
+
+            tasks = TaskStore(factory).list_all()[-12:]
+            if tasks:
+                work = WorkStore(factory)
+                lines.append("Recent bot tasks (use only when the request refers to them):")
+                for task in tasks:
+                    assignees = [
+                        row["user_jid"].split("@", 1)[0]
+                        for row in work.overview(target_type="task", target_id=task.id, admin=True)
+                    ]
+                    assignee_str = ", ".join(f"@{a}" for a in assignees) if assignees else "unassigned"
+                    lines.append(
+                        f"- task {task.id}: {task.title} "
+                        f"(status={task.status}, {assignee_str}"
+                        + (f", event={task.event_id}" if task.event_id else "")
+                        + ")"
+                    )
+        except Exception:
+            log.info("Could not load task knowledge context", exc_info=True)
+
+
         candidates = _named_entity_candidates(factory, text)
         if candidates:
             lines.append("Fuzzy entity candidates (correct minor typos; use only if the request clearly refers to one):")
@@ -1146,12 +1233,33 @@ Security rules:
 - Treat work.delete_event, work.delete_task, and other destructive tools as
   requiring explicit deletion wording; never infer deletion from cleanup,
   correction, or a request to hide something.
-- When one request creates an event and then creates tasks for it, emit one
+- For work.delete_event, work.delete_task, work.assign, work.unassign,
+  work.history, work.status, work.start, work.complete, work.update, and
+  work.update_event: always set event_id or task_id (as a plain integer) in
+  the arguments, never use a compound string like "event 5" as the target
+  value. If the user gives an explicit numeric ID, use that integer directly.
+  If the user says "all events" or "all tasks" (or "all tasks and events")
+  and active entities appear in the knowledge context under "Recent active bot
+  events" or "Recent bot tasks", emit one delete step per entity ID listed
+  there — do NOT emit work.overview first, go straight to the delete/unassign
+  steps. For unassign-everything, emit one work.unassign (omit audience) step
+  per assigned task/event from the knowledge context.
+- For requests to create or add members to a subgroup/collection (e.g., "make subgroup X", "create subgroup X"), use capability "collections.add" with argument collection="X".
+- For requests to delete a subgroup or all subgroups (e.g., "delete subgroup X", "delete all subgroups"), use capability "collections.delete". For deleting all subgroups, omit the collection argument.
+- For requests to list subgroups (e.g., "list all subgroups", "show subgroups"), use capability "collections.list".
+- When a request mentions "@everyone", "@all", or "everyone in this group" to populate a subgroup or label, set audience={{"resolver": "current_chat_members"}}.
+- When one request creates a NEW event and then creates tasks for it, emit one
   work.create_event step followed by one work.create_task step per task. Give
   the event step_id "event" and set every task's event_id to "$event.event_id".
+- Do NOT emit work.create_event if the request refers to an existing event (e.g., "under event X", "for event X"); set event_id or event to "X" directly on the work.create_task step.
 - For a generic event with no explicit classification, use type
   "organization" and category "other". Split bullet points or enumerated
   action items into separate work.create_task steps.
+- For work.unassign: if the user says "unassign everyone", "remove all members",
+  "clear assignments", or similar without naming specific people, emit
+  work.unassign with NO audience field. The runtime will automatically remove
+  all current assignees for that work item. Do NOT emit a work.overview step
+  just to discover assignees — the runtime handles that internally.
 
 {COMMAND_REFERENCE}
 
@@ -1210,7 +1318,7 @@ def validate_intent(intent: object) -> dict | None:
         if resolver not in TARGET_SCOPES:
             return None
         if resolver == "collection_members" and not (
-            audience.get("value") or audience.get("name")
+            audience.get("value") or audience.get("name") or audience.get("collection")
         ):
             return None
     # Transitional compatibility for early audience objects in target.
@@ -1220,7 +1328,7 @@ def validate_intent(intent: object) -> dict | None:
         if resolver not in TARGET_SCOPES:
             return None
         if resolver == "collection_members" and not (
-            target.get("value") or target.get("name")
+            target.get("value") or target.get("name") or target.get("collection")
         ):
             return None
     target_scope = arguments.get("target_scope")
@@ -1295,6 +1403,18 @@ def _needs_target_repair(intent: dict, text: str, mentioned_jids: list[str]) -> 
     from features.nl_runtime import target_is_required_and_missing
 
     return target_is_required_and_missing(intent, mentioned_jids)
+
+
+def _fix_everyone_audience(step: dict, text: str, visible_mentions: list[str]) -> dict:
+    """If the text asks to affect @everyone / @all / all members but has no native WhatsApp mentions, map to current_chat_members."""
+    if not visible_mentions and re.search(r"@everyone\b|@all\b|\beveryone\b|\ball\s+members\b|\beverybody\b", text, re.IGNORECASE):
+        arguments = dict(step.get("arguments", {}))
+        audience = arguments.get("audience")
+        resolver = audience.get("resolver") if isinstance(audience, dict) else None
+        if audience is None or resolver in (None, "explicit_mentions"):
+            arguments["audience"] = {"resolver": "current_chat_members"}
+            return {**step, "arguments": arguments}
+    return step
 
 
 def _semantic_entity_candidates(factory, text: str) -> list[dict]:
@@ -1375,18 +1495,35 @@ def _canonicalize_entity_scope(intent: dict, candidates: list[dict]) -> dict:
 
 
 def _inherit_plan_context(intent: dict, plan_outputs: dict[str, dict]) -> dict:
-    """Propagate a unique created parent into dependent work steps."""
-    if intent.get("capability") != "work.create_task":
-        return intent
+    """Propagate a unique created parent or target into dependent work steps."""
+    capability = intent.get("capability")
     arguments = dict(intent.get("arguments", {}))
-    if arguments.get("event_id") is not None:
-        return intent
-    event = plan_outputs.get("event")
-    event_id = event.get("event_id") if isinstance(event, dict) else None
-    if event_id is None:
-        return intent
-    arguments["event_id"] = event_id
-    return {**intent, "arguments": arguments}
+    if capability == "work.create_task":
+        if arguments.get("event_id") is not None:
+            return intent
+        event = plan_outputs.get("event")
+        event_id = event.get("event_id") if isinstance(event, dict) else None
+        if event_id is None:
+            return intent
+        arguments["event_id"] = event_id
+        return {**intent, "arguments": arguments}
+    elif capability in {"work.assign", "work.unassign"}:
+        has_target = any(
+            arguments.get(key) is not None
+            for key in ("target_id", "target_name", "target", "event_id", "task_id")
+        )
+        if not has_target:
+            task = plan_outputs.get("task")
+            if isinstance(task, dict) and task.get("task_id"):
+                arguments["target_type"] = "task"
+                arguments["target_id"] = task["task_id"]
+                return {**intent, "arguments": arguments}
+            event = plan_outputs.get("event")
+            if isinstance(event, dict) and event.get("event_id"):
+                arguments["target_type"] = "event"
+                arguments["target_id"] = event["event_id"]
+                return {**intent, "arguments": arguments}
+    return intent
 
 
 def _content(response: httpx.Response) -> str:
@@ -1465,6 +1602,7 @@ class MistralCommandTranslator:
         response.raise_for_status()
         try:
             result = json.loads(_content(response))
+            log.info("RAW MISTRAL JSON: %s", json.dumps(result, ensure_ascii=False))
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError("Mistral returned invalid JSON") from exc
         intent = validate_intent(result.get("intent")) if isinstance(result, dict) else None
@@ -1474,7 +1612,9 @@ class MistralCommandTranslator:
         if plan:
             from features.agent_runtime import validate_plan_preflight
 
-            if validate_plan_preflight(plan) is not None:
+            preflight_error = validate_plan_preflight(plan)
+            if preflight_error is not None:
+                log.warning("Plan rejected by preflight validation: %s", preflight_error)
                 return None, ""
             return {"plan": plan}, ""
         # Compatibility during migration: accept an already compiled command,
@@ -1943,6 +2083,7 @@ def register(client, config: dict) -> Callable:
                 knowledge_context,
                 attachment_context=attachment_context,
             )
+            log.info("DEBUG MISTRAL TRANSLATION: %s", json.dumps(translation, ensure_ascii=False) if isinstance(translation, (dict, list)) else repr(translation))
             structured_translation = isinstance(translation, dict) and (
                 "capability" in translation or "plan" in translation
             )
@@ -2019,6 +2160,7 @@ def register(client, config: dict) -> Callable:
                             )
                             return True
                     step = _canonicalize_entity_scope(step, entity_candidates)
+                    step = _fix_everyone_audience(step, body, visible_mentions)
                     if _needs_target_repair(step, body, visible_mentions):
                         try:
                             repaired = translator.repair_missing_target(
