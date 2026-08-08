@@ -107,7 +107,8 @@ DIRECT_CAPABILITIES = frozenset(
 # Keeping this audit next to the domain dispatcher makes a newly registered
 # direct tool fail verification instead of silently returning no result.
 _DIRECT_SPECIAL_CAPABILITIES = frozenset({
-    "collections.add", "collections.remove", "labels.add", "labels.remove",
+    "collections.add", "collections.remove", "collections.delete", "collections.list", "collections.info",
+    "labels.add", "labels.remove",
     "work.assign", "work.unassign", "work.create_event", "work.create_task",
     "work.my", "work.overview", "work.list_event_tasks",
     "whatsapp.add_group_members", "whatsapp.remove_group_members",
@@ -1187,8 +1188,17 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
             labels = arguments.get("labels") or []
             if isinstance(labels, str):
                 labels = [item.strip() for item in labels.split(",") if item.strip()]
+            name = str(arguments.get("name") or "").strip()
+            if not name:
+                client.send_message(
+                    chat,
+                    "⚠️ To create an event I need at least a *name*.\n"
+                    "Example: `@me create a hackathon event called PBCTF 5.0`\n"
+                    "Optional extras: type (participation/organization), category, description, start/end dates.",
+                )
+                return None
             event = EventStore(factory).create_event(
-                name=str(arguments.get("name") or "").strip(),
+                name=name,
                 type=str(arguments.get("type") or "organization").strip(),
                 category=str(arguments.get("category") or "other").strip(),
                 description=arguments.get("description"),
@@ -1204,12 +1214,43 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
             return {"event_id": event["id"], "event": event}
 
         from db.task_store import TaskStore
-        event_id = arguments.get("event_id")
+        title = str(arguments.get("title") or "").strip()
+        if not title:
+            client.send_message(
+                chat,
+                "⚠️ To create a task I need at least a *title*.\n"
+                "Example: `@me create a task called Design poster due 2026-08-20 under event LFX`\n"
+                "Optional extras: description, due date (YYYY-MM-DD), priority (low/medium/high), event name.",
+            )
+            return None
+        raw_event = arguments.get("event_id") if arguments.get("event_id") is not None else (arguments.get("event_name") or arguments.get("event"))
+        resolved_event_id = None
+        if raw_event is not None:
+            if isinstance(raw_event, int) or (isinstance(raw_event, str) and raw_event.strip().isdigit()):
+                resolved_event_id = int(str(raw_event).strip())
+            elif isinstance(raw_event, str) and raw_event.strip() and factory:
+                try:
+                    from db.event_store import EventStore
+                    from features.natural_language import _entity_match_score
+                    events = EventStore(factory).list_events(status="active")
+                    match = next((e for e in events if e["name"].casefold() == raw_event.strip().casefold()), None)
+                    if not match:
+                        ranked = sorted(
+                            ((e, _entity_match_score(raw_event, e["name"], e.get("category", ""))) for e in events),
+                            key=lambda item: -item[1],
+                        )
+                        if ranked and ranked[0][1] >= 0.4:
+                            match = ranked[0][0]
+                    if match:
+                        resolved_event_id = match["id"]
+                except Exception:
+                    pass
+
         task = TaskStore(factory).create(
-            title=str(arguments.get("title") or "").strip(),
+            title=title,
             created_by_jid=source.Sender,
             description=arguments.get("description"),
-            event_id=int(event_id) if event_id is not None else None,
+            event_id=resolved_event_id,
             due_date=_parse_date(arguments.get("due")),
             priority=str(arguments.get("priority") or "medium").lower(),
         )
@@ -1233,24 +1274,74 @@ def execute_collection_mutation(
     factory,
     resolve_collection: Callable[[object, str], str | None],
 ) -> dict | None:
-    """Execute a subgroup add/remove operation with concrete members."""
+    """Execute a subgroup add/remove/delete/list/info operation."""
     source = message.Info.MessageSource
     chat = source.Chat
     action = intent["capability"].split(".", 1)[1]
-    collection = resolve_collection(
-        factory, intent.get("arguments", {}).get("collection")
-    )
-    if not collection:
-        client.send_message(chat, "⚠️ I couldn't resolve the subgroup name.")
-        return None
-    from db.subgroup_store import SubgroupStore
-    from features.subgroups import add_subgroup_members, remove_subgroup_members
 
     actor = _authorize_tool(factory, source.Sender, client, chat, intent["capability"])
     if not actor:
         return None
+
+    from db.subgroup_store import SubgroupStore
+    from features.subgroups import add_subgroup_members, remove_subgroup_members
+    store = SubgroupStore(factory)
+
     try:
-        store = SubgroupStore(factory)
+        if action == "list":
+            subgroups = store.read()
+            if not subgroups:
+                client.send_message(chat, "📭 No subgroups defined yet.")
+                return {"subgroups": [], "collection_count": 0}
+            lines = [f"• *@{name}* — {len(m)} member(s)" for name, m in sorted(subgroups.items())]
+            client.send_message(chat, f"*📋 Subgroups ({len(subgroups)})*\n\n" + "\n".join(lines))
+            return {"subgroups": list(subgroups.keys()), "collection_count": len(subgroups)}
+
+        if action == "info":
+            raw_coll = intent.get("arguments", {}).get("collection")
+            collection = resolve_collection(factory, raw_coll) if raw_coll else None
+            if not collection:
+                client.send_message(chat, "⚠️ I couldn't resolve the subgroup name.")
+                return None
+            subgroups = store.read()
+            if collection not in subgroups:
+                client.send_message(chat, f"⚠️ Subgroup *@{collection}* does not exist.")
+                return None
+            members_list = subgroups[collection]
+            mention_parts = [f"@{jid.split('@')[0]}" for jid in members_list]
+            text = f"*@{collection}* — {len(members_list)} member(s)\n\n" + "\n".join(f"  • {m}" for m in mention_parts)
+            client.send_message(chat, text)
+            return {"collection": collection, "members": members_list, "member_count": len(members_list)}
+
+        if action == "delete":
+            raw_coll = intent.get("arguments", {}).get("collection")
+            collection = resolve_collection(factory, raw_coll) if raw_coll else None
+            if collection:
+                deleted = store.delete(collection)
+                if deleted:
+                    client.send_message(chat, f"🗑️ Subgroup *@{collection}* deleted.")
+                    return {"collection": collection, "action": action, "deleted": True}
+                else:
+                    client.send_message(chat, f"⚠️ Subgroup *@{collection}* does not exist.")
+                    return None
+            else:
+                # Delete ALL subgroups
+                subgroups = store.read()
+                if not subgroups:
+                    client.send_message(chat, "📭 No subgroups defined.")
+                    return {"action": action, "deleted_count": 0}
+                count = len(subgroups)
+                store.write({})
+                client.send_message(chat, f"🗑️ Deleted all {count} subgroup(s).")
+                return {"action": action, "deleted_count": count}
+
+        # For add and remove, require a resolved collection name
+        raw_coll = intent.get("arguments", {}).get("collection")
+        collection = resolve_collection(factory, raw_coll) if raw_coll else None
+        if not collection:
+            client.send_message(chat, "⚠️ I couldn't resolve the subgroup name.")
+            return None
+
         if action == "add":
             added, total = add_subgroup_members(store, collection, members)
             if added:
@@ -1373,18 +1464,85 @@ def execute_work_assignment(
     actor = _authorize_tool(factory, source.Sender, client, chat, intent["capability"])
     if not actor:
         return None
+    action = intent["capability"].split(".", 1)[1]
     reference = resolve_work_target(intent.get("arguments", {}))
     if not reference:
-        client.send_message(chat, "⚠️ I couldn't resolve the event or task.")
+        if action == "unassign":
+            # No specific target — unassign from ALL currently assigned work items.
+            store = WorkStore(factory)
+            targets = list(dict.fromkeys(
+                normalize_jid(member) for member in members if normalize_jid(member)
+            ))
+            try:
+                all_rows = store.overview(admin=True)
+                # Group by (target_type, target_id)
+                seen: set[tuple] = set()
+                work_items: list[tuple[str, int]] = []
+                for row in all_rows:
+                    key = (row.get("target_type", ""), row.get("target_id"))
+                    if key[0] and key[1] is not None and key not in seen:
+                        seen.add(key)
+                        work_items.append(key)
+                if not work_items:
+                    client.send_message(chat, "📭 No assignments found to remove.")
+                    return {"action": action, "members": []}
+                total_removed: list[str] = []
+                for t_type, t_id in work_items:
+                    t_targets = list(targets)
+                    if not t_targets:
+                        # Remove all assignees for this specific item
+                        item_rows = store.overview(target_type=t_type, target_id=t_id, admin=True)
+                        t_targets = list(dict.fromkeys(
+                            normalize_jid(r["user_jid"]) for r in item_rows if normalize_jid(r["user_jid"])
+                        ))
+                    if t_targets:
+                        removed = store.unassign_many(t_type, t_id, t_targets)
+                        audit(factory, actor, f"{t_type}.unassign", "natural_language",
+                              {"target_id": t_id, "users": removed})
+                        total_removed.extend(removed)
+                if total_removed:
+                    client.send_message(chat, f"✅ Removed {len(total_removed)} assignment(s) across all work items.")
+                else:
+                    client.send_message(chat, "📭 No matching assignments found.")
+                return {"action": action, "members": total_removed}
+            except Exception as exc:
+                client.send_message(chat, f"⚠️ {exc}")
+                return None
+        target_name = intent.get("arguments", {}).get("target_name") or intent.get("arguments", {}).get("target_id") or ""
+        if target_name:
+            client.send_message(
+                chat,
+                f"⚠️ I couldn't find an event or task named *{target_name}*.\n"
+                "Use `!work` to see current events and their IDs, then try again with the exact ID.\n"
+                "Example: `@me assign event 1 to subgroup abc`",
+            )
+        else:
+            client.send_message(chat, "⚠️ Please specify which event or task to assign. Example: `@me assign event LFX to subgroup abc`")
         return None
+
     target_type, target_id = reference.split()
     store = WorkStore(factory)
     targets = list(dict.fromkeys(normalize_jid(member) for member in members if normalize_jid(member)))
-    if not targets:
-        client.send_message(chat, "⚠️ I couldn't resolve any assignees.")
-        return None
-    action = intent["capability"].split(".", 1)[1]
+
     try:
+        if action == "unassign" and not targets:
+            # No explicit audience — remove ALL current assignees for this work item.
+            current_rows = store.overview(
+                target_type=target_type, target_id=int(target_id), admin=True
+            )
+            targets = list(dict.fromkeys(
+                normalize_jid(row["user_jid"])
+                for row in current_rows
+                if normalize_jid(row["user_jid"])
+            ))
+            if not targets:
+                client.send_message(chat, f"📭 No assignments found on {target_type} {target_id}.")
+                return {"target": f"{target_type} {target_id}", "action": action, "members": []}
+        elif not targets:
+            client.send_message(chat, "⚠️ I couldn't resolve any assignees.")
+            return None
+
+
         if action == "assign":
             rows = store.assign_many(target_type, int(target_id), targets)
             assigned = [row["user_jid"].split("@", 1)[0] for row in rows]

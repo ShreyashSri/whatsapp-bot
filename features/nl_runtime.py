@@ -33,9 +33,13 @@ CAPABILITY_CONTRACTS: dict[str, CapabilityContract] = {
     # These handlers cannot perform the operation without concrete members.
     "collections.add": CapabilityContract("required"),
     "collections.remove": CapabilityContract("required"),
+    "collections.delete": CapabilityContract("optional"),
+    "collections.list": CapabilityContract("optional"),
+    "collections.info": CapabilityContract("optional"),
     "labels.remove": CapabilityContract("required"),
     "work.assign": CapabilityContract("required"),
-    "work.unassign": CapabilityContract("required"),
+    # For unassign, audience is optional: omitting it means "remove all current assignees".
+    "work.unassign": CapabilityContract("optional"),
     "whatsapp.user_info": CapabilityContract("required"),
     "whatsapp.add_group_members": CapabilityContract("required"),
     "whatsapp.remove_group_members": CapabilityContract("required"),
@@ -120,25 +124,50 @@ def verify_operation_result(intent: dict, result: object) -> str | None:
     return None
 
 
+def _normalize_collection_value(value: object) -> object:
+    """Flatten a single-element list to a plain string.
+
+    The model occasionally wraps a collection name in a list (e.g.
+    ``['abc']``).  Downstream resolvers require a plain string, so unwrap
+    here when the list contains exactly one item.
+    """
+    if isinstance(value, list):
+        # Strip any leading @ before comparing
+        strings = [v.strip().lstrip("@") if isinstance(v, str) else v for v in value if v]
+        if len(strings) == 1 and isinstance(strings[0], str):
+            return strings[0]
+    if isinstance(value, str):
+        return value.strip().lstrip("@") if value.strip().startswith("@") else value
+    return value
+
+
 def target_expression(arguments: dict) -> tuple[str, object]:
     """Return the canonical (resolver, value) target expression."""
     audience = arguments.get("audience")
     if isinstance(audience, dict):
         resolver = audience.get("resolver") or audience.get("kind") or ""
-        value = audience.get("value") or audience.get("name") or ""
-        return str(resolver), value
+        value = audience.get("value") or audience.get("name") or audience.get("collection") or ""
+        return str(resolver), _normalize_collection_value(value)
 
     # Transitional compatibility for early structured responses. Do not
     # interpret a work item string in arguments["target"] as an audience.
     target = arguments.get("target")
     if isinstance(target, dict):
         resolver = target.get("resolver") or target.get("kind") or ""
-        value = target.get("value") or target.get("name") or ""
-        return str(resolver), value
+        value = target.get("value") or target.get("name") or target.get("collection") or ""
+        return str(resolver), _normalize_collection_value(value)
 
     resolver = arguments.get("target_scope") or ""
     value = arguments.get("target_collection") or ""
-    return str(resolver), value
+    if resolver:
+        return str(resolver), _normalize_collection_value(value)
+
+    for key in ("collections", "labels"):
+        val = arguments.get(key)
+        if val:
+            return "collection_members", _normalize_collection_value(val)
+
+    return "", ""
 
 
 def target_is_declared(arguments: dict, visible_mentions: list[str]) -> bool:
@@ -228,17 +257,33 @@ def resolve_target(
         elif resolver == "collection_members":
             if factory is None or not value:
                 return TargetResolution(error="The referenced member collection is missing.")
-            resolved_names = resolve_collection(value)
+            # Guard: if value is still a list after target_expression normalization
+            # (e.g. multi-element list from model), unwrap or join into a single string.
+            lookup_value: object = value
+            if isinstance(lookup_value, list):
+                lookup_value = " ".join(
+                    str(v).strip().lstrip("@") for v in lookup_value if v
+                ) or value
+            resolved_names = resolve_collection(lookup_value)
             if isinstance(resolved_names, str):
                 resolved_names = [resolved_names]
             if not resolved_names:
-                return TargetResolution(error="The referenced member collection was not found.")
+                return TargetResolution(error=f"Subgroup '{lookup_value}' not found. Use `!list-subgroups` to see available subgroups.")
             collections = SubgroupStore(factory).read()
             members = [
                 member
                 for name in resolved_names
                 for member in collections.get(name, [])
             ]
+            # For collection_members, never filter out self_jids — a human admin
+            # who runs the bot from their own number is a legitimate group member.
+            deduped = _dedupe_members(members, set())
+            if not deduped:
+                return TargetResolution(
+                    resolver=resolver,
+                    error=f"Subgroup '{resolved_names[0]}' exists but has no members yet.",
+                )
+            return TargetResolution(members=deduped, resolver=resolver)
         elif resolver == "current_chat_members":
             chat = message.Info.MessageSource.Chat
             if getattr(chat, "Server", "") != "g.us":
@@ -255,7 +300,8 @@ def resolve_target(
     except Exception:
         return TargetResolution(error="I couldn't resolve that audience from runtime data.")
 
-    deduped = _dedupe_members(members, self_jids)
+    active_self_jids = self_jids
+    deduped = _dedupe_members(members, active_self_jids)
     if not deduped:
         return TargetResolution(
             resolver=resolver,
