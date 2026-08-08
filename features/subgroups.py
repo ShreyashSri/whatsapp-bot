@@ -211,12 +211,12 @@ def remove_subgroup_members(
 def _cmd_add_subgroup(
     client, chat_jid, body: str, mentioned_jids: list[str], store: SubgroupStore
 ) -> None:
-    """!add-subgroup <name> | @user1 @user2 …"""
+    """!add-subgroup <name> | @user1 @user2 … or !add-subgroup <name> | @everyone"""
     parts = body.split("|", 1)
     raw_name = parts[0].strip().lstrip("@")
 
     if not raw_name:
-        _reply(client, chat_jid, "⚠️ Usage: `!add-subgroup <name> | @user1 @user2 …`")
+        _reply(client, chat_jid, "⚠️ Usage: `!add-subgroup <name> | @user1 @user2 …` or `!add-subgroup <name> | @everyone`")
         return
 
     name = raw_name.lower()
@@ -228,6 +228,12 @@ def _cmd_add_subgroup(
             "or underscores, starting with a letter.",
         )
         return
+
+    after_pipe = parts[1].strip() if len(parts) > 1 else ""
+    if re.search(r"@everyone\b|@all\b", after_pipe, re.IGNORECASE):
+        from features.community_tag import get_group_member_jids
+        everyone_jids = get_group_member_jids(client, chat_jid)
+        mentioned_jids = list(dict.fromkeys(mentioned_jids + everyone_jids))
 
     try:
         added_count, total = add_subgroup_members(store, name, mentioned_jids)
@@ -247,7 +253,7 @@ def _cmd_add_subgroup(
 def _cmd_remove_from_subgroup(
     client, chat_jid, body: str, mentioned_jids: list[str], store: SubgroupStore
 ) -> None:
-    """!remove-from-subgroup <name> | @user1 @user2 …"""
+    """!remove-from-subgroup <name> | @user1 @user2 … or !remove-from-subgroup <name> | @everyone"""
     parts = body.split("|", 1)
     raw_name = parts[0].strip().lstrip("@")
     name = raw_name.lower()
@@ -255,6 +261,12 @@ def _cmd_remove_from_subgroup(
     if not name:
         _reply(client, chat_jid, "⚠️ Usage: `!remove-from-subgroup <name> | @user1 @user2 …`")
         return
+
+    after_pipe = parts[1].strip() if len(parts) > 1 else ""
+    if re.search(r"@everyone\b|@all\b", after_pipe, re.IGNORECASE):
+        from features.community_tag import get_group_member_jids
+        everyone_jids = get_group_member_jids(client, chat_jid)
+        mentioned_jids = list(dict.fromkeys(mentioned_jids + everyone_jids))
 
     try:
         removed_count, remaining_count, deleted = remove_subgroup_members(
