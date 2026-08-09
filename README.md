@@ -112,6 +112,24 @@ Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a
 - Deduplicates alerts — only sends on state changes (new incidents, resolved incidents)
 - Persists state across restarts
 
+###  Fellowship Alerts
+Receives alerts from the Fellowship Tracker and forwards newly discovered or reopened opportunities to WhatsApp.
+
+- `POST /fellowship-alert` on `FELLOWSHIP_ALERT_PORT` (default `8082`)
+- Authenticates requests with `X-Fellowship-Alert-Secret`
+- Sends to `FELLOWSHIP_ALERT_GROUP_ID`, or `PBBOT_GROUP_ID` whichever is set
+- Persists idempotency keys, so tracker retries do not duplicate messages
+
+The tracker should use the bot URL and the same secret:
+
+```env
+WHATSAPP_ALERT_URL=http://<bot-host>:8082/fellowship-alert
+WHATSAPP_ALERT_SECRET=<same-long-random-secret>
+```
+
+For local testing, run both services on the same machine and use
+`http://127.0.0.1:8082/fellowship-alert`. The bot must already be linked to WhatsApp and connected to the destination group.
+
 ### 🔐 Roles and authorization
 
 Users are keyed by normalized WhatsApp JID and have one role: `admin` or `member`.
@@ -322,6 +340,9 @@ aliases for the unified system.
 | `MEDIA_GROUP_ID` | WhatsApp group ID for media task manager |
 | `INCIDENT_GROUP_ID` | WhatsApp group ID for incident alerts |
 | `INCIDENT_PORT` | Webhook port (default: 8081) |
+| `FELLOWSHIP_ALERT_GROUP_ID` | WhatsApp group ID for fellowship alerts; blank uses `PBBOT_GROUP_ID` |
+| `FELLOWSHIP_ALERT_SECRET` | Shared secret required by the tracker webhook |
+| `FELLOWSHIP_ALERT_PORT` | Fellowship webhook port (default: 8082) |
 | `SUBGROUP_BLOCKED_USERS` | Comma-separated phone numbers blocked from using subgroups |
 
 Set these in a `.env` file (copy from `.env.example`). The `.env` is never committed.
@@ -337,7 +358,8 @@ whatsapp-bot/
 │   ├── cards.py            # Card generation
 │   ├── community_tag.py    # Community group tagging
 │   ├── subgroups.py        # Custom subgroups
-│   └── incidents.py        # Incident alerts
+│   ├── incidents.py        # Incident alerts
+│   └── fellowship_alerts.py # Fellowship Tracker webhook
 ├── cards/
 │   ├── __init__.py
 │   ├── render.py           # HTML→PNG/PDF renderer

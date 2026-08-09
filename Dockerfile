@@ -33,7 +33,7 @@ RUN mkdir -p /app/data \
     && chown -R botuser:botuser /app
 USER botuser
 
-EXPOSE 8081
+EXPOSE 8081 8082
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["python", "bot.py"]
