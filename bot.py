@@ -21,6 +21,7 @@ from neonize.events import ConnectedEv, MessageEv, PairStatusEv
 from db.database import create_database
 from db.auth import normalize_jid
 from db.migration import migrate_legacy_json, migrate_unified_work, upgrade_unified_schema
+from features import fellowship_alerts
 from features.registry import register_features
 
 logging.basicConfig(
@@ -57,6 +58,12 @@ def _build_config() -> dict:
         "media_group_id": os.getenv("MEDIA_GROUP_ID", "").strip() or None,
         "incident_group_id": os.getenv("INCIDENT_GROUP_ID", "").strip() or None,
         "incident_port": int(os.getenv("INCIDENT_PORT", "8081")),
+        "fellowship_alert_group_id": (
+            os.getenv("FELLOWSHIP_ALERT_GROUP_ID", "").strip()
+            or pbbot_group_id
+        ),
+        "fellowship_alert_secret": os.getenv("FELLOWSHIP_ALERT_SECRET", "").strip(),
+        "fellowship_alert_port": int(os.getenv("FELLOWSHIP_ALERT_PORT", "8082")),
         "subgroup_blocked_users": _parse_group_ids("SUBGROUP_BLOCKED_USERS"),
         "database_url": os.getenv("DATABASE_URL", "").strip(),
         "mistral_api_key": os.getenv("MISTRAL_API_KEY", "").strip(),
@@ -110,6 +117,16 @@ def main() -> None:
     allowed_group = runtime_config.get("pbbot_group_id")
 
     # TEST-ONLY GUARD: remove this block when production routing is designed.
+    allowed_outbound_groups = {
+        group_id
+        for group_id in (
+            allowed_group,
+            runtime_config.get("fellowship_alert_group_id"),
+        )
+        if group_id
+    }
+
+    # Outbound destination guard: allow messages only to configured bot groups.
     # Enforce the destination policy at the last possible point. This also
     # covers outbound messages originating from independent features such as
     # the incident webhook, not just replies to inbound messages.
@@ -132,7 +149,7 @@ def main() -> None:
         if (
             chat_id.endswith("@s.whatsapp.net")
             or chat_id.endswith("@lid")
-            or (allowed_group and chat_id.endswith("@g.us") and chat_id == allowed_group)
+            or (chat_id.endswith("@g.us") and chat_id in allowed_outbound_groups)
         ):
             return original_send_message(chat_jid, *args, **kwargs)
         log.warning("Blocked outbound message to non-PBBot chat: %s", chat_id or "(unknown)")
@@ -192,6 +209,17 @@ def main() -> None:
         _start_reminder_scheduler(client, runtime_config["db_session_factory"])
 
     dispatch = register_features(client, runtime_config)
+    log.info(
+        "Registering fellowship alerts before WhatsApp connect: group=%s port=%s secret_configured=%s",
+        runtime_config.get("fellowship_alert_group_id") or "(not set)",
+        runtime_config.get("fellowship_alert_port"),
+        bool(runtime_config.get("fellowship_alert_secret")),
+    )
+    try:
+        fellowship_alerts.register(client, runtime_config)
+    except Exception:
+        log.exception("Fellowship alert webhook registration failed")
+        raise
 
     @client.event(MessageEv)
     def on_message(_client: NewClient, message: MessageEv):
@@ -222,6 +250,7 @@ def main() -> None:
     log.info("Groups: %s", config["group_ids"] or "(none)")
     log.info("Media group: %s", config["media_group_id"] or "(not set)")
     log.info("Incident group: %s", config["incident_group_id"] or "(not set)")
+    log.info("Fellowship alert group: %s",config["fellowship_alert_group_id"] or "(not set)",)
     client.connect()
 
 

@@ -143,6 +143,18 @@ class IncidentState(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class FellowshipAlert(Base):
+    """Idempotency records for alerts received from the Fellowship Tracker."""
+
+    __tablename__ = "fellowship_alerts"
+
+    alert_key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    apply_link: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    event: Mapped[str] = mapped_column(String(16), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Task(Base):
     """PRD FR-5: trackable work item, optionally linked to an organization event."""
 
