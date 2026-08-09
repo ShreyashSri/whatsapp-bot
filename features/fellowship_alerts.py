@@ -110,6 +110,10 @@ def create_app(client: "NewClient", config: dict) -> Flask:
             return jsonify({"error": "event must be new or reopened"}), 400
         if not apply_link or not alert_key:
             return jsonify({"error": "apply_link and idempotency_key are required"}), 400
+        if len(alert_key) > 512:
+            return jsonify({
+                "error": "idempotency_key must be 512 characters or fewer"
+            }), 400
 
         now = datetime.now(timezone.utc)
         try:

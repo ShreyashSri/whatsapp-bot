@@ -60,7 +60,9 @@ def _build_config() -> dict:
         "incident_port": int(os.getenv("INCIDENT_PORT", "8081")),
         "fellowship_alert_group_id": (
             os.getenv("FELLOWSHIP_ALERT_GROUP_ID", "").strip()
-            or pbbot_group_id
+            or os.getenv("PBBOT_GROUP_ID", "").strip()
+            or os.getenv("GROUP_ID", "").strip()
+            or None
         ),
         "fellowship_alert_secret": os.getenv("FELLOWSHIP_ALERT_SECRET", "").strip(),
         "fellowship_alert_port": int(os.getenv("FELLOWSHIP_ALERT_PORT", "8082")),
