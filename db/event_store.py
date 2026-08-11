@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .models import Assignment, Event, EventLabel, User
-from .auth import current_user, jid_user, normalize_jid, require_admin
+from .auth import current_user, jid_user, normalize_jid
 from .work_store import WorkStore
 
 
@@ -189,20 +189,12 @@ class EventStore:
             return _event_to_dict(session, event)
 
     def delete_event(self, event_id: int) -> bool:
-        """Soft-delete if assignments exist; hard-delete otherwise."""
+        """Soft-delete an event so dependent history and schemas remain valid."""
         with self.session_factory.begin() as session:
             event = session.get(Event, event_id)
             if event is None or event.deleted_at is not None:
                 return False
-
-            has_dependent_data = session.scalar(
-                select(Assignment.id).where(Assignment.event_id == event_id).limit(1)
-            )
-            if has_dependent_data is not None:
-                event.deleted_at = datetime.now(timezone.utc)
-            else:
-                session.query(EventLabel).filter(EventLabel.event_id == event_id).delete()
-                session.delete(event)
+            event.deleted_at = datetime.now(timezone.utc)
             return True
 
     def assign(self, event_id: int, user_id: str) -> dict:

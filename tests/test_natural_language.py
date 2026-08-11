@@ -852,5 +852,5 @@ def test_natural_language_card_design_reenters_dispatch_with_design_spec():
         assert handler(client, message, dispatch) is True
 
     translated = dispatch.call_args.args[0]
-    assert translated.Message.conversation == "!card custom | Zodiak | For PBCTF 5.0"
+    assert translated.Message.conversation == "!card hackathon | Zodiak | For PBCTF 5.0"
     assert translated._pbbot_card_design["base_template"] == "hackathon"

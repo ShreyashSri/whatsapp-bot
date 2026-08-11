@@ -90,6 +90,26 @@ class WorkStore:
         return datetime.now(timezone.utc)
 
     @staticmethod
+    def _same_identity(left: str, right: str) -> bool:
+        left_user = jid_user(left)
+        right_user = jid_user(right)
+        if left_user == right_user:
+            return True
+        return _JID_ALIASES.get(left_user) == right_user or _JID_ALIASES.get(right_user) == left_user
+
+    @staticmethod
+    def _require_assignment_access(
+        assignment: Assignment,
+        actor_jid: str,
+        admin: bool,
+    ) -> None:
+        actor = normalize_jid(actor_jid)
+        if admin or actor == "system@s.whatsapp.net":
+            return
+        if not actor or not WorkStore._same_identity(assignment.user_jid, actor):
+            raise ValueError("you may only update your own assignment")
+
+    @staticmethod
     def _ensure_user(session: Session, jid: str) -> str:
         wanted = normalize_jid(jid)
         if not wanted:
@@ -295,12 +315,20 @@ class WorkStore:
         with self.session_factory() as session:
             return self._resolve_in(session, reference)
 
-    def set_status(self, reference: str, status: str, author_jid: str = "system@s.whatsapp.net") -> dict:
+    def set_status(
+        self,
+        reference: str,
+        status: str,
+        author_jid: str = "system@s.whatsapp.net",
+        *,
+        admin: bool = False,
+    ) -> dict:
         status = status.lower().strip()
         if status not in PROGRESS_STATUSES:
             raise ValueError("status must be one of: " + ", ".join(sorted(PROGRESS_STATUSES)))
         with self.session_factory.begin() as session:
             row = self._resolve_in(session, reference)
+            self._require_assignment_access(row, author_jid, admin)
             now = self._now()
             old = session.scalar(select(ProgressRevision).where(ProgressRevision.assignment_id == row.id,
                                                                   ProgressRevision.field == "status").order_by(ProgressRevision.id.desc()))
@@ -328,7 +356,15 @@ class WorkStore:
             raise ValueError(f"Assignment '{reference}' not found.")
         return row
 
-    def submit_update(self, reference: str, field: str, value: str, author_jid: str) -> dict:
+    def submit_update(
+        self,
+        reference: str,
+        field: str,
+        value: str,
+        author_jid: str,
+        *,
+        admin: bool = False,
+    ) -> dict:
         # Field names are case-insensitive so a cohort typing "prs" and "PRs"
         # does not split one metric across two revision chains.
         field, value = field.strip().lower(), value.strip()
@@ -336,35 +372,50 @@ class WorkStore:
             raise ValueError("Both update field and value are required.")
         with self.session_factory.begin() as session:
             row = self._resolve_in(session, reference)
+            self._require_assignment_access(row, author_jid, admin)
             if row.target_type == "event" and row.event_id:
                 field, value = validate_submission(session, row.event_id, field, value)
             previous = session.scalar(select(ProgressRevision).where(ProgressRevision.assignment_id == row.id,
                                                                       ProgressRevision.field == field).order_by(ProgressRevision.id.desc()))
-            now = self._now(); row.last_update_at = now
+            now = self._now()
+            row.last_update_at = now
             row.missed_count = 0
             row.reminder_state = None
             revision = ProgressRevision(assignment_id=row.id, field=field, value=value,
                                         author_jid=normalize_jid(author_jid), timestamp=now,
                                         superseded_revision_id=previous.id if previous else None)
-            session.add(revision); session.flush()
+            session.add(revision)
+            session.flush()
             return {"id": revision.id, "assignment_id": row.id, "field": field, "value": value,
                     "author_jid": revision.author_jid, "timestamp": now,
                     "superseded_revision_id": revision.superseded_revision_id}
 
-    def edit_update(self, revision_id: int, value: str, author_jid: str) -> dict:
+    def edit_update(
+        self,
+        revision_id: int,
+        value: str,
+        author_jid: str,
+        *,
+        admin: bool = False,
+    ) -> dict:
         with self.session_factory.begin() as session:
             old = session.get(ProgressRevision, revision_id)
-            if old is None: raise ValueError(f"Revision '{revision_id}' not found.")
+            if old is None:
+                raise ValueError(f"Revision '{revision_id}' not found.")
             value = value.strip()
-            if not value: raise ValueError("The new update value is required.")
+            if not value:
+                raise ValueError("The new update value is required.")
             now = self._now()
             assignment = session.get(Assignment, old.assignment_id)
+            if assignment is not None:
+                self._require_assignment_access(assignment, author_jid, admin)
             if assignment is not None and assignment.target_type == "event" and assignment.event_id:
                 _, value = validate_submission(session, assignment.event_id, old.field, value)
             revision = ProgressRevision(assignment_id=old.assignment_id, field=old.field, value=value,
                                         author_jid=normalize_jid(author_jid), timestamp=now,
                                         superseded_revision_id=old.id)
-            session.add(revision); session.flush()
+            session.add(revision)
+            session.flush()
             if assignment is not None:
                 assignment.last_update_at = now
                 assignment.missed_count = 0
@@ -372,9 +423,17 @@ class WorkStore:
             return {"id": revision.id, "assignment_id": revision.assignment_id, "field": revision.field,
                     "value": revision.value, "timestamp": now, "superseded_revision_id": old.id}
 
-    def history(self, reference: str) -> list[dict]:
+    def history(
+        self,
+        reference: str,
+        actor_jid: str | None = None,
+        *,
+        admin: bool = False,
+    ) -> list[dict]:
         with self.session_factory() as session:
             row = self._resolve_in(session, reference)
+            if actor_jid is not None:
+                self._require_assignment_access(row, actor_jid, admin)
             revisions = session.scalars(select(ProgressRevision).where(ProgressRevision.assignment_id == row.id)
                                         .order_by(ProgressRevision.timestamp, ProgressRevision.id)).all()
             return [{"id": r.id, "assignment_id": r.assignment_id, "field": r.field, "value": r.value,

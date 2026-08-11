@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
 
 # Ensure project root is in python path
@@ -17,12 +18,13 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 load_dotenv()
 
-from db.database import create_database
-from db.auth import current_user
-from db.reminder_store import ReminderStore
+from neonize.client import NewClient  # noqa: E402
+from neonize.events import ConnectedEv  # noqa: E402
+from db.database import create_database  # noqa: E402
+from db.reminder_store import ReminderStore  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,7 +36,18 @@ log = logging.getLogger("cron_reminders")
 
 def main() -> int:
     log.info("Starting cron reminder execution worker...")
-    db_url = os.getenv("DATABASE_URL") or "sqlite:///pbbot.db"
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        log.error("DATABASE_URL is required for cron reminder execution.")
+        return 2
+
+    session_db = Path(os.getenv("NEONIZE_SESSION_DB", "neonize.db"))
+    if not session_db.is_absolute():
+        session_db = ROOT_DIR / session_db
+    if not session_db.exists():
+        log.error("Neonize session database not found: %s", session_db)
+        return 2
+
     db = create_database(db_url)
     db.initialize()
 
@@ -45,24 +58,41 @@ def main() -> int:
         return 1
 
     reminder_store = ReminderStore(db.session_factory)
-    
-    # Optional force flag via CLI args
     force = "--force" in sys.argv or "-f" in sys.argv
+    client = NewClient(str(session_db))
+    result_code = {"value": 1}
+    finished = threading.Event()
+
+    @client.event(ConnectedEv)
+    def on_connected(_client: NewClient, _event: ConnectedEv):
+        def run_once():
+            try:
+                results = reminder_store.run_reminders(
+                    client=client,
+                    actor=system_user,
+                    force_ignore_window=force,
+                    source="cron",
+                )
+                log.info("Cron reminder execution finished successfully: %s", results)
+                result_code["value"] = 0
+            except Exception:
+                log.exception("Error executing cron reminder run")
+            finally:
+                finished.set()
+                client.disconnect()
+
+        threading.Thread(target=run_once, name="CronReminderRun", daemon=True).start()
 
     try:
-        # Note: In standalone cron mode without active Neonize daemon client,
-        # reminder_store will evaluate eligibility, record attempt logs,
-        # and attempt dispatch through configured OpenWA/Neonize adapter.
-        results = reminder_store.run_reminders(
-            client=None,
-            actor=system_user,
-            force_ignore_window=force,
-            source="cron",
-        )
-        log.info("Cron reminder execution finished successfully: %s", results)
-        return 0
-    except Exception as exc:
-        log.exception("Error executing cron reminder run: %s", exc)
+        client.connect()
+        finished.wait(timeout=300)
+        if not finished.is_set():
+            log.error("Cron reminder execution timed out.")
+            client.disconnect()
+            return 1
+        return result_code["value"]
+    except Exception:
+        log.exception("Could not connect to WhatsApp for cron reminders")
         return 1
 
 

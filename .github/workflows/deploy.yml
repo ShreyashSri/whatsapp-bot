@@ -48,7 +48,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           timeout: 30s
-          source: "bot.py,requirements.txt,features,cards"
+          source: "bot.py,requirements.txt,features,cards,db,updates,migrations"
           target: ~/whatsapp-bot
 
       - name: Install deps and restart bot

@@ -31,9 +31,9 @@ def _jid_text(value) -> str:
     return raw if "@" in raw else ""
 
 
-def _object_name(obj) -> str:
+def _object_name(obj, _depth: int = 0) -> str:
     """Extract a transient WhatsApp/contact name from a Neonize object."""
-    if obj is None:
+    if obj is None or _depth >= 2:
         return ""
     for field in (
         "DisplayName", "PushName", "Pushname", "FullName", "Name",
@@ -50,7 +50,7 @@ def _object_name(obj) -> str:
     for field in ("Contact", "User", "Info"):
         nested = getattr(obj, field, None)
         if nested is not None and nested is not obj:
-            name = _object_name(nested)
+            name = _object_name(nested, _depth + 1)
             if name:
                 return name
     return ""
@@ -107,7 +107,7 @@ def _get_display_name_map(client, chat, jids):
                     if jid.endswith("@lid") and phone_by_jid.get(jid) == phone_jid:
                         if name:
                             names[jid] = name
-    except Exception as exc:
+    except Exception:
         # Name lookup must never break the actual operation.
         pass
 
@@ -1380,7 +1380,7 @@ def execute_work_read(client, message, intent: dict, factory, resolve_target=Non
                     also_jids=all_aliases[1:],
                     status=status,
                 )
-                heading = f"📌 *Workload*"
+                heading = "📌 *Workload*"
             else:
                 norm_sender = normalize_jid(sender)
                 all_aliases = _alias_jids(norm_sender)

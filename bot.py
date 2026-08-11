@@ -57,6 +57,7 @@ def _build_config() -> dict:
         ),
         "media_group_id": os.getenv("MEDIA_GROUP_ID", "").strip() or None,
         "incident_group_id": os.getenv("INCIDENT_GROUP_ID", "").strip() or None,
+        "incident_webhook_secret": os.getenv("INCIDENT_WEBHOOK_SECRET", "").strip(),
         "incident_port": int(os.getenv("INCIDENT_PORT", "8081")),
         "fellowship_alert_group_id": (
             os.getenv("FELLOWSHIP_ALERT_GROUP_ID", "").strip()
@@ -235,9 +236,9 @@ def main() -> None:
             import time as _time
             _time.sleep(5)  # let connection fully settle
             try:
-                from db.work_store import WorkStore, _JID_ALIASES
+                from db.work_store import WorkStore
                 from neonize.utils import build_jid, Jid2String
-                from db.auth import normalize_jid, jid_user
+                from db.auth import normalize_jid
                 from db.models import Assignment, User
                 from sqlalchemy import select
 
@@ -364,8 +365,6 @@ def main() -> None:
         source = getattr(info, "MessageSource", None)
         chat = getattr(source, "Chat", None)
         chat_id = _jid_string(chat) if chat else ""
-        is_from_me = getattr(info, "IsFromMe", False)
-
         if time.monotonic() < accept_messages_after:
             return
 

@@ -9,13 +9,14 @@ restarts.
 
 from __future__ import annotations
 
-import json
+import hmac
 import logging
 import threading
 from typing import TYPE_CHECKING
 
 from flask import Flask, request, jsonify
 
+from db.auth import normalize_jid
 from db.incident_store import IncidentStore
 
 if TYPE_CHECKING:
@@ -35,6 +36,16 @@ def _save_state(store: IncidentStore, state: dict) -> None:
     store.write(state)
 
 
+def _build_chat_jid(value):
+    from neonize.utils import build_jid
+
+    normalized = normalize_jid(value)
+    if "@" in normalized:
+        user, server = normalized.split("@", 1)
+        return build_jid(user, server)
+    return build_jid(normalized)
+
+
 # ---------------------------------------------------------------------------
 # Feature registration
 # ---------------------------------------------------------------------------
@@ -43,10 +54,14 @@ def _save_state(store: IncidentStore, state: dict) -> None:
 def register(client: "NewClient", config: dict) -> None:
     """Start the incident alert webhook server in a background thread."""
     incident_group_id = config.get("incident_group_id")
+    incident_secret = str(config.get("incident_webhook_secret", "") or "")
     incident_port = config.get("incident_port", 8081)
 
     if not incident_group_id:
         log.warning("INCIDENT_GROUP_ID not set — skipping incident webhook server.")
+        return
+    if not incident_secret:
+        log.error("INCIDENT_WEBHOOK_SECRET not set — skipping incident webhook server.")
         return
 
     session_factory = config.get("db_session_factory")
@@ -55,6 +70,7 @@ def register(client: "NewClient", config: dict) -> None:
     store = IncidentStore(session_factory)
 
     app = Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024
     # Silence Flask's default request logging unless in debug mode
     flask_log = logging.getLogger("werkzeug")
     flask_log.setLevel(logging.WARNING)
@@ -62,8 +78,13 @@ def register(client: "NewClient", config: dict) -> None:
     @app.route("/alert", methods=["POST"])
     def alert():
         try:
-            payload = request.get_json(force=True)
-            log.info("📦 Incoming incident payload: %s", json.dumps(payload, indent=2))
+            supplied_secret = request.headers.get("X-Incident-Webhook-Secret", "")
+            if not hmac.compare_digest(supplied_secret, incident_secret):
+                return jsonify({"error": "unauthorized"}), 401
+
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                return jsonify({"error": "request body must be a JSON object"}), 400
 
             data = payload.get("data")
             if not isinstance(data, list):
@@ -80,7 +101,7 @@ def register(client: "NewClient", config: dict) -> None:
                 except (KeyError, IndexError, TypeError, ValueError):
                     continue
 
-            log.info("🔍 Currently failing: %s", json.dumps(current_failing, indent=2))
+            log.info("🔍 Currently failing incident count: %s", len(current_failing))
 
             active_incidents = _load_state(store)
             current_failing_urls = {f["url"] for f in current_failing}
@@ -119,9 +140,7 @@ def register(client: "NewClient", config: dict) -> None:
 
                 text = "\n".join(parts)
 
-                from neonize.utils import build_jid
-                jid = build_jid(incident_group_id)
-                client.send_message(jid, text)
+                client.send_message(_build_chat_jid(incident_group_id), text)
                 log.info("✅ Sent incident update to WhatsApp.")
             else:
                 log.info("💤 No state changes. Suppressing WhatsApp spam.")
@@ -129,8 +148,8 @@ def register(client: "NewClient", config: dict) -> None:
             return "", 200
 
         except Exception as exc:
-            log.error("❌ Incident webhook error: %s", exc)
-            return jsonify({"error": str(exc)}), 500
+            log.exception("❌ Incident webhook error: %s", exc)
+            return jsonify({"error": "incident webhook failed"}), 500
 
     def _run_server():
         # Use threaded=False since we're already in a dedicated thread

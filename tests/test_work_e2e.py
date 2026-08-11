@@ -53,7 +53,9 @@ def make_msg(text: str, sender_jid: str):
 
 
 def last_reply(mock_client) -> str:
-    return mock_client.send_message.call_args[0][1]
+    reply = mock_client.send_message.call_args[0][1]
+    text = getattr(getattr(reply, "extendedTextMessage", None), "text", None)
+    return text or reply
 
 
 def test_full_work_lifecycle(db_session_factory, handler, admin_user, member_user):

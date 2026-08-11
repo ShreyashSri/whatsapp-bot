@@ -62,7 +62,9 @@ def bot(factory):
             dispatch(message)
         if not client.send_message.called:
             return "(no reply)"
-        return client.send_message.call_args[0][1]
+        reply = client.send_message.call_args[0][1]
+        text = getattr(getattr(reply, "extendedTextMessage", None), "text", None)
+        return text or reply
 
     return send
 
@@ -405,3 +407,7 @@ def test_member_cannot_update_another_members_assignment(bot, users):
     bot("!work create event | participation | lfx | LFX | x", users["admin"].jid)
     bot("!work assign event 1 | @Bibisha", users["admin"].jid, [users["bibisha"].jid])
     assert "⚠️" in bot("!work update event 1 note hijack", users["ananya"].jid)
+    assert "⚠️" in bot(
+        f"!work update event 1 @{users['bibisha'].jid} note hijack",
+        users["ananya"].jid,
+    )

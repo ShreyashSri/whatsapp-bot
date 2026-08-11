@@ -262,11 +262,8 @@ class ReminderStore:
                     continue
 
                 new_missed_count = assignment.missed_count + 1
-                assignment.missed_count = new_missed_count
-
                 is_escalated = new_missed_count >= cfg["escalation_threshold"]
                 new_state = "escalated" if is_escalated else "sent"
-                assignment.reminder_state = new_state
 
                 msg = (
                     f"⏰ *Reminder*: You have a pending assignment for {target_type} *{target_name}* "
@@ -287,6 +284,8 @@ class ReminderStore:
                     err_detail = str(exc)
 
                 if sent_ok:
+                    assignment.missed_count = new_missed_count
+                    assignment.reminder_state = new_state
                     res_str = "escalated" if is_escalated else "sent"
                     log_entry = ReminderLog(
                         assignment_id=assignment_id,

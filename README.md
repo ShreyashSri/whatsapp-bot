@@ -109,6 +109,7 @@ Examples:
 Receives Prometheus/Alertmanager-style webhook payloads and forwards alerts to a WhatsApp group.
 
 - `POST /alert` endpoint on configurable port (default 8081)
+- Authenticates requests with `X-Incident-Webhook-Secret`
 - Deduplicates alerts — only sends on state changes (new incidents, resolved incidents)
 - Persists state across restarts
 
@@ -339,6 +340,7 @@ aliases for the unified system.
 | `DATABASE_URL` | PostgreSQL connection URL |
 | `MEDIA_GROUP_ID` | WhatsApp group ID for media task manager |
 | `INCIDENT_GROUP_ID` | WhatsApp group ID for incident alerts |
+| `INCIDENT_WEBHOOK_SECRET` | Shared secret required by the incident webhook |
 | `INCIDENT_PORT` | Webhook port (default: 8081) |
 | `FELLOWSHIP_ALERT_GROUP_ID` | WhatsApp group ID for fellowship alerts; blank uses `PBBOT_GROUP_ID` |
 | `FELLOWSHIP_ALERT_SECRET` | Shared secret required by the tracker webhook |

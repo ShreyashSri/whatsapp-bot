@@ -52,9 +52,9 @@ def _text_value(value) -> str:
     return text if text else ""
 
 
-def _object_name(obj) -> str:
+def _object_name(obj, _depth: int = 0) -> str:
     """Extract a contact/profile name from whatever Neonize object is returned."""
-    if obj is None:
+    if obj is None or _depth >= 2:
         return ""
 
     # These are the common WhatsApp/contact name fields across Neonize/WA
@@ -79,7 +79,7 @@ def _object_name(obj) -> str:
     for field in ("Contact", "User", "Info"):
         nested = getattr(obj, field, None)
         if nested is not None and nested is not obj:
-            name = _object_name(nested)
+            name = _object_name(nested, _depth + 1)
             if name:
                 return name
 
@@ -717,7 +717,12 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
         if action == "edit":
             if len(tokens) < 3 or not tokens[1].isdigit():
                 raise ValueError("usage: !work edit <revision_id> <new value>")
-            revision = store.edit_update(int(tokens[1]), " ".join(tokens[2:]), sender)
+            revision = store.edit_update(
+                int(tokens[1]),
+                " ".join(tokens[2:]),
+                sender,
+                admin=is_admin,
+            )
             audit(factory, actor, "update.edit", "whatsapp", {"revision_id": revision["id"]})
             _send(client, chat, f"✅ Update `{revision['id']}` edited successfully.")
             return True
@@ -749,7 +754,11 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
         if action == "history":
             if is_admin:
                 target_jid = _resolve_admin_target(store, typ, ident, target_jid)
-            history = store.history(_reference(typ, ident, target_jid, sender, use_sender=not is_admin))
+            history = store.history(
+                _reference(typ, ident, target_jid, sender, use_sender=not is_admin),
+                sender,
+                admin=is_admin,
+            )
             if not history:
                 _send(client, chat, "📭 No progress history yet.")
             else:
@@ -767,7 +776,13 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             value = " ".join(tokens[next_index + 1:]).strip()
             if not value:
                 raise ValueError("update value is required")
-            result = store.submit_update(_reference(typ, ident, target_jid, sender, use_sender=not is_admin), field, value, sender)
+            result = store.submit_update(
+                _reference(typ, ident, target_jid, sender, use_sender=not is_admin),
+                field,
+                value,
+                sender,
+                admin=is_admin,
+            )
             audit(factory, actor, "update.submit", "whatsapp", {"target": f"{typ} {ident}", "field": field, "revision_id": result["id"]})
             _send(client, chat, f"✅ Update `{result['id']}` recorded for `{typ} {ident}`.")
             return True
@@ -790,7 +805,12 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
         if action in ("complete", "start") and status:
             if action == "start" and is_admin:
                 target_jid = _resolve_admin_target(store, typ, ident, target_jid)
-            result = store.set_status(_reference(typ, ident, target_jid, sender, use_sender=not is_admin), status, sender)
+            result = store.set_status(
+                _reference(typ, ident, target_jid, sender, use_sender=not is_admin),
+                status,
+                sender,
+                admin=is_admin,
+            )
             audit(factory, actor, f"{typ}.status", "whatsapp", {"target_id": ident, "status": result["status"]})
             if action == "complete" and typ == "task":
                 # Keep the task lifecycle in sync with the assignee's
@@ -801,7 +821,12 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
         if action == "set-status" and status:
             if is_admin:
                 target_jid = _resolve_admin_target(store, typ, ident, target_jid)
-            result = store.set_status(_reference(typ, ident, target_jid, sender, use_sender=not is_admin), status, sender)
+            result = store.set_status(
+                _reference(typ, ident, target_jid, sender, use_sender=not is_admin),
+                status,
+                sender,
+                admin=is_admin,
+            )
             audit(factory, actor, f"{typ}.status", "whatsapp", {"target_id": ident, "status": result["status"]})
             _send(client, chat, f"✅ `{typ} {ident}` set to `{result['status']}`.")
             return True
