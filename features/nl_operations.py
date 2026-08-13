@@ -256,7 +256,7 @@ DIRECT_CAPABILITIES = frozenset(
 # Keeping this audit next to the domain dispatcher makes a newly registered
 # direct tool fail verification instead of silently returning no result.
 _DIRECT_SPECIAL_CAPABILITIES = frozenset({
-    "collections.add", "collections.remove", "collections.delete", "collections.list", "collections.info",
+    "collections.add", "collections.remove", "collections.delete", "collections.list", "collections.info", "collections.tag",
     "labels.add", "labels.remove",
     "work.assign", "work.unassign", "work.create_event", "work.create_task",
     "work.my", "work.overview", "work.list_event_tasks",
@@ -1661,6 +1661,36 @@ def execute_collection_mutation(
             text = f"*@{public_text(collection, limit=80)}* — {len(members_list)} member(s)\n\n" + "\n".join(f"  • {m}" for m in mention_parts)
             client.send_message(chat, text)
             return {"collection": collection, "members": members_list, "member_count": len(members_list)}
+
+        if action == "tag":
+            raw_coll = intent.get("arguments", {}).get("collection")
+            collection = resolve_collection(factory, raw_coll) if raw_coll else None
+            if not collection:
+                client.send_message(chat, "⚠️ I couldn't resolve the subgroup name.")
+                return None
+            subgroups = store.read()
+            if collection not in subgroups:
+                client.send_message(chat, f"⚠️ Subgroup *@{public_text(collection, limit=80)}* does not exist.")
+                return None
+            members_list = subgroups[collection]
+            
+            from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import ContextInfo, ExtendedTextMessage, Message
+            text = f"📢 Tagging: @{collection}"
+            proto_msg = Message(
+                extendedTextMessage=ExtendedTextMessage(
+                    text=text,
+                    contextInfo=ContextInfo(
+                        mentionedJID=list(members_list),
+                    ),
+                ),
+            )
+            try:
+                client.send_message(chat, proto_msg)
+            except Exception as exc:
+                log.error("Failed to send subgroup tag message: %s", exc)
+                return {"ok": False, "error": "failed to send tag message"}
+            
+            return {"collection": collection, "members": members_list, "member_count": len(members_list), "tagged": True}
 
         if action == "delete":
             raw_coll = intent.get("arguments", {}).get("collection")

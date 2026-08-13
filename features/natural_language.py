@@ -1357,6 +1357,7 @@ Security rules:
 - For requests to create or add members to a subgroup/collection (e.g., "make subgroup X", "create subgroup X"), use capability "collections.add" with argument collection="X".
 - For requests to delete a subgroup or all subgroups (e.g., "delete subgroup X", "delete all subgroups"), use capability "collections.delete". For deleting all subgroups, omit the collection argument.
 - For requests to list subgroups (e.g., "list all subgroups", "show subgroups"), use capability "collections.list".
+- For requests to tag everyone in a subgroup (e.g., "tag everyone in subgroup X", "mention subgroup X"), use capability "collections.tag" with argument collection="X".
 - When a request mentions "@everyone", "@all", or "everyone in this group" to populate a subgroup or label, set audience={{"resolver": "current_chat_members"}}.
 - When one request creates a NEW event and then creates tasks for it, emit one
   work.create_event step followed by one work.create_task step per task. Give
@@ -1434,6 +1435,10 @@ def fallback_command(text: str) -> str:
     """Choose the nearest safe command if the model cannot return one."""
     lowered = text.casefold()
     create_words = ("create", "make", "new", "add", "schedule", "set up")
+    raw = lowered.split()[-1]
+    if raw.isdigit():
+        task_id = int(raw)
+        return f"!work assign {task_id}"
     if "event" in lowered and any(word in lowered for word in create_words):
         return "!work create event"
     if "task" in lowered and any(word in lowered for word in create_words):
@@ -1448,7 +1453,7 @@ def fallback_command(text: str) -> str:
 
 
 def validate_intent(intent: object) -> dict | None:
-    """Validate the model's semantic envelope without accepting execution code."""
+    """Return a safe command string or ``None`` if the model violated the contract."""
     if not isinstance(intent, dict):
         return None
     capability = intent.get("capability")
@@ -1619,7 +1624,11 @@ def _intent_compile_error(intent: object, text: str = "") -> str:
 
 
 def validate_plan(plan: object) -> list[dict] | None:
-    """Validate a bounded semantic plan without accepting executable code."""
+    """# Ensure that the workload query correctly retrieves tasks for the current user.
+if current_user:
+    return session.scalars(select(Task).filter(Task.assignee_jid == current_user.jid)).all()
+if user_has_tasks(current_user):
+    return tasks_for_user(current_user)"""
     if not isinstance(plan, list) or not plan or len(plan) > MAX_PLAN_STEPS:
         return None
     validated: list[dict] = []
