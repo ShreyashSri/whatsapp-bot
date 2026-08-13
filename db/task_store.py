@@ -43,6 +43,7 @@ _TRANSITIONS: dict[str, set[str]] = {
     "done":        set(),
     "cancelled":   set(),
 }
+_UNSET = object()
 
 
 class TaskStore:
@@ -200,6 +201,7 @@ class TaskStore:
         self, task_id: int, *, title: str | None = None, description: str | None = None,
         assignee_jid: str | None = None, due_date: datetime | None = None,
         priority: str | None = None, status: str | None = None, force_status: bool = False,
+        event_id: int | None | object = _UNSET,
     ) -> Task:
         with self._sf() as session:
             task = self._get(session, task_id)
@@ -209,6 +211,12 @@ class TaskStore:
                 if priority not in VALID_PRIORITIES:
                     raise ValueError(f"priority must be one of {VALID_PRIORITIES}")
                 task.priority = priority
+            if event_id is not _UNSET:
+                if event_id is not None:
+                    event = session.get(Event, event_id)
+                    if event is None or event.deleted_at is not None:
+                        raise ValueError(f"event #{event_id} not found")
+                task.event_id = event_id
             if status is not None:
                 status = normalize_task_status(status)
                 if status not in VALID_STATUSES:
@@ -231,6 +239,16 @@ class TaskStore:
             session.refresh(task)
         if assignee_jid is not None:
             if assignee_jid:
+                # ``TaskStore.update(assignee_jid=...)`` is the legacy
+                # single-owner setter. Replace its previous owner; callers
+                # that need multiple people use WorkStore.assign_many.
+                wanted_user = jid_user(assignee_jid)
+                current_rows = WorkStore(self._sf).overview(
+                    target_type="task", target_id=task_id, admin=True
+                )
+                for row in current_rows:
+                    if jid_user(row["user_jid"]) != wanted_user:
+                        WorkStore(self._sf).unassign("task", task_id, row["user_jid"])
                 WorkStore(self._sf).assign("task", task_id, assignee_jid)
             else:
                 with self._sf() as session:

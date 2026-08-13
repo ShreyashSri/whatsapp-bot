@@ -574,7 +574,10 @@ def _overview(client, chat, store: WorkStore, actor, sender: str, command: str, 
     _send(client, chat, "\n".join(lines))
 
 
-def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str, factory) -> bool:
+def _handle_work_subcommand(
+    client, chat, message, actor, sender: str, args: str, factory,
+    *, reminder_group_jid: str | None = None,
+) -> bool:
     tokens = args.split()
     if not tokens or tokens[0].lower() not in WORK_SUBCOMMANDS:
         if tokens:
@@ -633,7 +636,7 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             # Reminder controls are part of the unified work workflow. The
             # old !reminders commands remain aliases in features/reminders.
             from features.reminders import (
-                _cmd_config, _cmd_history, _cmd_reminders_summary, _cmd_run,
+                _cmd_config, _cmd_history, _cmd_remind, _cmd_reminders_summary, _cmd_run,
             )
             remainder = args[len(tokens[0]):].strip()
             subcommand, _, sub_args = remainder.partition(" ")
@@ -653,12 +656,18 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                 if not is_admin:
                     _send(client, chat, "⛔ Only administrators can run reminders.")
                     return True
-                _cmd_run(client, chat, actor, reminder_store)
+                _cmd_run(client, chat, actor, reminder_store, group_jid=reminder_group_jid)
+                return True
+            if subcommand == "remind":
+                _cmd_remind(
+                    client, chat, sub_args, actor, reminder_store,
+                    group_jid=reminder_group_jid,
+                )
                 return True
             if subcommand == "history":
                 _cmd_history(client, chat, sub_args, reminder_store, actor=actor)
                 return True
-            raise ValueError("usage: !work reminders [status|config|run|history [assignment_id]]")
+            raise ValueError("usage: !work reminders [status|config|run|remind event|task <id>|history [assignment_id]]")
 
         if action == "create":
             if not is_admin:
@@ -694,10 +703,15 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                     " | ".join(encode_command_field(part) for part in parts[1:]),
                     sender,
                 )
-                audit(factory, actor, "task.create", "whatsapp", {"task_id": task.id, "title": task.title})
+                audit(factory, actor, "task.create", "whatsapp", {
+                    "task_id": task.id,
+                    "title": task.title,
+                    "event_id": task.event_id,
+                })
                 from db.nl_state import record_undo
                 record_undo(factory, sender, "task.create", {"task_id": task.id})
-                _send(client, chat, f"✅ Task `{task.id}` created: *{public_text(task.title, limit=180)}*")
+                parent = f" under event `{task.event_id}`" if task.event_id else ""
+                _send(client, chat, f"✅ Task `{task.id}` created{parent}: *{public_text(task.title, limit=180)}*")
             return True
 
         if action == "schema":
@@ -933,7 +947,7 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
     return True
 
 
-def handle(client, message, session_factory) -> bool:
+def handle(client, message, session_factory, *, reminder_group_jid: str | None = None) -> bool:
     overrides = vars(message) if hasattr(message, "__dict__") else {}
     session_factory = overrides.get("_pbbot_session_factory", session_factory)
     if not message.Info or not message.Info.MessageSource:
@@ -961,7 +975,10 @@ def handle(client, message, session_factory) -> bool:
             _send(client, chat, f"⚠️ {public_error(exc, 'I could not update that assignment.')}")
         return True
     if command == "!work" and args.strip().split()[:1] and args.strip().split()[0].lower() in WORK_SUBCOMMANDS:
-        return _handle_work_subcommand(client, chat, message, actor, sender, args.strip(), session_factory)
+        return _handle_work_subcommand(
+            client, chat, message, actor, sender, args.strip(), session_factory,
+            reminder_group_jid=reminder_group_jid,
+        )
     if command in ("!assign", "!unassign"):
         if actor.role != "admin":
             _send(client, chat, "⛔ Only administrators can change assignments.")
@@ -1034,8 +1051,17 @@ def handle(client, message, session_factory) -> bool:
                 if len(parts) != 2 or not parts[0].isdigit():
                     raise ValueError("usage: !update-task <id> | field value")
                 fields = _legacy_field_args("|" + parts[1])
-                task = tasks.update(int(parts[0]), title=fields.get("title"), description=fields.get("description"),
-                                    due_date=fields.get("due_date"), priority=fields.get("priority"), status=fields.get("status"), force_status=True)
+                update_fields = {
+                    "title": fields.get("title"),
+                    "description": fields.get("description"),
+                    "due_date": fields.get("due_date"),
+                    "priority": fields.get("priority"),
+                    "status": fields.get("status"),
+                    "force_status": True,
+                }
+                if "event_id" in fields:
+                    update_fields["event_id"] = fields["event_id"]
+                task = tasks.update(int(parts[0]), **update_fields)
                 audit(session_factory, actor, "task.update", "whatsapp", {"task_id": task.id, "fields": sorted(fields)})
                 from db.nl_state import record_undo
                 record_undo(session_factory, sender, "barrier", {})
@@ -1109,14 +1135,23 @@ def handle(client, message, session_factory) -> bool:
                 _mark_transaction_failed(session_factory)
                 _send(client, chat, f"⚠️ {public_error(exc, 'I could not update that status.')}")
             return True
-        return _handle_work_subcommand(client, chat, message, actor, sender,
-                                       f"{legacy_actions[command]} {args}".strip(), session_factory)
+        return _handle_work_subcommand(
+            client, chat, message, actor, sender,
+            f"{legacy_actions[command]} {args}".strip(), session_factory,
+            reminder_group_jid=reminder_group_jid,
+        )
     if command == "!complete-task":
-        return _handle_work_subcommand(client, chat, message, actor, sender,
-                                       f"complete task {args}".strip(), session_factory)
+        return _handle_work_subcommand(
+            client, chat, message, actor, sender,
+            f"complete task {args}".strip(), session_factory,
+            reminder_group_jid=reminder_group_jid,
+        )
     if command == "!schema":
-        return _handle_work_subcommand(client, chat, message, actor, sender,
-                                       f"schema {args}".strip(), session_factory)
+        return _handle_work_subcommand(
+            client, chat, message, actor, sender,
+            f"schema {args}".strip(), session_factory,
+            reminder_group_jid=reminder_group_jid,
+        )
     _overview(client, chat, WorkStore(session_factory), actor, sender, command, args)
     return True
 
@@ -1125,4 +1160,8 @@ def register(client: "NewClient", config: dict) -> callable:
     factory = config.get("db_session_factory")
     if factory is None:
         raise RuntimeError("Work feature requires db_session_factory")
-    return lambda client, message: handle(client, message, factory)
+    from features.reminders import configured_reminder_group
+    reminder_group_jid = configured_reminder_group(config)
+    return lambda client, message: handle(
+        client, message, factory, reminder_group_jid=reminder_group_jid,
+    )

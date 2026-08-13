@@ -6,10 +6,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .auth import audit, normalize_jid
+from .auth import audit, jid_user, normalize_group_jid, normalize_jid
 from .models import Assignment, Event, ReminderConfig, ReminderLog, Task, User
 
 log = logging.getLogger(__name__)
@@ -156,7 +156,9 @@ class ReminderStore:
         return cur_time >= start or cur_time <= end
 
     def get_eligible_assignments(
-        self, *, force_ignore_window: bool = False, user_jid: str | None = None
+        self, *, force_ignore_window: bool = False, user_jid: str | None = None,
+        target_type: str | None = None, target_id: int | None = None,
+        ignore_idempotency: bool = False, group_jid: str | None = None,
     ) -> list[dict]:
         """Find pending/in_progress assignments that require a reminder.
 
@@ -170,7 +172,13 @@ class ReminderStore:
         cfg = self.get_config()
         freq_cutoff = now - timedelta(hours=cfg["frequency_hours"])
 
-        wanted_user = normalize_jid(user_jid) if user_jid else None
+        wanted_user = jid_user(user_jid) if user_jid else None
+        target_type = target_type.lower() if target_type else None
+        if target_type is not None and target_type not in {"event", "task"}:
+            raise ValueError("target type must be event or task")
+        if target_type is not None and target_id is None:
+            raise ValueError("target id is required")
+        configured_group = normalize_group_jid(group_jid) if group_jid else ""
         with self.session_factory() as session:
             stmt = select(Assignment).where(
                 Assignment.status.in_(["pending", "in_progress"])
@@ -179,23 +187,33 @@ class ReminderStore:
 
             eligible = []
             for assignment in rows:
-                if wanted_user and normalize_jid(assignment.user_jid) != wanted_user:
+                if target_type and assignment.target_type != target_type:
+                    continue
+                assignment_target_id = (
+                    assignment.event_id
+                    if assignment.target_type == "event"
+                    else assignment.task_id
+                )
+                if target_id is not None and assignment_target_id != target_id:
+                    continue
+                if wanted_user and jid_user(assignment.user_jid) != wanted_user:
                     continue
                 last_update_at = _as_utc(assignment.last_update_at)
-                if last_update_at and last_update_at >= freq_cutoff:
+                if not ignore_idempotency and last_update_at and last_update_at >= freq_cutoff:
                     continue
 
-                recent_log = session.scalar(
-                    select(ReminderLog)
-                    .where(
-                        ReminderLog.assignment_id == assignment.id,
-                        ReminderLog.timestamp >= freq_cutoff,
-                        ReminderLog.result.in_(["sent", "escalated"]),
+                if not ignore_idempotency:
+                    recent_log = session.scalar(
+                        select(ReminderLog)
+                        .where(
+                            ReminderLog.assignment_id == assignment.id,
+                            ReminderLog.timestamp >= freq_cutoff,
+                            ReminderLog.result.in_(["sent", "escalated"]),
+                        )
+                        .limit(1)
                     )
-                    .limit(1)
-                )
-                if recent_log is not None:
-                    continue
+                    if recent_log is not None:
+                        continue
 
                 if assignment.target_type == "event":
                     target = session.get(Event, assignment.event_id)
@@ -214,6 +232,18 @@ class ReminderStore:
                 else:
                     continue
 
+                assignee_count = 1
+                if assignment.target_type == "task":
+                    assignee_count = session.scalar(
+                        select(func.count(Assignment.id)).where(
+                            Assignment.task_id == assignment.task_id,
+                        )
+                    ) or 1
+                team_delivery = bool(
+                    assignment.target_type == "task"
+                    and assignee_count > 2
+                    and configured_group
+                )
                 eligible.append({
                     "assignment_id": assignment.id,
                     "target_type": assignment.target_type,
@@ -225,6 +255,9 @@ class ReminderStore:
                     "reminder_state": assignment.reminder_state,
                     "missed_count": assignment.missed_count,
                     "last_update_at": last_update_at,
+                    "assignee_count": assignee_count,
+                    "delivery_jid": configured_group if team_delivery else assignment.user_jid,
+                    "team_delivery": team_delivery,
                 })
 
             return eligible
@@ -236,11 +269,28 @@ class ReminderStore:
         *,
         force_ignore_window: bool = False,
         source: str = "whatsapp",
+        group_jid: str | None = None,
+        target_type: str | None = None,
+        target_id: int | None = None,
+        user_jid: str | None = None,
+        ignore_idempotency: bool = False,
     ) -> dict:
-        """Execute scheduled reminder run idempotently and record attempt logs."""
+        """Deliver reminders, batching each destination into one message.
+
+        Scheduled runs use the normal frequency/idempotency checks. On-demand
+        runs provide a target and deliberately bypass those checks, while a
+        member is still restricted to their own assignment by ``user_jid``.
+        """
         now = self._now()
         cfg = self.get_config()
-        eligible = self.get_eligible_assignments(force_ignore_window=force_ignore_window)
+        eligible = self.get_eligible_assignments(
+            force_ignore_window=force_ignore_window,
+            user_jid=user_jid,
+            target_type=target_type,
+            target_id=target_id,
+            ignore_idempotency=ignore_idempotency,
+            group_jid=group_jid,
+        )
 
         results = {
             "eligible": len(eligible),
@@ -249,88 +299,116 @@ class ReminderStore:
             "failed": 0,
         }
 
+        batches: dict[str, list[dict]] = {}
         for item in eligible:
-            assignment_id = item["assignment_id"]
-            user_jid = item["user_jid"]
-            target_name = item["event_name"]
-            target_type = item.get("target_type", "event")
-            target_id = item.get("event_id") if target_type == "event" else item.get("task_id")
+            destination = normalize_jid(item.get("delivery_jid") or item["user_jid"])
+            batches.setdefault(destination, []).append(item)
 
-            with self.session_factory() as session:
-                assignment = session.get(Assignment, assignment_id)
-                if not assignment:
-                    continue
+        from features.text import public_text
 
-                new_missed_count = assignment.missed_count + 1
-                is_escalated = new_missed_count >= cfg["escalation_threshold"]
-                from features.text import public_text
-                safe_target_name = public_text(target_name, limit=180)
+        for destination, batch in batches.items():
+            team_delivery = any(item.get("team_delivery") for item in batch)
+            lines = []
+            for item in batch:
+                target_name = public_text(item["event_name"], limit=180)
+                target_type = item.get("target_type", "event")
+                assignment_id = item["assignment_id"]
+                if team_delivery:
+                    lines.append(
+                        f"• {target_type} *{target_name}* — @+{jid_user(item['user_jid'])} "
+                        f"(Assignment #{assignment_id})"
+                    )
+                else:
+                    lines.append(
+                        f"• {target_type} *{target_name}* (Assignment #{assignment_id})"
+                    )
+            if team_delivery:
                 msg = (
-                    f"⏰ *Reminder*: You have a pending assignment for {target_type} *{safe_target_name}* "
-                    f"(Assignment #{assignment_id}).\n"
+                    "⏰ *Team reminders*: these assignments still need an update.\n"
+                    + "\n".join(lines)
+                    + "\nPlease reply with your current status and a short note. "
+                    "For example: “I’ve started the task; note: I’m preparing the first draft.” "
+                    "When finished, say: “I completed the task; note: the final version is ready.”"
+                )
+            elif len(batch) == 1:
+                item = batch[0]
+                target_name = public_text(item["event_name"], limit=180)
+                msg = (
+                    f"⏰ *Reminder*: You have a pending assignment for {item.get('target_type', 'event')} *{target_name}* "
+                    f"(Assignment #{item['assignment_id']}).\n"
                     f"Please reply with your current status and a short note. For example: "
-                    f"“I’ve started {safe_target_name}; note: I’m preparing the first draft.” "
-                    f"When finished, say: “I completed {safe_target_name}; note: the final version is ready.”"
+                    f"“I’ve started {target_name}; note: I’m preparing the first draft.” "
+                    f"When finished, say: “I completed {target_name}; note: the final version is ready.”"
+                )
+            else:
+                msg = (
+                    f"⏰ *Reminders*: you have {len(batch)} pending assignments.\n"
+                    + "\n".join(lines)
+                    + "\nPlease reply with your current status and a short note for each item."
                 )
 
-                sent_ok = False
+            try:
+                if not client or not hasattr(client, "send_message"):
+                    raise RuntimeError("WhatsApp client is unavailable")
+                client.send_message(_make_neonize_jid(destination), msg)
+                sent_ok = True
                 err_detail = None
-                try:
-                    if not client or not hasattr(client, "send_message"):
-                        raise RuntimeError("WhatsApp client is unavailable")
-                    target_jid_obj = _make_neonize_jid(user_jid)
-                    client.send_message(target_jid_obj, msg)
-                    sent_ok = True
-                except Exception as exc:
-                    log.warning("Failed to send reminder: %s", exc)
-                    err_detail = "delivery unavailable"
+            except Exception as exc:
+                log.warning("Failed to send reminder batch: %s", exc)
+                sent_ok = False
+                err_detail = "delivery unavailable"
 
-                if sent_ok:
-                    assignment.missed_count = new_missed_count
-                    escalation_sent = False
-                    escalation_error = False
-                    if is_escalated and cfg["escalation_channel"] and client and hasattr(client, "send_message"):
-                        esc_target = cfg["escalation_channel"]
-                        try:
-                            esc_jid_obj = _make_neonize_jid(esc_target)
-                            client.send_message(
-                                esc_jid_obj,
-                                f"🚨 *Escalation Alert*: A member has missed {new_missed_count} "
-                                f"reminders for {target_type.capitalize()} *{safe_target_name}* (Assignment #{assignment_id}).",
-                            )
-                            escalation_sent = True
-                        except Exception as esc_err:
-                            escalation_error = True
-                            log.warning("Failed to send escalation alert: %s", esc_err)
-                    assignment.reminder_state = "escalated" if escalation_sent else "sent"
-                    res_str = "escalated" if escalation_sent else "sent"
-                    details = f"Reminder delivered (missed_count={new_missed_count})"
-                    if escalation_error:
-                        details += "; escalation delivery unavailable"
-                    log_entry = ReminderLog(
-                        assignment_id=assignment_id,
-                        timestamp=now,
-                        channel="whatsapp",
-                        result=res_str,
-                        details=details,
-                    )
-                    session.add(log_entry)
-                    if escalation_sent:
-                        results["escalated"] += 1
+            for item in batch:
+                assignment_id = item["assignment_id"]
+                target_type = item.get("target_type", "event")
+                target_name = public_text(item["event_name"], limit=180)
+                with self.session_factory() as session:
+                    assignment = session.get(Assignment, assignment_id)
+                    if not assignment:
+                        continue
+                    if sent_ok:
+                        new_missed_count = assignment.missed_count + 1
+                        is_escalated = new_missed_count >= cfg["escalation_threshold"]
+                        escalation_sent = False
+                        escalation_error = False
+                        if is_escalated and cfg["escalation_channel"] and client and hasattr(client, "send_message"):
+                            try:
+                                client.send_message(
+                                    _make_neonize_jid(cfg["escalation_channel"]),
+                                    f"🚨 *Escalation Alert*: A member has missed {new_missed_count} "
+                                    f"reminders for {target_type.capitalize()} *{target_name}* (Assignment #{assignment_id}).",
+                                )
+                                escalation_sent = True
+                            except Exception as esc_err:
+                                escalation_error = True
+                                log.warning("Failed to send escalation alert: %s", esc_err)
+                        assignment.missed_count = new_missed_count
+                        assignment.reminder_state = "escalated" if escalation_sent else "sent"
+                        result = "escalated" if escalation_sent else "sent"
+                        details = (
+                            f"Reminder delivered (missed_count={new_missed_count}; "
+                            f"batch_size={len(batch)})"
+                        )
+                        if escalation_error:
+                            details += "; escalation delivery unavailable"
+                        session.add(ReminderLog(
+                            assignment_id=assignment_id,
+                            timestamp=now,
+                            channel="whatsapp-group" if team_delivery else "whatsapp",
+                            result=result,
+                            details=details,
+                        ))
+                        results["escalated" if escalation_sent else "sent"] += 1
                     else:
-                        results["sent"] += 1
-                else:
-                    log_entry = ReminderLog(
-                        assignment_id=assignment_id,
-                        timestamp=now,
-                        channel="whatsapp",
-                        result="failed",
-                        details=f"Delivery failed: {err_detail or 'unavailable'}",
-                    )
-                    session.add(log_entry)
-                    results["failed"] += 1
-
-                session.commit()
+                        session.add(ReminderLog(
+                            assignment_id=assignment_id,
+                            timestamp=now,
+                            channel="whatsapp-group" if team_delivery else "whatsapp",
+                            result="failed",
+                            details=f"Delivery failed: {err_detail or 'unavailable'}",
+                        ))
+                        results["failed"] += 1
+                    session.commit()
 
         audit(
             self.session_factory,

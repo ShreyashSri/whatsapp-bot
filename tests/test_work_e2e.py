@@ -313,3 +313,68 @@ def test_admin_can_complete_unassigned_task_and_multi_assignee_completion_is_exp
     assert "multiple users are assigned" in last_reply(mock_client)
     with db_session_factory() as session:
         assert session.get(Task, shared.id).status == "todo"
+
+
+def test_task_event_and_person_links_are_visible_through_legacy_readers(
+    db_session_factory, admin_user, member_user
+):
+    event = EventStore(db_session_factory).create_event(
+        name="Linked event", type="organization", category="workshop", status="active"
+    )
+    task = TaskStore(db_session_factory).create(
+        "Linked task", admin_user.jid, event_id=event["id"]
+    )
+    WorkStore(db_session_factory).assign("task", task.id, member_user.jid)
+
+    assignments = EventStore(db_session_factory).get_user_assignments(member_user.jid)
+    assert assignments == [{
+        "event_id": event["id"],
+        "event_name": "Linked event",
+        "event_type": "task",
+        "status": "pending",
+        "target_type": "task",
+        "task_id": task.id,
+        "task_name": "Linked task",
+    }]
+    event_view = EventStore(db_session_factory).get_event(event["id"])
+    assert event_view["assignment_count"] == 1
+    assert event_view["task_assignment_count"] == 1
+
+
+def test_task_can_be_relinked_to_another_event(db_session_factory, handler, admin_user):
+    mock_client, run = handler
+    first = EventStore(db_session_factory).create_event(
+        name="First parent", type="organization", category="workshop", status="active"
+    )
+    second = EventStore(db_session_factory).create_event(
+        name="Second parent", type="organization", category="workshop", status="active"
+    )
+    task = TaskStore(db_session_factory).create(
+        "Move me", admin_user.jid, event_id=first["id"]
+    )
+
+    run(
+        mock_client,
+        make_msg(
+            f"!update-task {task.id} | event {second['id']}",
+            admin_user.jid,
+        ),
+    )
+
+    with db_session_factory() as session:
+        assert session.get(Task, task.id).event_id == second["id"]
+
+
+def test_legacy_task_owner_update_replaces_the_previous_person(
+    db_session_factory, admin_user, member_user
+):
+    other = upsert_user(db_session_factory, "other@s.whatsapp.net", role="member")
+    task = TaskStore(db_session_factory).create("Replace owner", admin_user.jid)
+    store = TaskStore(db_session_factory)
+    store.update(task.id, assignee_jid=member_user.jid)
+    store.update(task.id, assignee_jid=other.jid)
+
+    rows = WorkStore(db_session_factory).overview(
+        target_type="task", target_id=task.id, admin=True
+    )
+    assert [row["user_jid"] for row in rows] == [other.jid]

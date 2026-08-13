@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from db.auth import gate, normalize_jid
+from db.auth import gate, normalize_group_jid, normalize_jid
 from db.reminder_store import ReminderStore
 from features.subgroups import _get_mentioned_jids, _get_text
 from features.text import public_error, public_text, split_command_fields
@@ -41,6 +41,17 @@ def _fmt_config(cfg: dict) -> str:
         f"• Escalation Threshold: `{cfg['escalation_threshold']} missed reminders`\n"
         f"• Escalation Channel: `{chan}`"
     )
+
+
+def configured_reminder_group(config: dict) -> str | None:
+    """Return the configured team chat used for multi-assignee reminders."""
+    candidates = [config.get("pbbot_group_id")]
+    candidates.extend(config.get("group_ids", set()) or set())
+    for candidate in candidates:
+        normalized = normalize_group_jid(candidate)
+        if normalized:
+            return normalized
+    return None
 
 
 def _parse_config_args(args: str, mentions: list[str]) -> dict:
@@ -106,8 +117,13 @@ def _cmd_config(client: "NewClient", chat, args: str, actor, mentions: list[str]
         client.send_message(chat, f"⚠️ {public_error(exc, 'I could not update the reminder configuration.')}")
 
 
-def _cmd_run(client: "NewClient", chat, actor, store: ReminderStore) -> None:
-    res = store.run_reminders(client, actor, force_ignore_window=True)
+def _cmd_run(
+    client: "NewClient", chat, actor, store: ReminderStore,
+    *, group_jid: str | None = None,
+) -> None:
+    res = store.run_reminders(
+        client, actor, force_ignore_window=True, group_jid=group_jid,
+    )
     msg = (
         f"⚡ *Reminder Run Completed*\n"
         f"• Eligible assignments: `{res['eligible']}`\n"
@@ -116,6 +132,39 @@ def _cmd_run(client: "NewClient", chat, actor, store: ReminderStore) -> None:
         f"• Delivery failures: `{res['failed']}`"
     )
     client.send_message(chat, msg)
+
+
+def _cmd_remind(
+    client: "NewClient", chat, args: str, actor, store: ReminderStore,
+    *, group_jid: str | None = None,
+) -> None:
+    """Send an immediate reminder for one event/task within the actor's scope."""
+    tokens = args.split()
+    if len(tokens) != 2 or tokens[0].lower() not in {"event", "task"} or not tokens[1].isdigit():
+        client.send_message(
+            chat,
+            "⚠️ Usage: `!work reminders remind <event|task> <id>`",
+        )
+        return
+    target_type, target_id = tokens[0].lower(), int(tokens[1])
+    result = store.run_reminders(
+        client,
+        actor,
+        force_ignore_window=True,
+        source="whatsapp",
+        group_jid=group_jid,
+        target_type=target_type,
+        target_id=target_id,
+        user_jid=None if actor.role == "admin" else actor.jid,
+        ignore_idempotency=True,
+    )
+    client.send_message(
+        chat,
+        f"🔔 Reminder sent for `{target_type} {target_id}` to "
+        f"`{result['sent'] + result['escalated']}` assignment(s)."
+        if result["eligible"]
+        else f"📭 No open assignment for `{target_type} {target_id}` is in your scope.",
+    )
 
 
 def _cmd_history(client: "NewClient", chat, args: str, store: ReminderStore, *, actor=None) -> None:
@@ -197,7 +246,7 @@ def register(client: "NewClient", config: dict) -> callable:
             actor = gate(factory, source.Sender, client, chat, "admin", "reminder.run")
             if not actor:
                 return
-            _cmd_run(client, chat, actor, store)
+            _cmd_run(client, chat, actor, store, group_jid=configured_reminder_group(config))
 
         elif cmd == "!reminder-history" or (cmd == "!reminders" and sub.startswith("history")):
             actor = gate(factory, source.Sender, client, chat, "member", "reminder.history")

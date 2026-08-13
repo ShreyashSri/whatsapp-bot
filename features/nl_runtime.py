@@ -81,6 +81,7 @@ CAPABILITY_CONTRACTS: dict[str, CapabilityContract] = {
     "schema.show": CapabilityContract(entity_scope=True),
     "work.create_event": CapabilityContract(produces=frozenset({"event_id"})),
     "work.create_task": CapabilityContract(produces=frozenset({"task_id"})),
+    "reminders.send": CapabilityContract(entity_scope=True),
 }
 
 TARGET_RESOLVERS = frozenset(

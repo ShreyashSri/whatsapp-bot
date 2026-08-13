@@ -8,7 +8,7 @@ from typing import Callable
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import Assignment, Event, EventLabel, User
+from .models import Assignment, Event, EventLabel, Task, User
 from .auth import current_user, jid_user, normalize_jid
 from .work_store import WorkStore
 
@@ -52,8 +52,13 @@ def _ensure_user(session: Session, whatsapp_id: str) -> str:
 
 def _event_to_dict(session: Session, event: Event) -> dict:
     labels = session.scalars(select(EventLabel.label).where(EventLabel.event_id == event.id)).all()
-    assignment_count = session.scalar(
+    direct_assignment_count = session.scalar(
         select(func.count(Assignment.id)).where(Assignment.event_id == event.id)
+    ) or 0
+    task_assignment_count = session.scalar(
+        select(func.count(Assignment.id))
+        .join(Task, Assignment.task_id == Task.id)
+        .where(Task.event_id == event.id, Task.deleted_at.is_(None))
     ) or 0
     return {
         "id": event.id,
@@ -67,7 +72,11 @@ def _event_to_dict(session: Session, event: Event) -> dict:
         "created_at": event.created_at,
         "deleted_at": event.deleted_at,
         "labels": list(labels),
-        "assignment_count": assignment_count,
+        # An event's workload includes assignments on its child tasks. The
+        # old direct-event-only count made linked work look unassigned.
+        "assignment_count": direct_assignment_count + task_assignment_count,
+        "direct_assignment_count": direct_assignment_count,
+        "task_assignment_count": task_assignment_count,
     }
 
 
@@ -209,22 +218,29 @@ class EventStore:
             return [_assignment_to_dict(row) for row in rows]
 
     def get_user_assignments(self, user_id: str) -> list[dict]:
-        """Fetch all event assignments for a specific user, joined with event info."""
-        with self.session_factory() as session:
-            stmt = (
-                select(Assignment, Event)
-                .join(Event, Assignment.event_id == Event.id)
-            )
-            return [
-                {
-                    "event_id": event.id,
-                    "event_name": event.name,
-                    "event_type": event.type,
-                    "status": assignment.status,
-                }
-                for assignment, event in session.execute(stmt).all()
-                if jid_user(assignment.user_jid) == jid_user(user_id)
-            ]
+        """Fetch a user's direct events and tasks through the canonical relation."""
+        rows = WorkStore(self.session_factory).overview(user_jid=user_id)
+        result = []
+        for row in rows:
+            if row.get("target_type") == "event":
+                # Preserve the historical event-assignment response shape.
+                result.append({
+                    "event_id": row.get("event_id"),
+                    "event_name": row.get("name"),
+                    "event_type": row.get("event_type"),
+                    "status": row.get("status"),
+                })
+                continue
+            result.append({
+                "event_id": row.get("parent_event_id"),
+                "event_name": row.get("parent_event_name") or row.get("title"),
+                "event_type": row.get("event_type") or row.get("target_type"),
+                "status": row.get("status"),
+                "target_type": "task",
+                "task_id": row.get("task_id"),
+                "task_name": row.get("title"),
+            })
+        return result
 
     def update_user_assignment_status(self, user_id: str, event_id: int, status: str) -> bool:
         """Update the status of a user's own assignment for an event."""

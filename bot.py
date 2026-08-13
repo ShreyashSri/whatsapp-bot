@@ -188,7 +188,7 @@ def main() -> None:
     def on_pair_status(_client: NewClient, event: PairStatusEv):
         log.info("📱 Pair status: %s", event)
 
-    def _start_reminder_scheduler(client: NewClient, session_factory) -> None:
+    def _start_reminder_scheduler(client: NewClient, session_factory, runtime_config: dict) -> None:
         import threading
         from db.auth import upsert_user, current_user
         from db.reminder_store import ReminderStore
@@ -214,7 +214,14 @@ def main() -> None:
                     system_user = current_user(session_factory, "system@s.whatsapp.net")
                     if system_user:
                         log.info("⏰ Running background reminders check...")
-                        res = store.run_reminders(client, system_user, force_ignore_window=False, source="system")
+                        from features.reminders import configured_reminder_group
+                        res = store.run_reminders(
+                            client,
+                            system_user,
+                            force_ignore_window=False,
+                            source="system",
+                            group_jid=configured_reminder_group(runtime_config),
+                        )
                         log.info("⏰ Background reminders run result: %s", res)
                 except Exception as exc:
                     log.exception("Error in background reminder scheduler loop: %s", exc)
@@ -232,7 +239,7 @@ def main() -> None:
             runtime_config["bot_jid"] = Jid2String(client.get_me().JID)
         except Exception as e:
             log.warning("Could not determine bot JID: %s", e)
-        _start_reminder_scheduler(client, runtime_config["db_session_factory"])
+        _start_reminder_scheduler(client, runtime_config["db_session_factory"], runtime_config)
         _reconcile_lid_assignments(client, runtime_config["db_session_factory"])
 
     def _reconcile_lid_assignments(client: NewClient, session_factory) -> None:

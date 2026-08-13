@@ -423,3 +423,71 @@ def test_reminder_is_delivered_to_the_member_dm(db_session_factory, reminder_sto
     recipient = mock_client.send_message.call_args[0][0]
     assert getattr(recipient, "Server", "") == "s.whatsapp.net"
     assert member_user.jid.split("@")[0] in str(getattr(recipient, "User", ""))
+
+
+def test_reminders_for_one_person_are_batched(db_session_factory, reminder_store, admin_user, member_user):
+    event_store = EventStore(db_session_factory)
+    first = event_store.create_event(name="First item", type="organization", status="active")
+    second = event_store.create_event(name="Second item", type="organization", status="active")
+    event_store.assign(first["id"], member_user.jid)
+    event_store.assign(second["id"], member_user.jid)
+
+    client = MagicMock()
+    result = reminder_store.run_reminders(client, admin_user, force_ignore_window=True)
+
+    assert result["eligible"] == 2
+    assert result["sent"] == 2
+    client.send_message.assert_called_once()
+    message = client.send_message.call_args[0][1]
+    assert "First item" in message and "Second item" in message
+    assert len(reminder_store.get_history(limit=10)) == 2
+
+
+def test_three_assignees_on_task_use_configured_group(db_session_factory, reminder_store, admin_user, member_user):
+    from db.task_store import TaskStore
+    from db.work_store import WorkStore
+
+    other = upsert_user(db_session_factory, "other@s.whatsapp.net", role="member")
+    third = upsert_user(db_session_factory, "third@s.whatsapp.net", role="member")
+    task = TaskStore(db_session_factory).create("Team task", admin_user.jid)
+    work = WorkStore(db_session_factory)
+    work.assign_many("task", task.id, [member_user.jid, other.jid, third.jid])
+
+    client = MagicMock()
+    result = reminder_store.run_reminders(
+        client,
+        admin_user,
+        force_ignore_window=True,
+        group_jid="12345@g.us",
+    )
+
+    assert result["eligible"] == 3
+    assert result["sent"] == 3
+    client.send_message.assert_called_once()
+    recipient = client.send_message.call_args[0][0]
+    assert getattr(recipient, "Server", "") == "g.us"
+    assert "Team task" in client.send_message.call_args[0][1]
+    assert all(item["channel"] == "whatsapp-group" for item in reminder_store.get_history(limit=10))
+
+
+def test_on_demand_reminder_bypasses_frequency_but_keeps_member_scope(
+    db_session_factory, reminder_store, admin_user, member_user
+):
+    event_store = EventStore(db_session_factory)
+    event = event_store.create_event(name="Immediate item", type="organization", status="active")
+    event_store.assign(event["id"], member_user.jid)
+    client = MagicMock()
+
+    result = reminder_store.run_reminders(
+        client,
+        member_user,
+        force_ignore_window=True,
+        target_type="event",
+        target_id=event["id"],
+        user_jid=member_user.jid,
+        ignore_idempotency=True,
+    )
+
+    assert result["eligible"] == 1
+    assert result["sent"] == 1
+    assert getattr(client.send_message.call_args[0][0], "Server", "") == "s.whatsapp.net"

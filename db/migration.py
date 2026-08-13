@@ -97,8 +97,14 @@ def migrate_unified_work(session_factory: Callable[[], Session]) -> None:
                 # The user row is expected to exist in normal operation; the
                 # service also handles old imports that did not create one.
                 jid = WorkStore._ensure_user(session, task.assignee_jid)
+                progress_status = {
+                    "todo": "pending",
+                    "in_progress": "in_progress",
+                    "done": "completed",
+                    "cancelled": "cancelled",
+                }.get(task.status, "pending")
                 session.add(Assignment(target_type="task", task_id=task.id, user_jid=jid,
-                                       status="completed" if task.status == "done" else "pending",
+                                       status=progress_status,
                                        created_at=task.created_at))
             task.assignee_jid = None
         if Update is not None:

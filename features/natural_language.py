@@ -183,7 +183,7 @@ Work and progress:
   !work create event | <participation|organization> | <category> | <name> | [description]
   !work create task | <title> | [description] | [due YYYY-MM-DD] | [priority low|medium|high] | [event <id>]
   !work assign|unassign <event|task> <id> | @user
-  !work reminders [status|history [assignment_id]|run]
+  !work reminders [status|history [assignment_id]|run|remind <event|task> <id>]
   !work reminders config frequency <hours> | window HH:MM-HH:MM | threshold <n> | channel @admin
 Users, groups, and labels:
   !add-user <admin|member> @person
@@ -1156,6 +1156,11 @@ def compile_intent(
         if action == "history":
             assignment_id = _arg_text(arguments, "assignment_id")
             return "!reminder-history" + (f" {assignment_id}" if assignment_id else "")
+        if action == "send":
+            target = _resolve_target_reference(
+                factory, _target_arguments(arguments, text)
+            )
+            return f"!work reminders remind {target}" if target else None
         fields = []
         for key in ("frequency", "window", "threshold", "channel"):
             value = _arg_text(arguments, key)
@@ -2299,6 +2304,8 @@ def register(client, config: dict) -> Callable:
         if api_key
         else None
     )
+    from features.reminders import configured_reminder_group
+    reminder_group_jid = configured_reminder_group(config)
 
     def on_message(client, message, dispatch) -> bool:
         if getattr(message, "_pbbot_nl_command", False) is True:
@@ -2312,6 +2319,10 @@ def register(client, config: dict) -> Callable:
             return False
         if chat_server == "g.us" and not is_bot_mentioned(message, client, config):
             return False
+        try:
+            message._pbbot_reminder_group_jid = reminder_group_jid
+        except (AttributeError, TypeError):
+            pass
 
         raw_body = _get_text(message)
         if not raw_body:

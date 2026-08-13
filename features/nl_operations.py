@@ -11,7 +11,7 @@ from typing import Callable
 import logging
 import re
 
-from db.auth import jid_user, normalize_jid
+from db.auth import jid_user, normalize_group_jid, normalize_jid
 from features.work import _send
 from features.text import public_text, public_url
 
@@ -260,6 +260,7 @@ _DIRECT_SPECIAL_CAPABILITIES = frozenset({
     "labels.add", "labels.remove",
     "work.assign", "work.unassign", "work.create_event", "work.create_task",
     "work.my", "work.overview", "work.list_event_tasks",
+    "reminders.send",
     "whatsapp.add_group_members", "whatsapp.remove_group_members",
     "whatsapp.set_group_announce", "whatsapp.set_group_locked",
     "whatsapp.set_group_topic", "whatsapp.set_disappearing_timer",
@@ -1206,6 +1207,42 @@ def execute_direct_tool(
         )
     if capability in {"work.create_event", "work.create_task"}:
         return execute_work_creation(client, message, intent, factory)
+    if capability == "reminders.send":
+        from db.reminder_store import ReminderStore
+
+        actor = _authorize_tool(factory, message.Info.MessageSource.Sender, client, message.Info.MessageSource.Chat, capability)
+        if not actor:
+            return None
+        arguments = normalize_target_arguments(intent.get("arguments", {}), text) if normalize_target_arguments else intent.get("arguments", {})
+        reference = resolve_target(arguments) if resolve_target else None
+        if not reference or not reference.startswith(("event ", "task ")):
+            return _failed_operation("reminders.send requires an event or task target")
+        target_type, target_id = reference.split(" ", 1)
+        current_chat = _jid_text(message.Info.MessageSource.Chat)
+        group_jid = normalize_group_jid(current_chat)
+        if not group_jid:
+            group_jid = normalize_group_jid(
+                getattr(message, "_pbbot_reminder_group_jid", "")
+            )
+        result = ReminderStore(factory).run_reminders(
+            client,
+            actor,
+            force_ignore_window=True,
+            source="natural_language",
+            group_jid=group_jid,
+            target_type=target_type,
+            target_id=int(target_id),
+            user_jid=None if actor.role == "admin" else actor.jid,
+            ignore_idempotency=True,
+        )
+        client.send_message(
+            message.Info.MessageSource.Chat,
+            f"🔔 Reminder sent for `{target_type} {target_id}` to "
+            f"`{result['sent'] + result['escalated']}` assignment(s)."
+            if result["eligible"]
+            else f"📭 No open assignment for `{target_type} {target_id}` is in your scope.",
+        )
+        return {"target": f"{target_type} {target_id}", **result}
     handlers = {
         "whatsapp.send": lambda: execute_whatsapp_send(client, message, intent, factory),
         "whatsapp.reply": lambda: execute_whatsapp_reply(client, message, intent, factory),

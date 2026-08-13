@@ -27,6 +27,7 @@ from db.task_store import (
     VALID_STATUSES,
     normalize_task_status,
 )
+from db.work_store import WorkStore
 from features.subgroups import _get_text
 from features.text import public_error, public_text, split_command_fields
 
@@ -49,13 +50,26 @@ TASK_CMDS = (
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
-def _fmt_task(task) -> str:
+def _fmt_task(task, store: TaskStore | None = None) -> str:
     s = _STATUS_EMOJI.get(task.status, "")
     p = _PRIORITY_EMOJI.get(task.priority, "")
     due = f" | due {task.due_date.strftime('%Y-%m-%d')}" if task.due_date else ""
+    assignees = []
+    if store is not None:
+        assignees = [
+            normalize_jid(row["user_jid"])
+            for row in WorkStore(store._sf).overview(
+                target_type="task", target_id=task.id, admin=True
+            )
+            if row.get("user_jid")
+        ]
+    # Keep the deprecated column as a read fallback only for old rows that
+    # have not gone through canonical assignment migration yet.
+    if not assignees and task.assignee_jid:
+        assignees = [normalize_jid(task.assignee_jid)]
     assignee = (
-        f" | @{public_text(normalize_jid(task.assignee_jid).split('@')[0], limit=80)}"
-        if task.assignee_jid else " | unassigned"
+        " | " + ", ".join(f"@{public_text(jid.split('@')[0], limit=80)}" for jid in assignees)
+        if assignees else " | unassigned"
     )
     desc = f"\n  _{public_text(task.description, limit=300)}_" if task.description else ""
     return f"{s} *#{task.id}* {public_text(task.title, limit=180)} {p}{due}{assignee}{desc}"
@@ -133,7 +147,7 @@ def _cmd_add_task(client, chat, args: str, actor_jid: str, store: TaskStore) -> 
             due_date=parsed.get("due_date"),
             priority=parsed.get("priority", "medium"),
         )
-        client.send_message(chat, f"✅ Task created!\n{_fmt_task(task)}")
+        client.send_message(chat, f"✅ Task created!\n{_fmt_task(task, store)}")
     except ValueError as exc:
         client.send_message(chat, f"⚠️ {public_error(exc, 'I could not create that task.')}")
 
@@ -172,7 +186,7 @@ def _cmd_update_task(client, chat, args: str, store: TaskStore) -> None:
             status=parsed.get("status"),
             force_status=True,
         )
-        client.send_message(chat, f"✅ Task updated!\n{_fmt_task(task)}")
+        client.send_message(chat, f"✅ Task updated!\n{_fmt_task(task, store)}")
     except ValueError as exc:
         client.send_message(chat, f"⚠️ {public_error(exc, 'I could not update that task.')}")
 
@@ -209,7 +223,7 @@ def _cmd_list_tasks(
     if not tasks:
         client.send_message(chat, "📭 No tasks found.")
     else:
-        lines = "\n".join(_fmt_task(t) for t in tasks)
+        lines = "\n".join(_fmt_task(t, store) for t in tasks)
         client.send_message(chat, f"{header}\n\n{lines}")
 
 
@@ -225,7 +239,7 @@ def _cmd_task_info(client, chat, args: str, store: TaskStore) -> None:
         f"\n  Created by: @{public_text(normalize_jid(task.created_by_jid).split('@')[0], limit=80)}"
         f"\n  Created: {task.created_at.strftime('%Y-%m-%d')}"
     )
-    client.send_message(chat, f"*Task Detail*\n{_fmt_task(task)}{extra}")
+    client.send_message(chat, f"*Task Detail*\n{_fmt_task(task, store)}{extra}")
 
 
 # ---------------------------------------------------------------------------

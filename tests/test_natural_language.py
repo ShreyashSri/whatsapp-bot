@@ -132,6 +132,20 @@ def test_task_compilation_preserves_explicit_event_link():
     assert command.endswith("| event 4")
 
 
+def test_on_demand_reminder_compiles_named_event_or_task_target():
+    intent = {
+        "capability": "reminders.send",
+        "arguments": {"target": "launch task"},
+    }
+    with patch(
+        "features.natural_language._resolve_target_reference",
+        return_value="task 9",
+    ):
+        assert compile_intent(intent, "reminder about launch task", object(), []) == (
+            "!work reminders remind task 9"
+        )
+
+
 def test_natural_collection_names_are_normalized_to_stored_names():
     assert normalize_collection_name("2nd year") == "2nd-year"
     assert normalize_collection_name("  Backend / Maintainers! ") == "backend-maintainers"

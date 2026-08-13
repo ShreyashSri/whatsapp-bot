@@ -130,10 +130,19 @@ def _cmd_my(client: "NewClient", chat_jid, sender_jid: str, store: EventStore) -
         if not assignments:
             _reply(client, chat_jid, "📋 *You have no active event assignments right now.*")
             return
-        lines = [
-            f"• *[{a['event_id']}]* {public_text(a['event_name'], limit=180)} _({a['event_type']})_ - Status: `{a['status']}`"
-            for a in assignments
-        ]
+        lines = []
+        for assignment in assignments:
+            if assignment.get("target_type") == "task":
+                lines.append(
+                    f"• *Task {assignment['task_id']}* {public_text(assignment.get('task_name'), limit=180)} "
+                    f"under event *[{assignment['event_id']}]* {public_text(assignment['event_name'], limit=180)} "
+                    f"- Status: `{assignment['status']}`"
+                )
+            else:
+                lines.append(
+                    f"• *[{assignment['event_id']}]* {public_text(assignment['event_name'], limit=180)} "
+                    f"_({assignment['event_type']})_ - Status: `{assignment['status']}`"
+                )
         _reply(client, chat_jid, f"*📌 Your Assigned Events ({len(assignments)})*\n\n" + "\n".join(lines))
     except Exception as exc:
         log.error("Failed to fetch user assignments: %s", exc)
