@@ -91,6 +91,7 @@ def public_error(error: BaseException, fallback: str) -> str:
     safe_prefixes = (
         "usage:", "must ", "requires ", "please ", "only ", "cannot ",
         "could not ", "not found", "no ", "invalid ", "mention ",
+        "you may only ",
         "dates ", "priority ", "status ", "field ", "target ",
     )
     safe_fragments = (

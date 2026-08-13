@@ -314,6 +314,11 @@ def _entity_tokens(value: str) -> list[str]:
     ]
 
 
+def _compact_entity(value: str) -> str:
+    """Normalize spacing/punctuation for exact human-entered entity names."""
+    return "".join(_entity_tokens(value))
+
+
 def _entity_match_score(request: str, name: str, category: str = "") -> float:
     request_tokens = _entity_tokens(request)
     name_tokens = _entity_tokens(name)
@@ -391,9 +396,12 @@ def _named_entity_candidates(factory, text: str) -> list[dict]:
     candidates = [record for record in ranked if record["score"] >= 0.5]
     if not candidates:
         return []
-    # There is no follow-up clarification turn. The stable sort above is the
-    # deterministic tie-breaker (score, type, then ID), so an equally close
-    # record still resolves reproducibly.
+    if len(candidates) > 1 and (
+        candidates[0]["score"] - candidates[1]["score"] < 0.1
+    ):
+        # There is no follow-up clarification turn. An equally close record is
+        # not a target; returning it would make callers mutate the first row.
+        return []
     return candidates[:3]
 
 
@@ -668,6 +676,29 @@ def _target_arguments(arguments: dict, text: str = "") -> dict:
     return result
 
 
+def _target_name_is_grounded_in_request(arguments: dict, text: str) -> bool:
+    """Ensure a model-derived name came from the target part, not its note."""
+    target_name = arguments.get("target_name")
+    if not isinstance(target_name, str) or not target_name.strip():
+        return True
+    target_prefix = re.split(
+        r"\b(?:note|comment|comments|remark|remarks)\b", str(text), maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    target_name = target_name.strip().casefold()
+    target_phrase = re.escape(" ".join(target_name.split()))
+    if re.search(
+        rf"\b(?:task|event)\s*[:#]?\s*{target_phrase}\b|"
+        rf"\b{target_phrase}\s+(?:task|event)\b",
+        str(text),
+        re.IGNORECASE,
+    ):
+        return True
+    if target_name in target_prefix.casefold():
+        return True
+    return _entity_match_score(target_prefix, target_name) >= 0.6
+
+
 def _resolve_target_reference(factory, arguments: dict) -> str | None:
     # First, try to decode a compound target value (e.g. "event 5" or {"type": "event", "id": 5})
     raw_target = arguments.get("target")
@@ -732,7 +763,22 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
 
         if not candidates:
             return None
+        requested_key = _compact_entity(requested)
+        exact = [
+            item for item in candidates
+            if requested_key and _compact_entity(item[2]) == requested_key
+        ]
+        if len(exact) == 1:
+            best_type, best_id = exact[0][0], exact[0][1]
+            return f"{best_type} {best_id}"
+        if len(exact) > 1:
+            return None
+
         candidates.sort(key=lambda item: (-item[3], item[0], item[1]))
+        if len(candidates) > 1 and candidates[0][3] - candidates[1][3] < 0.1:
+            # A fuzzy tie is not a target. Choosing the first row can mutate
+            # an unrelated assignment when several names share a prefix.
+            return None
         best_type, best_id, _, best_score = candidates[0]
         return f"{best_type} {best_id}"
     except Exception:
@@ -1554,6 +1600,20 @@ def _intent_argument_error(
     arguments = intent.get("arguments", {})
     if not isinstance(capability, str) or not isinstance(arguments, dict):
         return "natural-language intent arguments are invalid"
+    if capability in {
+        "work.history", "work.status", "work.start", "work.complete", "work.update",
+    }:
+        target_arguments = _target_arguments(arguments, text)
+        if not any(
+            target_arguments.get(key) is not None
+            and target_arguments.get(key) != ""
+            for key in ("target", "target_id", "target_name", "event_id", "task_id")
+        ):
+            return f"{capability} requires argument target"
+        if capability in {"work.start", "work.complete", "work.update"} and not _target_name_is_grounded_in_request(
+            target_arguments, text
+        ):
+            return f"{capability} requires argument target"
     from features.agent_runtime import validate_tool_arguments
 
     error = validate_tool_arguments(capability, arguments)
@@ -1619,7 +1679,7 @@ def _intent_compile_error(intent: object, text: str = "") -> str:
             target_arguments.get(key) is not None and target_arguments.get(key) != ""
             for key in ("target_id", "target_name")
         ):
-            return f"{capability} requires argument target_id"
+            return f"{capability} requires argument target"
         if has_reference:
             return f"{capability} could not resolve argument target"
 
@@ -1747,6 +1807,13 @@ def _canonicalize_entity_scope(intent: dict, candidates: list[dict]) -> dict:
     from features.nl_runtime import entity_scope_is_missing
 
     if not candidates or not entity_scope_is_missing(intent, candidates):
+        return intent
+    if len(candidates) > 1 and (
+        candidates[0].get("score", 0) - candidates[1].get("score", 0) < 0.1
+    ):
+        # Several equally plausible entities are an unresolved target. The
+        # caller must report the missing/ambiguous argument instead of picking
+        # the first database row.
         return intent
     candidate = candidates[0]
     arguments = dict(intent.get("arguments", {}))

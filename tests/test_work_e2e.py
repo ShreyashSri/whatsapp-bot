@@ -272,6 +272,30 @@ def test_dm_member_and_admin_updates_keep_task_and_assignment_linked(
     )
     assert "✅ Update" in last_reply(mock_client)
 
+    other = upsert_user(
+        db_session_factory, "other@s.whatsapp.net", role="member", display_name="Other"
+    )
+    other_task = TaskStore(db_session_factory).create(
+        "Other DM task", admin_user.jid, event_id=event["id"]
+    )
+    WorkStore(db_session_factory).assign("task", other_task.id, other.jid)
+
+    mock_client.reset_mock()
+    run(
+        mock_client,
+        make_msg(
+            f"!work update task {other_task.id} note cross-user attempt",
+            member_user.jid,
+            server="s.whatsapp.net",
+        ),
+    )
+    assert "own assignment" in last_reply(mock_client)
+    with db_session_factory() as session:
+        assignment = session.query(Assignment).filter_by(task_id=other_task.id).one()
+        assert not session.query(ProgressRevision).filter_by(
+            assignment_id=assignment.id
+        ).first()
+
     mock_client.reset_mock()
     run(
         mock_client,

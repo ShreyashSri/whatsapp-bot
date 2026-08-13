@@ -803,6 +803,15 @@ def _handle_work_subcommand(
 
         typ, ident, jid, next_index = _target(tokens, 1)
         target_jid = jid or (sender if not is_admin else None)
+        if not is_admin and action in {
+            "history", "status", "start", "complete", "set-status", "update",
+        }:
+            if not store.overview(
+                user_jid=sender,
+                target_type=typ,
+                target_id=ident,
+            ):
+                raise ValueError("you may only update your own assignment")
         if action in ("assign", "unassign"):
             if not is_admin:
                 _send(client, chat, "⛔ Only administrators can change assignments.")

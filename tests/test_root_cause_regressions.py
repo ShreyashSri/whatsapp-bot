@@ -11,6 +11,12 @@ from db.reminder_store import ReminderStore
 from db.task_store import TaskStore
 from db.work_store import WorkStore
 from features.incidents import _build_chat_jid, register as register_incidents
+from features.natural_language import (
+    compile_intent,
+    _intent_compile_error,
+    _named_entity_candidates,
+    _resolve_target_reference,
+)
 
 
 @pytest.fixture
@@ -73,6 +79,55 @@ def test_work_store_rejects_cross_user_progress(factory):
 
     edited = work_store.edit_update(revision["id"], "corrected", admin.jid, admin=True)
     assert edited["value"] == "corrected"
+
+
+def test_named_work_target_ties_fail_closed_instead_of_picking_first_task(factory):
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+    tasks = TaskStore(factory)
+    for title in ("pr1", "pr2", "pr3", "pr4"):
+        tasks.create(title, admin.jid)
+
+    assert _resolve_target_reference(
+        factory,
+        {"target_type": "task", "target_name": "pr merged"},
+    ) is None
+    assert _resolve_target_reference(
+        factory,
+        {"target_type": "task", "target_name": "pr 3"},
+    ) == "task 3"
+    tasks.create("alpha", admin.jid)
+    tasks.create("alphi", admin.jid)
+    assert _named_entity_candidates(factory, "alp") == []
+    assert _intent_compile_error(
+        {
+            "capability": "work.update",
+            "arguments": {
+                "target_type": "task",
+                "field": "status",
+                "value": "completed",
+            },
+        }
+    ) == "work.update requires argument target"
+    note_only_target = {
+        "capability": "work.update",
+        "arguments": {
+            "target_type": "task",
+            "target_name": "pr merged",
+            "field": "status",
+            "value": "completed",
+        },
+    }
+    assert _intent_compile_error(
+        note_only_target,
+        "update status to completed, note pr merged",
+    ) == "work.update requires argument target"
+    assert compile_intent(
+        note_only_target,
+        "update status to completed, note pr merged",
+        factory,
+        [],
+        allow_text_target_fallback=False,
+    ) is None
 
 
 def test_task_assignment_link_is_canonical_and_clears_legacy_owner(factory):
