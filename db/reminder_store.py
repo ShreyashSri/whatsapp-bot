@@ -268,7 +268,8 @@ class ReminderStore:
                 msg = (
                     f"⏰ *Reminder*: You have a pending assignment for {target_type} *{safe_target_name}* "
                     f"(Assignment #{assignment_id}).\n"
-                    f"Please submit your progress update using `!work update {target_type} {target_id} note <value>`."
+                    f"Update your status with `!work start {target_type} {target_id}` or `!work complete {target_type} {target_id}`, "
+                    f"then attach a note using `!work update {target_type} {target_id} note <value>`."
                 )
 
                 sent_ok = False
