@@ -584,6 +584,18 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
     store = WorkStore(factory)
     is_admin = actor.role == "admin"
 
+    def _set_unassigned_task_lifecycle(ident: int, requested_status: str) -> bool:
+        task = TaskStore(factory).update(
+            ident,
+            status=normalize_task_status(requested_status),
+            force_status=True,
+        )
+        audit(factory, actor, "task.status", "whatsapp", {"target_id": ident, "status": task.status})
+        from db.nl_state import record_undo
+        record_undo(factory, sender, "barrier", {})
+        _send(client, chat, f"✅ `task {ident}` lifecycle set to `{task.status}` (unassigned).")
+        return True
+
     try:
         if action == "tasks":
             remainder = args[len(tokens[0]):].strip()
@@ -856,14 +868,27 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                     target_jid = _resolve_admin_target(store, typ, ident, target_jid)
                 rows = store.overview(user_jid=None if is_admin else sender, admin=is_admin,
                                       target_type=typ, target_id=ident, assignee_jid=target_jid)
+                if not rows and is_admin:
+                    if typ == "task":
+                        task = TaskStore(factory).get(ident)
+                        if task:
+                            _send(client, chat, f"📌 *Task {ident}* — lifecycle `{task.status}` | unassigned.")
+                            return True
+                    else:
+                        event = EventStore(factory).get_event(ident)
+                        if event:
+                            _send(client, chat, f"📌 *Event {ident}* — lifecycle `{event['status']}` | unassigned.")
+                            return True
                 _send(client, chat, "\n".join([f"📌 *{typ.title()} {ident}*"] + ([_format(row, _get_display_name_map(client, chat, [r.get("user_jid") for r in rows if r.get("user_jid")])) for row in rows] if rows else ["📭 No assignment found."])))
                 return True
             if not is_admin and action == "set-status":
                 _send(client, chat, "⛔ Use `!work complete` or update your own work; administrators set explicit statuses.")
                 return True
         if action in ("complete", "start") and status:
-            if action == "start" and is_admin:
+            if is_admin and action in ("complete", "start"):
                 target_jid = _resolve_admin_target(store, typ, ident, target_jid)
+            if is_admin and typ == "task" and target_jid is None:
+                return _set_unassigned_task_lifecycle(ident, status)
             result = store.set_status(
                 _reference(typ, ident, target_jid, sender, use_sender=not is_admin),
                 status,
@@ -874,14 +899,16 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             from db.nl_state import record_undo
             record_undo(factory, sender, "barrier", {})
             if action == "complete" and typ == "task":
-                # Keep the task lifecycle in sync with the assignee's
-                # completed progress while retaining separate status fields.
                 TaskStore(factory).update(ident, status="done", force_status=True)
+            elif action == "start" and typ == "task":
+                TaskStore(factory).update(ident, status="in_progress", force_status=True)
             _send(client, chat, f"✅ `{typ} {ident}` marked `{result['status']}`.")
             return True
         if action == "set-status" and status:
             if is_admin:
                 target_jid = _resolve_admin_target(store, typ, ident, target_jid)
+            if is_admin and typ == "task" and target_jid is None:
+                return _set_unassigned_task_lifecycle(ident, status)
             result = store.set_status(
                 _reference(typ, ident, target_jid, sender, use_sender=not is_admin),
                 status,
@@ -891,6 +918,12 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             audit(factory, actor, f"{typ}.status", "whatsapp", {"target_id": ident, "status": result["status"]})
             from db.nl_state import record_undo
             record_undo(factory, sender, "barrier", {})
+            if typ == "task":
+                TaskStore(factory).update(
+                    ident,
+                    status=normalize_task_status(status),
+                    force_status=True,
+                )
             _send(client, chat, f"✅ `{typ} {ident}` set to `{result['status']}`.")
             return True
     except Exception as exc:
@@ -907,7 +940,7 @@ def handle(client, message, session_factory) -> bool:
         return False
     source = message.Info.MessageSource
     chat = source.Chat
-    if getattr(chat, "Server", "") != "g.us":
+    if getattr(chat, "Server", "") not in {"g.us", "s.whatsapp.net", "lid"}:
         return False
     body = _get_text(message)
     command, _, args = body.partition(" ")

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from .auth import jid_user, normalize_jid
 from .models import Event, Task, User
-from .work_store import WorkStore
+from .work_store import TASK_LIFECYCLE_TO_PROGRESS, WorkStore
 
 VALID_STATUSES = ("todo", "in_progress", "done", "cancelled")
 VALID_PRIORITIES = ("low", "medium", "high")
@@ -28,6 +28,8 @@ TASK_STATUS_ALIASES = {
     "cancelled": "cancelled",
     "canceled": "cancelled",
 }
+
+TASK_TO_PROGRESS_STATUS = TASK_LIFECYCLE_TO_PROGRESS
 
 
 def normalize_task_status(value: str) -> str:
@@ -175,6 +177,25 @@ class TaskStore:
 
     # --- Update ---
 
+    def _sync_assignment_statuses(self, task_id: int, status: str) -> None:
+        """Keep every assignment's progress aligned with task lifecycle state.
+
+        Task lifecycle is the durable work-item state while assignment status
+        is the per-person view of progress.  They are separate columns, but a
+        lifecycle change must not leave the linked assignments reporting an
+        older state.  Route the propagation through WorkStore so each change
+        still gets its normal append-only status revision.
+        """
+        progress_status = TASK_TO_PROGRESS_STATUS[status]
+        store = WorkStore(self._sf)
+        for row in store.overview(target_type="task", target_id=task_id, admin=True):
+            if row.get("status") != progress_status:
+                store.set_status(
+                    str(row["id"]),
+                    progress_status,
+                    "system@s.whatsapp.net",
+                )
+
     def update(
         self, task_id: int, *, title: str | None = None, description: str | None = None,
         assignee_jid: str | None = None, due_date: datetime | None = None,
@@ -216,10 +237,8 @@ class TaskStore:
                     rows = WorkStore(self._sf).overview(target_type="task", target_id=task_id, admin=True)
                 for row in rows:
                     WorkStore(self._sf).unassign("task", task_id, row["user_jid"])
-        if status == "done":
-            for row in WorkStore(self._sf).overview(target_type="task", target_id=task_id, admin=True):
-                if row.get("status") != "completed":
-                    WorkStore(self._sf).set_status(str(row["id"]), "completed", "system@s.whatsapp.net")
+        if status is not None:
+            self._sync_assignment_statuses(task_id, status)
         return task
 
     # --- Assign / Unassign ---
@@ -252,8 +271,7 @@ class TaskStore:
             task.updated_at = self._now()
             session.commit()
             session.refresh(task)
-        for row in assignments:
-            WorkStore(self._sf).set_status(f"{row['id']}", "completed", actor_jid)
+        self._sync_assignment_statuses(task_id, "done")
         return task
 
     # --- Delete (soft) ---

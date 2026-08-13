@@ -109,6 +109,20 @@ def _allowed_inbound_groups(config: dict) -> set[str]:
     return _configured_groups(config, "pbbot_group_id", "media_group_id")
 
 
+def _allowed_inbound_chat(config: dict, chat) -> bool:
+    """Allow configured groups and authenticated one-to-one chats.
+
+    Group traffic remains explicitly allowlisted.  A direct chat is already
+    scoped to the sender's WhatsApp identity and is authorized by each
+    feature's normal role/assignment gate, so dropping it here prevents
+    members from using the bot privately at all.
+    """
+    chat_id = normalize_jid(_jid_string(chat))
+    if chat_id.endswith("@g.us"):
+        return chat_id in _allowed_inbound_groups(config)
+    return chat_id.endswith(("@s.whatsapp.net", "@lid"))
+
+
 def _allowed_outbound_groups(config: dict) -> set[str]:
     """Return every configured group the bot may deliver to."""
     return _configured_groups(
@@ -157,7 +171,6 @@ def main() -> None:
     if not session_db.is_absolute():
         session_db = Path.cwd() / session_db
     client = NewClient(str(session_db))
-    allowed_inbound_groups = _allowed_inbound_groups(runtime_config)
     allowed_outbound_groups = _allowed_outbound_groups(runtime_config)
 
     # Enforce destination policy at the live client boundary. This protects
@@ -399,7 +412,6 @@ def main() -> None:
                     threading.Thread(target=resolve_in_bg, daemon=True).start()
 
         chat = getattr(source, "Chat", None)
-        chat_id = _jid_string(chat) if chat else ""
         if time.monotonic() < accept_messages_after:
             return
 
@@ -407,11 +419,7 @@ def main() -> None:
         if message_timestamp <= startup_timestamp:
             return
 
-        chat_id = normalize_jid(chat_id)
-        if (
-            not chat_id.endswith("@g.us")
-            or chat_id not in allowed_inbound_groups
-        ):
+        if not _allowed_inbound_chat(runtime_config, chat):
             return
         try:
             dispatch_queue.put_nowait(message)

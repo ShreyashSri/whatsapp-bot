@@ -46,9 +46,9 @@ class FakeHttpClient:
         return self.response
 
 
-def make_message(text, sender="member@s.whatsapp.net"):
+def make_message(text, sender="member@s.whatsapp.net", server="g.us"):
     message = MagicMock()
-    message.Info.MessageSource.Chat.Server = "g.us"
+    message.Info.MessageSource.Chat.Server = server
     message.Info.MessageSource.Sender = sender
     message.Message.conversation = text
     message.Message.extendedTextMessage = None
@@ -117,6 +117,19 @@ def test_work_lifecycle_and_crud_capabilities_compile_to_legacy_handlers():
             {"capability": "work.delete_task", "arguments": {"target_type": "task", "target_id": 7}},
             "delete task 7", object(), [],
         ) == "!delete-task 7"
+
+
+def test_task_compilation_preserves_explicit_event_link():
+    command = compile_intent(
+        {
+            "capability": "work.create_task",
+            "arguments": {"title": "Prepare slides", "event_id": 4},
+        },
+        "create task Prepare slides under event 4",
+        object(),
+        [],
+    )
+    assert command.endswith("| event 4")
 
 
 def test_natural_collection_names_are_normalized_to_stored_names():
@@ -856,6 +869,29 @@ def test_bot_mention_translates_and_reenters_dispatch_with_sender_context():
     assert translated.Info.MessageSource.Sender == "member@s.whatsapp.net"
     assert translated.Message.conversation == "!my"
     assert translated._pbbot_nl_command is True
+
+
+def test_natural_language_trigger_is_available_in_direct_chat():
+    client = MagicMock()
+    client.get_me.return_value = SimpleNamespace(
+        JID="bot@s.whatsapp.net", LID="999999@lid"
+    )
+    message = make_message(
+        "show my workload",
+        "member@s.whatsapp.net",
+        server="s.whatsapp.net",
+    )
+    dispatch = MagicMock()
+
+    with patch.object(
+        MistralCommandTranslator,
+        "translate",
+        return_value=("!my", ""),
+    ):
+        handler = register(client, {"mistral_api_key": "secret"})
+        assert handler(client, message, dispatch) is True
+
+    dispatch.assert_called_once()
 
 
 def test_me_alias_triggers_translation_and_resolves_to_sender_mention():

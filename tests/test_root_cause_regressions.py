@@ -6,8 +6,9 @@ from flask import Flask
 
 from db.auth import authorize, upsert_user
 from db.event_store import EventStore
-from db.models import Assignment, Base, EventFieldSchema
+from db.models import Assignment, Base, EventFieldSchema, Task
 from db.reminder_store import ReminderStore
+from db.task_store import TaskStore
 from db.work_store import WorkStore
 from features.incidents import _build_chat_jid, register as register_incidents
 
@@ -72,6 +73,30 @@ def test_work_store_rejects_cross_user_progress(factory):
 
     edited = work_store.edit_update(revision["id"], "corrected", admin.jid, admin=True)
     assert edited["value"] == "corrected"
+
+
+def test_task_assignment_link_is_canonical_and_clears_legacy_owner(factory):
+    owner = upsert_user(factory, "owner@s.whatsapp.net", display_name="Owner")
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin", display_name="Admin")
+    task = TaskStore(factory).create("Canonical task", admin.jid)
+
+    with factory.begin() as session:
+        session.get(Task, task.id).assignee_jid = owner.jid
+
+    work_store = WorkStore(factory)
+    work_store.assign("task", task.id, owner.jid)
+    with factory() as session:
+        assert session.get(Task, task.id).assignee_jid is None
+
+    work_store.unassign("task", task.id, owner.jid)
+    with factory() as session:
+        assert session.get(Task, task.id).assignee_jid is None
+
+    TaskStore(factory).update(task.id, status="done", force_status=True)
+    work_store.assign("task", task.id, owner.jid)
+    with factory() as session:
+        assignment = session.query(Assignment).filter_by(task_id=task.id).one()
+        assert assignment.status == "completed"
 
 
 def test_failed_reminder_does_not_mark_assignment_delivered(factory):

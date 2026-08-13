@@ -1036,6 +1036,14 @@ def compile_intent(
                 return None
             from features.text import encode_command_field
             fields = [encode_command_field(title), encode_command_field(_arg_text(arguments, "description"))]
+            event_ref = arguments.get("event_id")
+            if event_ref is None:
+                event_ref = arguments.get("event_name") or arguments.get("event")
+            if event_ref is not None:
+                event_ref = _arg_text({"value": event_ref}, "value")
+                if not event_ref.isdigit():
+                    return None
+                fields.append(f"event {encode_command_field(event_ref)}")
             for key in ("due", "priority"):
                 value = _arg_text(arguments, key)
                 if value:
@@ -2297,9 +2305,12 @@ def register(client, config: dict) -> Callable:
             return False
         if not message.Info or not message.Info.MessageSource:
             return False
-        if getattr(message.Info.MessageSource.Chat, "Server", "") != "g.us":
+        chat_server = getattr(message.Info.MessageSource.Chat, "Server", "")
+        if chat_server not in {
+            "g.us", "s.whatsapp.net", "lid",
+        }:
             return False
-        if not is_bot_mentioned(message, client, config):
+        if chat_server == "g.us" and not is_bot_mentioned(message, client, config):
             return False
 
         raw_body = _get_text(message)

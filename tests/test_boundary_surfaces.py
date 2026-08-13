@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+
+from bot import _allowed_inbound_chat
 from db.transaction import TransactionClient, TransactionDeliveryError
 from db.auth import normalize_group_jid
 from features.neonize_policy import OutboundDestinationError, install_outbound_policy
@@ -73,3 +76,12 @@ def test_group_configuration_normalizes_bare_numbers_consistently():
     assert normalize_group_jid("12345") == "12345@g.us"
     assert normalize_group_jid("12345@g.us") == "12345@g.us"
     assert normalize_group_jid("12345@s.whatsapp.net") == ""
+
+
+def test_inbound_commands_allow_configured_groups_and_direct_chats():
+    config = {"group_ids": {"12345@g.us"}, "pbbot_group_id": None, "media_group_id": None}
+
+    assert _allowed_inbound_chat(config, SimpleNamespace(User="12345", Server="g.us"))
+    assert _allowed_inbound_chat(config, SimpleNamespace(User="67890", Server="s.whatsapp.net"))
+    assert _allowed_inbound_chat(config, SimpleNamespace(User="67890", Server="lid"))
+    assert not _allowed_inbound_chat(config, SimpleNamespace(User="99999", Server="g.us"))

@@ -14,7 +14,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from db.auth import upsert_user
-from db.models import Base
+from db.event_store import EventStore
+from db.models import Assignment, Base, ProgressRevision, Task
+from db.task_store import TaskStore
+from db.work_store import WorkStore
 from features.work import register as register_work
 
 
@@ -42,9 +45,9 @@ def handler(db_session_factory):
     return mock_client, register_work(mock_client, config)
 
 
-def make_msg(text: str, sender_jid: str):
+def make_msg(text: str, sender_jid: str, server: str = "g.us"):
     msg = MagicMock()
-    msg.Info.MessageSource.Chat.Server = "g.us"
+    msg.Info.MessageSource.Chat.Server = server
     msg.Info.MessageSource.Sender = sender_jid
     msg.Message.conversation = text
     msg.Message.extendedTextMessage = None
@@ -201,3 +204,112 @@ def test_unassigned_member_cannot_act_on_others_work(db_session_factory, handler
     mock_client.reset_mock()
     run(mock_client, make_msg(f"!work update event {event_id} note hijack", member_user.jid))
     assert "⚠️" in last_reply(mock_client)
+
+
+def test_dm_member_and_admin_updates_keep_task_and_assignment_linked(
+    db_session_factory, handler, admin_user, member_user
+):
+    mock_client, run = handler
+    event = EventStore(db_session_factory).create_event(
+        name="DM event", type="organization", category="workshop"
+    )
+    task = TaskStore(db_session_factory).create(
+        "DM task", admin_user.jid, event_id=event["id"]
+    )
+    WorkStore(db_session_factory).assign("event", event["id"], member_user.jid)
+    WorkStore(db_session_factory).assign("task", task.id, member_user.jid)
+
+    mock_client.reset_mock()
+    run(
+        mock_client,
+        make_msg(
+            f"!work update event {event['id']} note admin correction",
+            admin_user.jid,
+            server="s.whatsapp.net",
+        ),
+    )
+    assert "✅ Update" in last_reply(mock_client)
+
+    mock_client.reset_mock()
+    run(
+        mock_client,
+        make_msg(
+            f"!work start task {task.id}",
+            member_user.jid,
+            server="s.whatsapp.net",
+        ),
+    )
+    assert "in_progress" in last_reply(mock_client)
+
+    mock_client.reset_mock()
+    run(
+        mock_client,
+        make_msg(
+            f"!work update task {task.id} note member progress",
+            member_user.jid,
+            server="s.whatsapp.net",
+        ),
+    )
+    assert "✅ Update" in last_reply(mock_client)
+
+    mock_client.reset_mock()
+    run(
+        mock_client,
+        make_msg(
+            f"!work set-status task {task.id} completed",
+            admin_user.jid,
+            server="s.whatsapp.net",
+        ),
+    )
+    assert "completed" in last_reply(mock_client)
+
+    with db_session_factory() as session:
+        assert session.get(Task, task.id).event_id == event["id"]
+        assert session.get(Task, task.id).status == "done"
+        assignment = session.query(Assignment).filter_by(task_id=task.id).one()
+        assert assignment.status == "completed"
+        fields = {
+            revision.field
+            for revision in session.query(ProgressRevision).filter_by(
+                assignment_id=assignment.id
+            ).all()
+        }
+        assert fields == {"status", "note"}
+
+
+def test_admin_can_complete_unassigned_task_and_multi_assignee_completion_is_explicit(
+    db_session_factory, handler, admin_user, member_user
+):
+    mock_client, run = handler
+    unassigned = TaskStore(db_session_factory).create("Unassigned task", admin_user.jid)
+
+    run(
+        mock_client,
+        make_msg(f"!work complete task {unassigned.id}", admin_user.jid),
+    )
+    assert "unassigned" in last_reply(mock_client)
+    with db_session_factory() as session:
+        assert session.get(Task, unassigned.id).status == "done"
+
+    status_only = TaskStore(db_session_factory).create("Status-only task", admin_user.jid)
+    mock_client.reset_mock()
+    run(
+        mock_client,
+        make_msg(f"!work set-status task {status_only.id} in_progress", admin_user.jid),
+    )
+    assert "in_progress" in last_reply(mock_client)
+    with db_session_factory() as session:
+        assert session.get(Task, status_only.id).status == "in_progress"
+
+    other = upsert_user(
+        db_session_factory, "other@s.whatsapp.net", display_name="Other"
+    )
+    shared = TaskStore(db_session_factory).create("Shared task", admin_user.jid)
+    WorkStore(db_session_factory).assign("task", shared.id, member_user.jid)
+    WorkStore(db_session_factory).assign("task", shared.id, other.jid)
+
+    mock_client.reset_mock()
+    run(mock_client, make_msg(f"!work complete task {shared.id}", admin_user.jid))
+    assert "multiple users are assigned" in last_reply(mock_client)
+    with db_session_factory() as session:
+        assert session.get(Task, shared.id).status == "todo"

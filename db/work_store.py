@@ -16,6 +16,12 @@ from .models import Assignment, Event, ProgressRevision, Task, User
 from .schema_store import validate_submission
 
 PROGRESS_STATUSES = frozenset({"pending", "in_progress", "completed", "cancelled"})
+TASK_LIFECYCLE_TO_PROGRESS = {
+    "todo": "pending",
+    "in_progress": "in_progress",
+    "done": "completed",
+    "cancelled": "cancelled",
+}
 
 # Module-level mapping: jid_user(lid) -> jid_user(phone).
 # Populated by load_persistent_aliases at startup so that
@@ -265,6 +271,11 @@ class WorkStore:
     def _assign_in(self, session: Session, target_type: str, target_id: int, user_jid: str) -> dict:
         target_type = target_type.lower()
         target = self._target(session, target_type, target_id)
+        if isinstance(target, Task):
+            # ``assignments`` is the canonical relation.  Clear the old
+            # single-assignee compatibility column so task readers cannot
+            # display a different owner than the linked assignment rows.
+            target.assignee_jid = None
         jid = self._ensure_user(session, user_jid)
         existing = self._assignment(session, target_type, target_id, jid)
         if existing:
@@ -275,7 +286,11 @@ class WorkStore:
             event_id=target_id if target_type == "event" else None,
             task_id=target_id if target_type == "task" else None,
             user_jid=jid,
-            status="pending",
+            status=(
+                TASK_LIFECYCLE_TO_PROGRESS.get(target.status, "pending")
+                if isinstance(target, Task)
+                else "pending"
+            ),
             created_at=self._now(),
         )
         session.add(row)
@@ -296,7 +311,10 @@ class WorkStore:
             return self._unassign_in(session, target_type, target_id, user_jid)
 
     def _unassign_in(self, session: Session, target_type: str, target_id: int, user_jid: str) -> bool:
+        target = self._target(session, target_type, target_id)
         row = self._assignment(session, target_type, target_id, user_jid)
+        if isinstance(target, Task):
+            target.assignee_jid = None
         if not row:
             return False
         session.delete(row)
