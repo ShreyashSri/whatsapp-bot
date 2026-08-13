@@ -1156,7 +1156,8 @@ def compile_intent(
         target_args = _target_arguments(arguments, text)
         target_args["target_type"] = "event"
         target = _resolve_target_reference(factory, target_args)
-        return f"!reports progress {target}" if target else "!reports"
+        # A scoped progress request must never degrade into the global report.
+        return f"!reports progress {target}" if target else None
     if capability == "reports.status":
         status = _arg_text(arguments, "status")
         return f"!reports {status}" if status else "!reports"

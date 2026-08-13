@@ -255,6 +255,22 @@ def test_intent_compilation_reports_the_missing_semantic_field():
     ) == "card.design requires argument body"
 
 
+def test_scoped_progress_never_falls_back_to_global_report():
+    with patch(
+        "features.natural_language._resolve_target_reference",
+        return_value=None,
+    ):
+        assert compile_intent(
+            {
+                "capability": "reports.progress",
+                "arguments": {"target_type": "event", "target_name": "Missing"},
+            },
+            "show progress for Missing event",
+            object(),
+            [],
+        ) is None
+
+
 def test_target_word_order_is_normalized_at_the_shared_boundary():
     assert _typed_target_parts("event abc") == ("event", "abc")
     assert _typed_target_parts("abc event") == ("event", "abc")
