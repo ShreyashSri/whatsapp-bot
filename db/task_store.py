@@ -17,8 +17,11 @@ VALID_PRIORITIES = ("low", "medium", "high")
 TASK_STATUS_ALIASES = {
     "pending": "todo",
     "todo": "todo",
+    "to do": "todo",
+    "to-do": "todo",
     "in_progress": "in_progress",
     "in progress": "in_progress",
+    "in-progress": "in_progress",
     "completed": "done",
     "complete": "done",
     "done": "done",
@@ -120,6 +123,9 @@ class TaskStore:
             return self._get(session, task_id)
 
     def list_all(self, *, status: str | None = None) -> list[Task]:
+        status = normalize_task_status(status) if status else None
+        if status and status not in VALID_STATUSES:
+            raise ValueError("status must be todo, in_progress, done, or cancelled")
         with self._sf() as session:
             q = session.query(Task).filter(Task.deleted_at.is_(None))
             if status:
@@ -128,6 +134,9 @@ class TaskStore:
 
     def list_for_event(self, event_id: int, *, status: str | None = None) -> list[Task]:
         """List active tasks linked to one active event."""
+        status = normalize_task_status(status) if status else None
+        if status and status not in VALID_STATUSES:
+            raise ValueError("status must be todo, in_progress, done, or cancelled")
         with self._sf() as session:
             event = session.get(Event, event_id)
             if event is None or event.deleted_at is not None:
@@ -140,9 +149,29 @@ class TaskStore:
             return query.order_by(Task.id).all()
 
     def list_for_user(self, assignee_jid: str, *, status: str | None = None) -> list[Task]:
-        ids = [row["task_id"] for row in WorkStore(self._sf).overview(user_jid=assignee_jid, status=status, target_type="task")]
+        status = normalize_task_status(status) if status else None
+        if status and status not in VALID_STATUSES:
+            raise ValueError("status must be todo, in_progress, done, or cancelled")
+        ids = [
+            row["task_id"]
+            for row in WorkStore(self._sf).overview(
+                user_jid=assignee_jid,
+                # Assignment progress and task lifecycle are separate state
+                # machines. Resolve the assignment scope first, then filter
+                # the returned Task rows by Task.status below.
+                status=None,
+                target_type="task",
+            )
+        ]
+        if not ids:
+            return []
         with self._sf() as session:
-            return [session.get(Task, task_id) for task_id in ids]
+            query = session.query(Task).filter(
+                Task.id.in_(ids), Task.deleted_at.is_(None)
+            )
+            if status:
+                query = query.filter(Task.status == status)
+            return query.order_by(Task.id).all()
 
     # --- Update ---
 
@@ -160,6 +189,7 @@ class TaskStore:
                     raise ValueError(f"priority must be one of {VALID_PRIORITIES}")
                 task.priority = priority
             if status is not None:
+                status = normalize_task_status(status)
                 if status not in VALID_STATUSES:
                     raise ValueError(f"status must be one of {VALID_STATUSES}")
                 if not force_status and status not in _TRANSITIONS.get(task.status, set()):

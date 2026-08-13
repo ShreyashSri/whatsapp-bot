@@ -1,7 +1,13 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from features.agent_runtime import MAX_PLAN_STEPS, tool_spec, validate_plan_preflight, validate_registry
+from features.agent_runtime import (
+    MAX_PLAN_STEPS,
+    tool_spec,
+    validate_plan_preflight,
+    validate_registry,
+    validate_tool_arguments,
+)
 
 
 def test_plan_preflight_accepts_dependencies_on_prior_steps():
@@ -115,6 +121,15 @@ def test_plan_preflight_rejects_missing_required_tool_argument():
         {"step_id": "task", "capability": "work.create_task", "arguments": {}},
     ])
     assert "requires argument title" in error
+
+
+def test_mutating_legacy_capabilities_have_exact_required_arguments():
+    assert validate_tool_arguments("labels.delete", {}) == (
+        "labels.delete requires argument collection"
+    )
+    assert validate_tool_arguments("admin.remove_user", {}) == (
+        "admin.remove_user requires argument mention_indices"
+    )
 
 
 def test_neonize_adapters_are_registered_as_narrow_tools():

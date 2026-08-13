@@ -10,7 +10,7 @@ from db.auth import audit, gate, jid_user, normalize_jid
 from db.event_store import EventStore, validate_event_type_category
 from db.schema_store import FIELD_TYPES, SchemaStore
 from db.subgroup_store import SubgroupStore
-from db.task_store import TaskStore
+from db.task_store import TaskStore, normalize_task_status
 from db.work_store import PROGRESS_STATUSES, WorkStore
 from db.reminder_store import ReminderStore
 from features.subgroups import _get_mentioned_jids, _get_text
@@ -589,11 +589,11 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             remainder = args[len(tokens[0]):].strip()
             parts = remainder.split()
             if len(parts) < 2 or parts[0].lower() != "event" or not parts[1].isdigit():
-                raise ValueError("usage: !work tasks event <id> [todo|in_progress|done|cancelled]")
+                raise ValueError("usage: !work tasks event <id> [todo|to-do|pending|in_progress|in-progress|done|completed|cancelled]")
             event_id = int(parts[1])
-            status = parts[2].lower() if len(parts) > 2 else None
+            status = normalize_task_status(" ".join(parts[2:])) if len(parts) > 2 else None
             if status is not None and status not in ("todo", "in_progress", "done", "cancelled"):
-                raise ValueError("status must be todo, in_progress, done, or cancelled")
+                raise ValueError("status must be todo/to-do/pending, in_progress/in-progress, done/completed, or cancelled")
             tasks = TaskStore(factory).list_for_event(event_id, status=status)
             if not tasks:
                 _send(client, chat, f"📭 No tasks found under event {event_id}.")

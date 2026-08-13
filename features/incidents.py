@@ -16,9 +16,8 @@ from typing import TYPE_CHECKING
 
 from flask import Flask, request, jsonify
 
-from db.auth import normalize_group_jid
+from db.auth import normalize_jid
 from db.incident_store import IncidentStore
-from features.text import public_url
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -40,11 +39,11 @@ def _save_state(store: IncidentStore, state: dict) -> None:
 def _build_chat_jid(value):
     from neonize.utils import build_jid
 
-    normalized = normalize_group_jid(value)
-    if not normalized:
-        raise ValueError("incident group must be a WhatsApp group JID")
-    user, server = normalized.split("@", 1)
-    return build_jid(user, server)
+    normalized = normalize_jid(value)
+    if "@" in normalized:
+        user, server = normalized.split("@", 1)
+        return build_jid(user, server)
+    return build_jid(normalized)
 
 
 # ---------------------------------------------------------------------------
@@ -130,14 +129,14 @@ def register(client: "NewClient", config: dict) -> None:
                 parts = []
 
                 for item in new_alerts:
-                    url, code = public_url(item["url"], limit=500), item["code"]
+                    url, code = item["url"], item["code"]
                     if code == 0:
-                        parts.append(f"{url} — DNS/connection failure 🌐💥\n\nStatus: {code}")
+                        parts.append(f"{url} DNS/CONNECTION FAILURE 🌐💥\n\nError: {code}\nMessage : HemangBSDK")
                     else:
-                        parts.append(f"{url} — service returned an error 💥\n\nStatus: {code}")
+                        parts.append(f"{url} FAT GAYA 💥\n\nError: {code}\nMessage : HemangBSDK")
 
                 for url in resolved_alerts:
-                    parts.append(f"{public_url(url, limit=500)} — service recovered 🚀✨")
+                    parts.append(f"{url} bolne lagi 🚀✨")
 
                 text = "\n".join(parts)
 

@@ -13,6 +13,7 @@ from features.nl_runtime import (
     TargetResolution,
     resolve_target,
     target_is_required_and_missing,
+    validate_mutation_policy,
     validate_execution_ready,
 )
 from features.labels import add_label_members, remove_label_members
@@ -410,6 +411,37 @@ def test_unknown_resolver_and_missing_required_target_are_rejected():
         [],
     )
     assert "identify who" in error
+
+
+def test_optional_revoke_and_bulk_delete_require_explicit_scope():
+    assert validate_mutation_policy(
+        {"capability": "whatsapp.group_invite", "arguments": {}},
+        "show the invite",
+    ) is None
+    assert validate_mutation_policy(
+        {"capability": "whatsapp.group_invite", "arguments": {}},
+        "revoke the invite",
+    ) == "whatsapp.group_invite requires argument revoke"
+    assert validate_mutation_policy(
+        {"capability": "whatsapp.contact_qr", "arguments": {"revoke": True}},
+        "show the QR",
+    ) == "whatsapp.contact_qr requires explicit destructive wording"
+    assert validate_mutation_policy(
+        {"capability": "work.unassign", "arguments": {}},
+        "clear assignments",
+    ) is None
+    assert validate_mutation_policy(
+        {"capability": "collections.delete", "arguments": {}},
+        "delete all subgroups",
+    ) is None
+    assert validate_mutation_policy(
+        {"capability": "collections.delete", "arguments": {}},
+        "delete the subgroup",
+    ) == "collections.delete requires argument collection"
+    assert validate_mutation_policy(
+        {"capability": "collections.delete", "arguments": {"collection": "team"}},
+        "do not delete team",
+    ) == "collections.delete requires explicit destructive wording"
 
 
 def test_failed_resolution_cannot_be_treated_as_ready():

@@ -1384,29 +1384,7 @@ def execute_work_read(
                     if ranked and ranked[0][1] >= 0.4:
                         event_id = ranked[0][0]["id"]
             if not str(event_id or "").isdigit():
-                # If the NL model misrouted a user-workload query to this
-                # capability (e.g. "list all tasks of @Shuvam"), fall back
-                # gracefully to a workload query for the mentioned users.
-                if visible_mentions:
-                    if actor.role != "admin":
-                        raise ValueError("work.list_event_tasks requires an event target")
-                    # Re-route to user workload
-                    target_jid = visible_mentions[0]
-                    all_aliases = _alias_jids(target_jid)
-                    rows = store.overview(
-                        user_jid=all_aliases[0],
-                        also_jids=all_aliases[1:],
-                        status=status,
-                    )
-                    heading = "📌 *Workload*"
-                    all_work_jids = [row["user_jid"] for row in rows if row.get("user_jid")]
-                    display_names = _get_display_name_map(client, chat, all_work_jids)
-                    from features.work import _format as _fmt
-                    lines = [heading]
-                    lines.extend(_fmt(row, display_names) for row in rows)
-                    _send(client, chat, "\n".join(lines) if rows else heading + "\n\n📭 No matching work.", mention_jids=all_work_jids)
-                    return {"rows": [_structured_work_row(row) for row in rows], "row_count": len(rows)}
-                raise ValueError("event reference is required")
+                raise ValueError("work.list_event_tasks requires an event target")
             tasks = TaskStore(factory).list_for_event(int(event_id), status=task_status)
             rows = []
             for task in tasks:
@@ -1571,6 +1549,7 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
             client.send_message(chat, f"✅ Event `{event['id']}` created: *{public_text(event['name'], limit=180)}*")
             return {"event_id": event["id"], "event": event}
 
+        from db.event_store import EventStore
         from db.task_store import TaskStore
         title = str(arguments.get("title") or "").strip()
         if not title:
@@ -1583,7 +1562,8 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
             return None
         raw_event = arguments.get("event_id") if arguments.get("event_id") is not None else (arguments.get("event_name") or arguments.get("event"))
         resolved_event_id = None
-        if raw_event is not None:
+        has_event_reference = raw_event is not None and str(raw_event).strip() != ""
+        if has_event_reference:
             if isinstance(raw_event, int) or (isinstance(raw_event, str) and raw_event.strip().isdigit()):
                 resolved_event_id = int(str(raw_event).strip())
             elif isinstance(raw_event, str) and raw_event.strip() and factory:
@@ -1595,7 +1575,7 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
                     if not match:
                         ranked = sorted(
                             ((e, _entity_match_score(raw_event, e["name"], e.get("category", ""))) for e in events),
-                            key=lambda item: -item[1],
+                            key=lambda item: (-item[1], item[0]["id"]),
                         )
                         if ranked and ranked[0][1] >= 0.4:
                             match = ranked[0][0]
@@ -1603,6 +1583,8 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
                         resolved_event_id = match["id"]
                 except Exception:
                     pass
+            if resolved_event_id is None or not EventStore(factory).get_event(resolved_event_id):
+                return _failed_operation("work.create_task could not resolve argument event")
 
         task = TaskStore(factory).create(
             title=title,

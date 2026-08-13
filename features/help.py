@@ -132,6 +132,7 @@ MODULE_HELP = {
         "Participation categories: `gsoc`, `lfx`, `hacktoberfest`, `research`, `other`.\n"
         "Organization categories: `recruitment`, `hackathon`, `workshop`, `bootcamp`, `other`.\n"
         "Progress statuses: `pending`, `in_progress`, `completed`, `cancelled`.\n"
+        "Task filters also accept `todo`/`to-do`/`pending`, `in_progress`/`in-progress`, `done`/`completed`, and `cancelled`.\n"
         "When multiple users are assigned, an admin must mention the target user.\n"
         "Use spaces in references (`event 4`, `task 7`); old colon forms remain accepted for compatibility."
     ),

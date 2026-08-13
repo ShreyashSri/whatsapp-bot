@@ -21,7 +21,12 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from db.auth import gate, normalize_jid
-from db.task_store import TaskStore, VALID_PRIORITIES, VALID_STATUSES
+from db.task_store import (
+    TaskStore,
+    VALID_PRIORITIES,
+    VALID_STATUSES,
+    normalize_task_status,
+)
 from features.subgroups import _get_text
 from features.text import public_error, public_text, split_command_fields
 
@@ -89,7 +94,7 @@ def _parse_args(args: str, *, include_title: bool = True) -> dict:
         elif key in ("priority", "p") and val:
             result["priority"] = val.lower()
         elif key in ("status", "s") and val:
-            result["status"] = val.lower().replace(" ", "_")
+            result["status"] = normalize_task_status(val)
         elif key in ("description", "desc", "d") and val:
             result["description"] = val
         elif key == "title" and val:
@@ -98,10 +103,12 @@ def _parse_args(args: str, *, include_title: bool = True) -> dict:
             low = part.lower().replace(" ", "_")
             if low in VALID_PRIORITIES:
                 result["priority"] = low
-            elif low in VALID_STATUSES:
-                result["status"] = low
-            elif include_title and index == 0 and part:
-                result["description"] = part
+            else:
+                normalized_status = normalize_task_status(part)
+                if normalized_status in VALID_STATUSES:
+                    result["status"] = normalized_status
+                elif include_title and index == 0 and part:
+                    result["description"] = part
     return result
 
 
@@ -184,11 +191,14 @@ def _cmd_delete_task(client, chat, args: str, store: TaskStore) -> None:
 def _cmd_list_tasks(
     client, chat, actor_jid: str, is_admin: bool, args: str, store: TaskStore
 ) -> None:
-    status_filter = (
-        args.strip().lower().replace(" ", "_")
-        if args.strip().replace(" ", "_") in VALID_STATUSES
-        else None
-    )
+    requested_status = args.strip()
+    status_filter = normalize_task_status(requested_status) if requested_status else None
+    if requested_status and status_filter not in VALID_STATUSES:
+        client.send_message(
+            chat,
+            "⚠️ Status must be todo/to-do/pending, in_progress/in-progress, done/completed, or cancelled.",
+        )
+        return
     if is_admin:
         tasks = store.list_all(status=status_filter)
         header = f"*📋 All Tasks* ({len(tasks)})"

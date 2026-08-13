@@ -20,6 +20,22 @@ from db.auth import get_active_admin_jids, normalize_jid
 from db.subgroup_store import SubgroupStore
 
 
+def _positive_action_present(text: str, verbs: tuple[str, ...]) -> bool:
+    """Match an action verb unless the request explicitly negates it."""
+    lowered = str(text or "").casefold()
+    for verb in verbs:
+        for match in re.finditer(rf"\b{re.escape(verb)}\b", lowered):
+            prefix = lowered[max(0, match.start() - 40):match.start()]
+            if re.search(
+                r"(?:\bdo\s+not\b|\bdon't\b|\bdont\b|\bnever\b|\bnot\b|\bwithout\b)"
+                r"(?:\s+[\w'-]+){0,3}\s*$",
+                prefix,
+            ):
+                continue
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class CapabilityContract:
     """Execution requirements for one semantic capability."""
@@ -38,6 +54,8 @@ CAPABILITY_CONTRACTS: dict[str, CapabilityContract] = {
     "collections.list": CapabilityContract("optional"),
     "collections.info": CapabilityContract("optional"),
     "labels.remove": CapabilityContract("required"),
+    "admin.add_user": CapabilityContract("required"),
+    "admin.remove_user": CapabilityContract("required"),
     "work.assign": CapabilityContract("required"),
     # For unassign, audience is optional: omitting it means "remove all current assignees".
     "work.unassign": CapabilityContract("optional"),
@@ -130,13 +148,38 @@ def verify_operation_result(intent: dict, result: object) -> str | None:
 def validate_mutation_policy(intent: dict, text: str, members: list[str] | None = None) -> str | None:
     """Fail closed when a destructive intent has no bounded, explicit scope."""
     capability = str(intent.get("capability") or "")
+    arguments = intent.get("arguments", {})
     destructive = {
         "admin.remove_user", "collections.remove", "collections.delete",
         "labels.remove", "labels.delete", "work.unassign", "work.delete_event",
         "work.delete_task", "schema.delete", "whatsapp.remove_group_members",
         "whatsapp.leave_group", "whatsapp.revoke_message", "whatsapp.block_contacts",
-        "whatsapp.unlink_group",
+        "whatsapp.unlink_group", "whatsapp.group_invite", "whatsapp.contact_qr",
+        "whatsapp.set_profile_photo",
     }
+    # Retrieving an invite or QR is read-only; only the optional revoke form is
+    # destructive. A model must not be able to smuggle ``revoke=true`` into a
+    # harmless retrieval request, or silently downgrade an explicit revoke to
+    # a read.
+    if capability in {"whatsapp.group_invite", "whatsapp.contact_qr"}:
+        revoke = arguments.get("revoke")
+        is_revoke = revoke is True or (
+            isinstance(revoke, str)
+            and revoke.strip().casefold() in {"true", "yes", "y", "1", "revoke"}
+        )
+        lowered = str(text or "").casefold()
+        revoke_words = (
+            ("revoke", "invalidate", "reset")
+            if capability == "whatsapp.group_invite"
+            else ("revoke", "invalidate", "reset", "delete")
+        )
+        explicit_revoke = _positive_action_present(lowered, revoke_words)
+        if explicit_revoke and not is_revoke:
+            return f"{capability} requires argument revoke"
+        if is_revoke and not explicit_revoke:
+            return f"{capability} requires explicit destructive wording"
+        if not is_revoke:
+            return None
     if capability not in destructive:
         return None
     lowered = str(text or "").casefold()
@@ -146,7 +189,7 @@ def validate_mutation_policy(intent: dict, text: str, members: list[str] | None 
         "collections.delete": ("delete", "remove"),
         "labels.remove": ("remove", "delete", "exclude", "leave"),
         "labels.delete": ("delete", "remove"),
-        "work.unassign": ("unassign", "remove"),
+        "work.unassign": ("unassign", "remove", "clear"),
         "work.delete_event": ("delete", "remove"),
         "work.delete_task": ("delete", "remove"),
         "schema.delete": ("delete", "remove", "clear"),
@@ -155,12 +198,24 @@ def validate_mutation_policy(intent: dict, text: str, members: list[str] | None 
         "whatsapp.revoke_message": ("revoke", "delete"),
         "whatsapp.block_contacts": ("block",),
         "whatsapp.unlink_group": ("unlink",),
+        "whatsapp.group_invite": ("revoke", "invalidate", "reset"),
+        "whatsapp.contact_qr": ("revoke", "invalidate", "reset", "delete"),
+        "whatsapp.set_profile_photo": ("set", "change", "update", "replace", "upload", "remove", "clear"),
     }
-    if not any(re.search(rf"\b{re.escape(verb)}\b", lowered) for verb in verbs[capability]):
+    if not _positive_action_present(lowered, verbs[capability]):
         return f"{capability} requires explicit destructive wording"
-    arguments = intent.get("arguments", {})
     if capability == "collections.delete" and not str(arguments.get("collection") or "").strip():
-        return "collections.delete requires argument collection"
+        bulk_delete = re.search(
+            r"\b(?:all|every|everything)\b.*\b(?:subgroups?|collections?)\b|"
+            r"\b(?:subgroups?|collections?)\b.*\b(?:all|every|everything)\b",
+            lowered,
+        )
+        if not bulk_delete:
+            return "collections.delete requires argument collection"
+    if capability == "admin.remove_user" and not members:
+        return "admin.remove_user requires argument mention_indices"
+    if capability == "labels.delete" and not str(arguments.get("collection") or "").strip():
+        return "labels.delete requires argument collection"
     if capability == "work.assign":
         has_target = any(
             arguments.get(key) is not None
@@ -177,7 +232,10 @@ def validate_mutation_policy(intent: dict, text: str, members: list[str] | None 
         # operation. It is safe only when the user actually used bulk wording;
         # a missing target in any other request remains an exact validation
         # error.
-        if not has_target and not re.search(r"\b(?:all|everything|every|everyone)\b", lowered):
+        if not has_target and not re.search(
+            r"\b(?:all|everything|every|everyone)\b|\bclear\s+(?:all\s+)?assignments?\b",
+            lowered,
+        ):
             return "work.unassign requires argument target"
         audience_declared = any(
             arguments.get(key) is not None

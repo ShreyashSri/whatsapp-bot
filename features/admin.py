@@ -35,7 +35,12 @@ def register(client, config):
         if not actor: return
         actor_jid = normalize_jid(source.Sender)  # for logging only
         try:
-            mentions = _get_mentioned_jids(message)
+            runtime_mentions = getattr(message, "_pbbot_runtime_mentions", None)
+            mentions = (
+                list(runtime_mentions)
+                if runtime_mentions is not None
+                else _get_mentioned_jids(message)
+            )
             if cmd == "!add-user":
                 tokens = [t.strip().lower() for t in args.replace("|", " ").split()]
                 role = next((t for t in tokens if t in ("admin", "member")), "") or "member"

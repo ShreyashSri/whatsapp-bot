@@ -18,6 +18,7 @@ from features.natural_language import (
     _needs_target_repair,
     _inherit_plan_context,
     _target_arguments,
+    _intent_compile_error,
     _plan_completeness_issue,
 )
 from features.subgroups import _get_mentioned_jids, normalize_collection_name
@@ -200,7 +201,16 @@ def test_work_assignment_preserves_label_and_explicit_task_type():
     assert command == "!work assign event 7 | @media"
 
 
-def test_leading_me_trigger_is_not_forwarded_as_a_target():
+def test_intent_compilation_reports_the_missing_semantic_field():
+    assert _intent_compile_error(
+        {"capability": "work.overview", "arguments": {"target": 7}}
+    ) == "work.overview requires argument target_type"
+    assert _intent_compile_error(
+        {"capability": "card.design", "arguments": {"name": "A"}}
+    ) == "card.design requires argument body"
+
+
+def test_legacy_mutating_command_is_rejected_before_dispatch():
     client = MagicMock()
     client.get_me.return_value = SimpleNamespace(
         JID="bot@s.whatsapp.net", LID="999999@lid"
@@ -218,8 +228,8 @@ def test_leading_me_trigger_is_not_forwarded_as_a_target():
 
     translate.assert_called_once()
     assert translate.call_args.args[0] == "create a label called media"
-    translated = dispatch.call_args.args[0]
-    assert translated._pbbot_nl_no_target_mentions is True
+    dispatch.assert_not_called()
+    assert "safely resolve" in str(client.send_message.call_args)
 
 
 def test_current_chat_member_scope_is_resolved_by_runtime_not_the_model():
@@ -821,9 +831,8 @@ def test_me_alias_triggers_translation_and_resolves_to_sender_mention():
         handler = register(client, {"mistral_api_key": "secret"})
         assert handler(client, message, dispatch) is True
 
-    translated = dispatch.call_args.args[0]
-    assert translated._pbbot_me_jid == "member@s.whatsapp.net"
-    assert "member@s.whatsapp.net" in _get_mentioned_jids(translated)
+    dispatch.assert_not_called()
+    assert "safely resolve" in str(client.send_message.call_args)
 
 
 def test_natural_language_card_design_reenters_dispatch_with_design_spec():

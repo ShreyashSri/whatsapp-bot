@@ -99,6 +99,7 @@ TOOL_SPECS.update({
     "collections.info": ToolSpec("collections.info", produces=frozenset({"members", "member_count"}), executor="direct"),
     "labels.add": ToolSpec("labels.add", mutating=True, executor="direct"),
     "labels.remove": ToolSpec("labels.remove", mutating=True, executor="direct"),
+    "labels.delete": ToolSpec("labels.delete", mutating=True),
     "admin.add_user": ToolSpec("admin.add_user", mutating=True),
     "admin.remove_user": ToolSpec("admin.remove_user", mutating=True),
     "schema.set": ToolSpec("schema.set", mutating=True),
@@ -225,6 +226,7 @@ _TOOL_ARGUMENTS = {
     "labels.of": ("mention?",),
     "labels.add": ("collection", "audience?"),
     "labels.remove": ("collection", "audience?"),
+    "labels.delete": ("collection",),
     "collections.add": ("collection", "audience?"),
     "collections.remove": ("collection", "audience?"),
     "collections.delete": ("collection?",),
@@ -317,8 +319,11 @@ for _capability in tuple(_TOOL_ARGUMENTS):
         _TOOL_ARGUMENTS[_capability] = (*_TOOL_ARGUMENTS[_capability], "target_chat?")
 
 _TOOL_REQUIRED = {
+    "admin.add_user": ("mention_indices",),
+    "admin.remove_user": ("mention_indices",),
     "labels.add": ("collection",),
     "labels.remove": ("collection",),
+    "labels.delete": ("collection",),
     "collections.add": ("collection",),
     "collections.remove": ("collection",),
     "collections.info": ("collection",),
@@ -420,7 +425,7 @@ _DESTRUCTIVE_CAPABILITIES = frozenset({
     "admin.remove_user", "collections.remove", "collections.delete",
     "labels.remove", "labels.delete", "work.unassign", "work.delete_event",
     "work.delete_task", "schema.delete",
-    "whatsapp.remove_group_members", "whatsapp.group_invite",
+    "whatsapp.remove_group_members", "whatsapp.group_invite", "whatsapp.contact_qr",
     "whatsapp.leave_group", "whatsapp.revoke_message", "whatsapp.block_contacts",
     "whatsapp.unlink_group",
     "whatsapp.set_profile_photo",
@@ -442,6 +447,7 @@ _DESCRIPTIONS = {
     "collections.info": "get subgroup info and list members",
     "labels.add": "create or add members to a label",
     "labels.remove": "remove members from a label",
+    "labels.delete": "delete a label",
     "whatsapp.group_info": "read current group name, topic, and member count",
     "whatsapp.group_members": "read current group members for later reasoning",
     "whatsapp.user_info": "read profile information for a resolved audience",
@@ -554,13 +560,14 @@ def render_tool_catalog() -> str:
 
 def validate_tool_arguments(capability: str, arguments: dict) -> str | None:
     spec = tool_spec(capability)
-    for key in spec.required:
+    for required_key in spec.required:
+        key = required_key.removesuffix("[]").removesuffix("?")
         value = arguments.get(key)
-        if value is None or value == "" or value == []:
+        if value is None or value == "" or value == [] or value == {}:
             # Target can be expressed through the canonical target object.
             if key == "target":
-                if isinstance(arguments.get("target"), dict) or any(
-                    arguments.get(target_key)
+                if arguments.get("target") or any(
+                    arguments.get(target_key) is not None
                     for target_key in ("target_id", "target_name", "event_id", "task_id")
                 ):
                     continue

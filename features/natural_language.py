@@ -391,9 +391,9 @@ def _named_entity_candidates(factory, text: str) -> list[dict]:
     candidates = [record for record in ranked if record["score"] >= 0.5]
     if not candidates:
         return []
-    # Never choose silently between equally good records.
-    if len(candidates) > 1 and candidates[1]["score"] == candidates[0]["score"]:
-        return []
+    # There is no follow-up clarification turn. The stable sort above is the
+    # deterministic tie-breaker (score, type, then ID), so an equally close
+    # record still resolves reproducibly.
     return candidates[:3]
 
 
@@ -449,8 +449,6 @@ def _named_collection_candidates(factory, text: str) -> list[dict]:
     )
     candidates = [item for item in ranked if item["score"] >= 0.5]
     if not candidates:
-        return []
-    if len(candidates) > 1 and candidates[1]["score"] == candidates[0]["score"]:
         return []
     return candidates[:3]
 
@@ -509,8 +507,6 @@ def _resolve_collection_name(factory, requested: object) -> str | None:
         key=lambda item: (-item[1], item[0]),
     )
     if not ranked or ranked[0][1] < 0.5:
-        return None
-    if len(ranked) > 1 and ranked[1][1] == ranked[0][1]:
         return None
     return ranked[0][0]
 
@@ -620,6 +616,12 @@ def _target_arguments(arguments: dict, text: str = "") -> dict:
                     break
 
     if not any(result.get(key) is not None for key in ("target_id", "target_name")):
+        if isinstance(raw_target, (int, float)):
+            result["target_id"] = raw_target
+        elif isinstance(raw_target, str) and raw_target.strip().isdigit():
+            result["target_id"] = raw_target.strip()
+
+    if not any(result.get(key) is not None for key in ("target_id", "target_name")):
         for key in ("event_id", "task_id", "event", "task"):
             value = result.get(key)
             if value is not None and key not in ("target_type", "target"):
@@ -660,9 +662,6 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
     if not target_id and isinstance(raw_target, str) and raw_target.strip().isdigit():
         target_id = raw_target
 
-    if not target_type and target_id is not None:
-        target_type = "task"
-
     if target_type in {"event", "task"}:
         if isinstance(target_id, int) and target_id >= 0:
             return f"{target_type} {target_id}"
@@ -697,7 +696,7 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
 
         if not candidates:
             return None
-        candidates.sort(key=lambda item: -item[3])
+        candidates.sort(key=lambda item: (-item[3], item[0], item[1]))
         best_type, best_id, _, best_score = candidates[0]
         return f"{best_type} {best_id}"
     except Exception:
@@ -712,14 +711,9 @@ def _arg_text(arguments: dict, key: str, default: str = "") -> str:
 
 def _canonical_task_status(value: str) -> str:
     """Map shared lifecycle vocabulary to the task command vocabulary."""
-    return {
-        "pending": "todo",
-        "in_progress": "in_progress",
-        "completed": "done",
-        "cancelled": "cancelled",
-        "todo": "todo",
-        "done": "done",
-    }.get(value.casefold().strip(), value.casefold().strip())
+    from db.task_store import normalize_task_status
+
+    return normalize_task_status(value)
 
 
 def _canonical_work_status(value: str) -> str:
@@ -1357,6 +1351,41 @@ def validate_command(command: object) -> str | None:
     return command
 
 
+def _legacy_command_is_read_only(command: object) -> bool:
+    """Allow compatibility commands only when they cannot mutate state."""
+    if not isinstance(command, str):
+        return False
+    parts = command.casefold().split()
+    if not parts:
+        return False
+    root = parts[0]
+    read_only_roots = {
+        "!help", "!my", "!events", "!tasks", "!task", "!users", "!admins",
+        "!admin-list", "!admins-list", "!list-subgroups", "!subgroup-info",
+        "!posted-list", "!to-do", "!todo", "!reports", "!report", "!audit",
+        "!status", "!history", "!reminder-history",
+    }
+    if root in read_only_roots:
+        return True
+    if root in {"!reminders"}:
+        return len(parts) == 1 or parts[1] in {"status", "summary", "history"}
+    if root in {"!labels", "!label"}:
+        return len(parts) == 1 or parts[1] in {"list", "of", "show", "info"}
+    if root == "!schema":
+        return len(parts) == 1 or parts[1] in {"event", "task", "show", "info", "fields", "list"}
+    if root == "!work":
+        if len(parts) == 1:
+            return True
+        if parts[1] in {
+            "pending", "todo", "to-do", "in_progress", "in-progress", "done",
+            "completed", "event", "task", "status", "history", "overview", "tasks",
+        }:
+            return True
+        if parts[1] == "reminders":
+            return len(parts) == 2 or parts[2] in {"status", "summary", "history"}
+    return False
+
+
 def fallback_command(text: str) -> str:
     """Choose the nearest safe command if the model cannot return one."""
     lowered = text.casefold()
@@ -1447,7 +1476,11 @@ def validate_intent(intent: object) -> dict | None:
     return {"capability": capability, "arguments": arguments}
 
 
-def _intent_argument_error(intent: object, visible_mentions: list[str] | None = None) -> str | None:
+def _intent_argument_error(
+    intent: object,
+    visible_mentions: list[str] | None = None,
+    text: str = "",
+) -> str | None:
     """Return the exact missing required field for one model intent."""
     if not isinstance(intent, dict):
         return "natural-language intent is missing"
@@ -1460,7 +1493,85 @@ def _intent_argument_error(intent: object, visible_mentions: list[str] | None = 
     error = validate_tool_arguments(capability, arguments)
     if error:
         return error
+    if capability in {"work.assign", "work.unassign"}:
+        target_arguments = _target_arguments(arguments, text)
+        has_target = any(
+            target_arguments.get(key) is not None
+            and target_arguments.get(key) != ""
+            for key in ("target", "target_id", "target_name", "event_id", "task_id")
+        )
+        if not has_target and not (
+            capability == "work.unassign"
+            and re.search(
+                r"\b(?:all|everything|every|everyone)\b|\bclear\s+(?:all\s+)?assignments?\b",
+                text.casefold(),
+            )
+        ):
+            return f"{capability} requires argument target"
     return None
+
+
+_TYPED_TARGET_CAPABILITIES = frozenset(
+    {
+        "work.overview",
+        "work.history",
+        "work.status",
+        "work.start",
+        "work.complete",
+        "work.update",
+        "work.set_lifecycle",
+        "work.assign",
+        "work.unassign",
+    }
+)
+
+
+def _intent_compile_error(intent: object, text: str = "") -> str:
+    """Explain why a validated intent cannot become an existing command."""
+    argument_error = _intent_argument_error(intent, text=text)
+    if argument_error:
+        return argument_error
+    validated = validate_intent(intent)
+    if not validated:
+        return "natural-language intent could not be compiled"
+
+    capability = validated["capability"]
+    arguments = validated["arguments"]
+    if capability in {"card.design", "card.design_pdf", "card.create", "card.create_pdf"}:
+        if not _arg_text(arguments, "body") and not _arg_text(arguments, "text"):
+            return f"{capability} requires argument body"
+
+    if capability in _TYPED_TARGET_CAPABILITIES:
+        target_arguments = _target_arguments(arguments, text)
+        has_reference = any(
+            target_arguments.get(key) is not None and target_arguments.get(key) != ""
+            for key in ("target", "target_id", "target_name", "event_id", "task_id")
+        )
+        if has_reference and not target_arguments.get("target_type"):
+            return f"{capability} requires argument target_type"
+        if target_arguments.get("target_type") and not any(
+            target_arguments.get(key) is not None and target_arguments.get(key) != ""
+            for key in ("target_id", "target_name")
+        ):
+            return f"{capability} requires argument target_id"
+        if has_reference:
+            return f"{capability} could not resolve argument target"
+
+    if capability.startswith(("labels.", "collections.")):
+        return f"{capability} could not resolve argument collection"
+    if capability in {
+        "work.list_event_tasks",
+        "reports.progress",
+        "schema.show",
+        "schema.set",
+        "schema.add",
+        "schema.delete",
+        "work.update_event",
+        "work.delete_event",
+        "work.delete_task",
+    }:
+        return f"{capability} could not resolve argument target"
+    return f"{capability} could not be compiled"
 
 
 def validate_plan(plan: object) -> list[dict] | None:
@@ -1696,7 +1807,7 @@ class MistralCommandTranslator:
             raise ValueError("Mistral returned invalid JSON") from exc
         intent = validate_intent(result.get("intent")) if isinstance(result, dict) else None
         if intent:
-            argument_error = _intent_argument_error(intent, mentioned_jids)
+            argument_error = _intent_argument_error(intent, mentioned_jids, text)
             if argument_error:
                 return None, argument_error
             return intent, ""
@@ -1768,7 +1879,7 @@ class MistralCommandTranslator:
         except (json.JSONDecodeError, TypeError):
             return None
         intent = validate_intent(result.get("intent")) if isinstance(result, dict) else None
-        if intent and _intent_argument_error(intent, mentioned_jids):
+        if intent and _intent_argument_error(intent, mentioned_jids, text):
             return None
         return intent
 
@@ -2051,6 +2162,11 @@ def _with_command_text(
             msg.conversation = command
     except (AttributeError, TypeError):
         msg.conversation = command
+    if extra_mentions is not None:
+        # Command handlers that still consume protobuf mention metadata need
+        # the resolved semantic subset, not every mention from the original
+        # sentence. This is especially important for admin add/remove.
+        cloned._pbbot_runtime_mentions = list(extra_mentions)
     return cloned
 
 
@@ -2330,7 +2446,7 @@ def register(client, config: dict) -> Callable:
                         if repaired is not None:
                             log.info("repaired missing semantic target capability=%s", repaired.get("capability"))
                             step = repaired
-                    argument_error = _intent_argument_error(step, visible_mentions)
+                    argument_error = _intent_argument_error(step, visible_mentions, body)
                     if argument_error:
                         client.send_message(chat, f"⚠️ {public_text(argument_error, limit=240)}")
                         return abort_plan()
@@ -2428,7 +2544,7 @@ def register(client, config: dict) -> Callable:
                         if compiled_design is None:
                             client.send_message(
                                 chat,
-                                "⚠️ I couldn't resolve enough information to execute that request.",
+                                f"⚠️ {public_text(_intent_compile_error(design_translation, body), limit=240)}",
                             )
                             return abort_plan()
                         command, card_design = compiled_design
@@ -2443,7 +2559,7 @@ def register(client, config: dict) -> Callable:
                         if command is None:
                             client.send_message(
                                 chat,
-                                "⚠️ I couldn't resolve enough information to execute that request.",
+                                f"⚠️ {public_text(_intent_compile_error(step, body), limit=240)}",
                             )
                             return abort_plan()
                     compiled_steps.append((
@@ -2522,6 +2638,12 @@ def register(client, config: dict) -> Callable:
                 config.get("db_session_factory"),
                 visible_mentions,
             )
+            if not _legacy_command_is_read_only(command):
+                client.send_message(
+                    chat,
+                    "⚠️ I couldn't safely resolve that request for execution.",
+                )
+                return abort_plan()
             compiled_steps = [(command, [], None, None)]
 
         if not plan_transaction:
