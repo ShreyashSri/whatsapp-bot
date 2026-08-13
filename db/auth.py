@@ -28,6 +28,17 @@ def normalize_jid(value) -> str:
     return value
 
 
+def normalize_group_jid(value) -> str:
+    """Normalize a configured group number or group JID to ``@g.us``."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "@" not in raw:
+        raw = f"{raw}@g.us"
+    normalized = normalize_jid(raw)
+    return normalized if normalized.endswith("@g.us") else ""
+
+
 def jid_user(value) -> str:
     """Return the stable user portion used to bridge phone JIDs and LIDs."""
     return normalize_jid(value).split("@", 1)[0]

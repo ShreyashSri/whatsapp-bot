@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from db.auth import gate, normalize_jid
 from db.task_store import TaskStore, VALID_PRIORITIES, VALID_STATUSES
 from features.subgroups import _get_text
+from features.text import public_error, public_text, split_command_fields
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -48,10 +49,11 @@ def _fmt_task(task) -> str:
     p = _PRIORITY_EMOJI.get(task.priority, "")
     due = f" | due {task.due_date.strftime('%Y-%m-%d')}" if task.due_date else ""
     assignee = (
-        f" | @{task.assignee_jid.split('@')[0]}" if task.assignee_jid else " | unassigned"
+        f" | @{public_text(normalize_jid(task.assignee_jid).split('@')[0], limit=80)}"
+        if task.assignee_jid else " | unassigned"
     )
-    desc = f"\n  _{task.description}_" if task.description else ""
-    return f"{s} *#{task.id}* {task.title} {p}{due}{assignee}{desc}"
+    desc = f"\n  _{public_text(task.description, limit=300)}_" if task.description else ""
+    return f"{s} *#{task.id}* {public_text(task.title, limit=180)} {p}{due}{assignee}{desc}"
 
 
 def _parse_date(text: str) -> datetime | None:
@@ -69,7 +71,7 @@ def _parse_args(args: str, *, include_title: bool = True) -> dict:
 
     The former ``field: value`` spelling remains accepted for compatibility.
     """
-    parts = [p.strip() for p in args.split("|")]
+    parts = split_command_fields(args)
     result: dict = {}
     if include_title:
         result["title"] = parts[0] if parts else ""
@@ -126,7 +128,7 @@ def _cmd_add_task(client, chat, args: str, actor_jid: str, store: TaskStore) -> 
         )
         client.send_message(chat, f"✅ Task created!\n{_fmt_task(task)}")
     except ValueError as exc:
-        client.send_message(chat, f"⚠️ {exc}")
+        client.send_message(chat, f"⚠️ {public_error(exc, 'I could not create that task.')}")
 
 
 def _cmd_complete_task(
@@ -143,11 +145,11 @@ def _cmd_complete_task(
             store.complete(task_id, actor_jid)
         client.send_message(chat, f"✅ Task #{task_id} marked as done.")
     except ValueError as exc:
-        client.send_message(chat, f"⚠️ {exc}")
+        client.send_message(chat, f"⚠️ {public_error(exc, 'I could not complete that task.')}")
 
 
 def _cmd_update_task(client, chat, args: str, store: TaskStore) -> None:
-    parts = [p.strip() for p in args.split("|", 1)]
+    parts = split_command_fields(args, limit=1)
     if len(parts) != 2 or not parts[0].isdigit() or not parts[1]:
         client.send_message(chat, "⚠️ Usage: `!update-task <id> | field value`")
         return
@@ -165,7 +167,7 @@ def _cmd_update_task(client, chat, args: str, store: TaskStore) -> None:
         )
         client.send_message(chat, f"✅ Task updated!\n{_fmt_task(task)}")
     except ValueError as exc:
-        client.send_message(chat, f"⚠️ {exc}")
+        client.send_message(chat, f"⚠️ {public_error(exc, 'I could not update that task.')}")
 
 
 def _cmd_delete_task(client, chat, args: str, store: TaskStore) -> None:
@@ -176,7 +178,7 @@ def _cmd_delete_task(client, chat, args: str, store: TaskStore) -> None:
         store.delete(int(args.strip()))
         client.send_message(chat, f"🗑️ Task #{args.strip()} deleted.")
     except ValueError as exc:
-        client.send_message(chat, f"⚠️ {exc}")
+        client.send_message(chat, f"⚠️ {public_error(exc, 'I could not delete that task.')}")
 
 
 def _cmd_list_tasks(
@@ -210,7 +212,7 @@ def _cmd_task_info(client, chat, args: str, store: TaskStore) -> None:
         client.send_message(chat, "❌ Task not found.")
         return
     extra = (
-        f"\n  Created by: @{task.created_by_jid.split('@')[0]}"
+        f"\n  Created by: @{public_text(normalize_jid(task.created_by_jid).split('@')[0], limit=80)}"
         f"\n  Created: {task.created_at.strftime('%Y-%m-%d')}"
     )
     client.send_message(chat, f"*Task Detail*\n{_fmt_task(task)}{extra}")
@@ -273,7 +275,7 @@ def register(client: "NewClient", config: dict) -> callable:
 
         except Exception as exc:
             log.exception("Unhandled error in tasks feature: %s", exc)
-            client.send_message(chat, f"❌ Unexpected error: {exc}")
+            client.send_message(chat, "❌ I could not complete that task request.")
 
     log.info("✅ Tasks feature registered")
     return on_message

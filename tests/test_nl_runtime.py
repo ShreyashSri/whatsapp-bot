@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message
 
 from db.auth import upsert_user
+from db.event_store import EventStore
 from db.models import Base, Event, Task
 from features.natural_language import MistralCommandTranslator, register
 from features.nl_runtime import (
@@ -16,6 +17,7 @@ from features.nl_runtime import (
 )
 from features.labels import add_label_members, remove_label_members
 from features.subgroups import add_subgroup_members
+from features.work import register as register_work
 
 
 def make_group_message(sender="member@s.whatsapp.net"):
@@ -182,6 +184,8 @@ def test_multi_step_plan_links_tasks_to_the_event_created_by_step_one():
                 "step_id": "event",
                 "capability": "work.create_event",
                 "arguments": {
+                    "type": "organization",
+                    "category": "other",
                     "name": "Zenith 27",
                 },
             },
@@ -220,6 +224,72 @@ def test_multi_step_plan_links_tasks_to_the_event_created_by_step_one():
             "Raise lots of money", "Get lots of participants"
         ]
         assert all(task.event_id == event.id for task in tasks)
+
+
+def test_mixed_database_plan_preserves_step_order():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+    member = upsert_user(factory, "member@s.whatsapp.net", role="member")
+    event = EventStore(factory).create_event(name="Ordered Event", type="organization")
+
+    client = MagicMock()
+    client.get_me.return_value = SimpleNamespace(
+        JID="bot@s.whatsapp.net", LID="999999@lid"
+    )
+    message = make_group_message(admin.jid)
+    message.Message.conversation = "@me complete event then assign it"
+    message.Message.extendedTextMessage = None
+    message.Message.imageMessage = None
+    plan = {
+        "plan": [
+            {
+                "step_id": "complete",
+                "capability": "work.set_lifecycle",
+                "arguments": {
+                    "target_type": "event",
+                    "target_id": event["id"],
+                    "status": "completed",
+                },
+            },
+            {
+                "step_id": "assign",
+                "capability": "work.assign",
+                "arguments": {
+                    "target_type": "event",
+                    "target_id": event["id"],
+                    "audience": {"resolver": "explicit_mentions"},
+                },
+            },
+        ]
+    }
+    observed_statuses = []
+
+    def observe_direct(_client, _message, _intent, _members, transaction_factory, _text):
+        with transaction_factory() as session:
+            observed_statuses.append(session.get(Event, event["id"]).status)
+        return {"target": f"event {event['id']}", "action": "assign", "members": []}
+
+    with patch("features.natural_language._get_mentioned_jids", return_value=[member.jid]), \
+         patch.object(MistralCommandTranslator, "translate", return_value=(plan, "")), \
+         patch("features.natural_language._execute_direct_operation", side_effect=observe_direct):
+        work_handler = register_work(client, {"db_session_factory": factory})
+
+        def dispatch(translated, session_factory=None, client_override=None):
+            if session_factory is not None:
+                translated._pbbot_session_factory = session_factory
+            return work_handler(client_override or client, translated)
+
+        handler = register(
+            client,
+            {"mistral_api_key": "secret", "db_session_factory": factory},
+        )
+        assert handler(client, message, dispatch) is True
+
+    assert observed_statuses == ["completed"]
+    with factory() as session:
+        assert session.get(Event, event["id"]).status == "completed"
 
 
 def test_current_group_lookup_exception_is_controlled():

@@ -18,15 +18,19 @@ from datetime import date
 from html.parser import HTMLParser
 from types import SimpleNamespace
 from typing import Callable
-from urllib.parse import urlparse
-import ipaddress
 import unicodedata
 
 import httpx
 
 from db.auth import normalize_jid
 from features.agent_runtime import AgentTrace, CAPABILITIES, MAX_PLAN_STEPS, render_tool_catalog
-from features.subgroups import _get_mentioned_jids, _get_text, normalize_collection_name
+from features.text import public_text
+from features.subgroups import (
+    _get_mentioned_jids,
+    _get_text,
+    _unwrap_message,
+    normalize_collection_name,
+)
 
 log = logging.getLogger(__name__)
 
@@ -110,15 +114,22 @@ KNOWN_COMMANDS = frozenset(
         "!add",
         "!add-subgroup",
         "!add-user",
+        "!add-task",
         "!admins",
         "!admin-list",
         "!admins-list",
         "!audit",
+        "!assign",
         "!card",
         "!card-pdf",
+        "!complete-task",
+        "!create-event",
+        "!delete-event",
+        "!delete-task",
         "!delete-subgroup",
         "!help",
         "!labels",
+        "!label",
         "!list-subgroups",
         "!my",
         "!posted",
@@ -126,12 +137,27 @@ KNOWN_COMMANDS = frozenset(
         "!remove",
         "!remove-from-subgroup",
         "!remove-user",
+        "!reminders",
+        "!reminder-config",
+        "!reminder-history",
+        "!reminder-run",
+        "!report",
         "!reports",
         "!schema",
+        "!set-status",
+        "!status",
         "!subgroup-info",
+        "!task",
+        "!tasks",
         "!to-do",
         "!todo",
+        "!undo",
+        "!unassign",
         "!unposted",
+        "!update",
+        "!update-edit",
+        "!update-event",
+        "!update-task",
         "!users",
         "!work",
     }
@@ -147,8 +173,9 @@ person's display name into a made-up phone number.
 Work and progress:
   !my
   !work [pending|event <id>|task <id>|status event <id>|history event <id>]
-  !work update-event event <id> | name <value> | description <value>
-  !work delete-event event <id> | !work delete-task task <id>
+  !update-event <id> | name <value> | description <value>
+  !delete-event <id> | !delete-task <id>
+  !undo
   !work start|complete <event|task> <id>
   !work update <event|task> <id> <field> <value>
   !work edit <revision_id> <new value>
@@ -234,22 +261,8 @@ class _PageMetadataParser(HTMLParser):
 
 
 def _safe_public_url(value: str) -> bool:
-    try:
-        parsed = urlparse(value)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
-            return False
-        hostname = parsed.hostname.lower().rstrip(".")
-        if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".local"):
-            return False
-        try:
-            address = ipaddress.ip_address(hostname)
-            if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
-                return False
-        except ValueError:
-            pass
-        return True
-    except ValueError:
-        return False
+    from features.url_policy import safe_public_url
+    return safe_public_url(value)
 
 
 def _online_metadata(urls: list[str]) -> list[str]:
@@ -259,21 +272,37 @@ def _online_metadata(urls: list[str]) -> list[str]:
         if not _safe_public_url(url):
             continue
         try:
-            response = httpx.get(
+            with httpx.stream(
+                "GET",
                 url,
                 # Do not follow a public URL into an unexpected private host.
                 follow_redirects=False,
                 timeout=4.0,
                 headers={"User-Agent": "PBBot natural-language context/1.0"},
-            )
-            response.raise_for_status()
+            ) as response:
+                response.raise_for_status()
+                raw_length = response.headers.get("content-length")
+                if raw_length and raw_length.isdigit() and int(raw_length) > 1_000_000:
+                    continue
+                chunks: list[bytes] = []
+                size = 0
+                for chunk in response.iter_bytes():
+                    remaining = 200_000 - size
+                    if remaining <= 0:
+                        break
+                    chunk = chunk[:remaining]
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size >= 200_000:
+                        break
+                page_text = b"".join(chunks).decode("utf-8", errors="replace")
             parser = _PageMetadataParser()
-            parser.feed(response.text[:200_000])
+            parser.feed(page_text)
             parts = [part for part in (parser.title, parser.description) if part]
             if parts:
                 results.append(f"- {url}: {' — '.join(parts)}")
         except Exception:
-            log.info("Could not read public knowledge URL %s", url, exc_info=True)
+            log.info("Could not read public knowledge URL", exc_info=True)
     return results
 
 
@@ -497,13 +526,6 @@ def _resolve_collection_names(factory, requested: object) -> list[str]:
     except Exception:
         log.info("Could not resolve collection names", exc_info=True)
         return []
-    wanted = normalize_collection_name(requested).casefold()
-    matches = [
-        name for name in names
-        if normalize_collection_name(name).casefold() in wanted
-    ]
-    if matches:
-        return sorted(matches, key=lambda name: (-len(name), name))
     single = _resolve_collection_name(factory, requested)
     return [single] if single else []
 
@@ -863,9 +885,14 @@ def compile_card_design(intent: dict, text: str) -> tuple[str, dict | None] | No
     prefix = "!card-pdf" if capability == "card.design_pdf" else "!card"
     # The original template is selected by the command itself.  Only attach
     # an override when the sender explicitly asks for a visual change.
-    fields = [base_template, name, body]
+    from features.text import encode_command_field
+    fields = [
+        encode_command_field(base_template),
+        encode_command_field(name),
+        encode_command_field(body),
+    ]
     if design.get("logo_url"):
-        fields.append(design["logo_url"])
+        fields.append(encode_command_field(design["logo_url"]))
     return (
         f"{prefix} " + " | ".join(fields),
         design if _has_explicit_card_style_request(text) else None,
@@ -947,6 +974,8 @@ def compile_intent(
             status = _arg_text(arguments, "status")
             status = _canonical_work_status(status)
             return "!my" + (f" {status}" if status else "")
+        if action == "undo":
+            return "!undo"
         if action == "overview":
             status = _arg_text(arguments, "status")
             status = _canonical_work_status(status)
@@ -958,22 +987,29 @@ def compile_intent(
             name = _arg_text(arguments, "name")
             if not event_type or not category or not name:
                 return None
-            fields = [event_type, category, name, _arg_text(arguments, "description")]
+            from features.text import encode_command_field
+            fields = [
+                encode_command_field(event_type),
+                encode_command_field(category),
+                encode_command_field(name),
+                encode_command_field(_arg_text(arguments, "description")),
+            ]
             extras = []
             for key in ("start", "end", "labels"):
                 value = _arg_text(arguments, key)
                 if value:
-                    extras.append(f"{key} {value}")
+                    extras.append(f"{key} {encode_command_field(value)}")
             return "!work create event | " + " | ".join(fields + extras)
         if action == "create_task":
             title = _arg_text(arguments, "title")
             if not title:
                 return None
-            fields = [title, _arg_text(arguments, "description")]
+            from features.text import encode_command_field
+            fields = [encode_command_field(title), encode_command_field(_arg_text(arguments, "description"))]
             for key in ("due", "priority"):
                 value = _arg_text(arguments, key)
                 if value:
-                    fields.append(f"{key} {value}")
+                    fields.append(f"{key} {encode_command_field(value)}")
             return "!work create task | " + " | ".join(fields)
         if action == "list_event_tasks":
             event_arguments = _target_arguments(arguments, text)
@@ -1046,7 +1082,11 @@ def compile_intent(
             target = _resolve_target_reference(factory, {**target_arguments, "target_type": "event"})
             fields = arguments.get("fields")
             if isinstance(fields, dict):
-                fields = " | ".join(f"{key} {value}" for key, value in fields.items())
+                from features.text import encode_command_field
+                fields = " | ".join(
+                    f"{encode_command_field(key)} {encode_command_field(value)}"
+                    for key, value in fields.items()
+                )
             fields = _arg_text({"value": fields}, "value")
             return f"!update-event {target.split(' ', 1)[1]} | {fields}" if target and fields else None
         if action in {"delete_event", "delete_task"}:
@@ -1098,7 +1138,15 @@ def compile_intent(
 
     if capability in {"card.create", "card.create_pdf"}:
         prefix = "!card-pdf" if capability.endswith("_pdf") else "!card"
-        fields = [_arg_text(arguments, key) for key in ("type", "name", "text", "event_name")]
+        from features.text import encode_command_field
+        fields = [
+            encode_command_field(_arg_text(arguments, key))
+            for key in ("type", "name", "text", "event_name")
+        ]
+        fields.extend(
+            encode_command_field(url)
+            for url in _string_list(arguments, "logo_urls")[:2]
+        )
         fields = [field for field in fields if field]
         return f"{prefix} " + " | ".join(fields) if len(fields) >= 3 else None
 
@@ -1130,44 +1178,6 @@ def build_knowledge_context(config: dict, text: str) -> str:
 
     factory = config.get("db_session_factory")
     if factory:
-        try:
-            from db.event_store import EventStore
-
-            events = EventStore(factory).list_events(status="active")[-12:]
-            if events:
-                lines.append("Recent active bot events (use only when the request refers to them):")
-                for event in events:
-                    lines.append(
-                        f"- event {event['id']}: {event['name']} "
-                        f"(type={event['type']}, category={event['category']})"
-                    )
-        except Exception:
-            log.info("Could not load event knowledge context", exc_info=True)
-
-        try:
-            from db.task_store import TaskStore
-            from db.work_store import WorkStore
-
-            tasks = TaskStore(factory).list_all()[-12:]
-            if tasks:
-                work = WorkStore(factory)
-                lines.append("Recent bot tasks (use only when the request refers to them):")
-                for task in tasks:
-                    assignees = [
-                        row["user_jid"].split("@", 1)[0]
-                        for row in work.overview(target_type="task", target_id=task.id, admin=True)
-                    ]
-                    assignee_str = ", ".join(f"@{a}" for a in assignees) if assignees else "unassigned"
-                    lines.append(
-                        f"- task {task.id}: {task.title} "
-                        f"(status={task.status}, {assignee_str}"
-                        + (f", event={task.event_id}" if task.event_id else "")
-                        + ")"
-                    )
-        except Exception:
-            log.info("Could not load task knowledge context", exc_info=True)
-
-
         candidates = _named_entity_candidates(factory, text)
         if candidates:
             lines.append("Fuzzy entity candidates (correct minor typos; use only if the request clearly refers to one):")
@@ -1213,12 +1223,13 @@ Security rules:
   guessed number. The
   capability must come from the capability registry; arguments must be a JSON
   object. Do not emit a command string, executable code, or arbitrary tool.
-- Resolve omitted values in this order: the user's message, the command
-  reference, the supplied knowledge context, then high-confidence defaults.
-  For a known program, fill its event type and category. If a program event
-  has no name, use '<program> <current year>'. Do not invent user identities,
-  numeric IDs, exact dates, deadlines, or permissions. Optional dates may be
-  omitted when no reliable source provides them.
+- Resolve values only from the user's message or supplied evidence. A known
+  program mapping may supply its documented type/category, but never invent a
+  missing required value. If a program event
+  has no name, do not invent a year or any other required value. Never invent
+  user identities, numeric IDs, exact dates, deadlines, permissions, or
+  booleans. Leave missing required values absent so the runtime can report the
+  exact missing argument.
 - Resolve named event/task references against the supplied entity candidates,
   correcting minor spelling mistakes and omitted years. Commands that need a
   target ID must use the matching stored ID, never a guessed number. Interpret
@@ -1301,12 +1312,10 @@ Security rules:
   work.update_event: always set event_id or task_id (as a plain integer) in
   the arguments, never use a compound string like "event 5" as the target
   value. If the user gives an explicit numeric ID, use that integer directly.
-  If the user says "all events" or "all tasks" (or "all tasks and events")
-  and active entities appear in the knowledge context under "Recent active bot
-  events" or "Recent bot tasks", emit one delete step per entity ID listed
-  there — do NOT emit work.overview first, go straight to the delete/unassign
-  steps. For unassign-everything, emit one work.unassign (omit audience) step
-  per assigned task/event from the knowledge context.
+  Never invent or enumerate IDs for a bulk request. If a request names a
+  specific event/task, use only the matching runtime candidate; if it does
+  not identify a target and the registry has no bulk capability, leave the
+  required target absent so the runtime reports the exact missing argument.
 - For requests to create or add members to a subgroup/collection (e.g., "make subgroup X", "create subgroup X"), use capability "collections.add" with argument collection="X".
 - For requests to delete a subgroup or all subgroups (e.g., "delete subgroup X", "delete all subgroups"), use capability "collections.delete". For deleting all subgroups, omit the collection argument.
 - For requests to list subgroups (e.g., "list all subgroups", "show subgroups"), use capability "collections.list".
@@ -1315,13 +1324,15 @@ Security rules:
   work.create_event step followed by one work.create_task step per task. Give
   the event step_id "event" and set every task's event_id to "$event.event_id".
 - Do NOT emit work.create_event if the request refers to an existing event (e.g., "under event X", "for event X"); set event_id or event to "X" directly on the work.create_task step.
-- For a generic event with no explicit classification, use type
-  "organization" and category "other". Split bullet points or enumerated
-  action items into separate work.create_task steps.
+- For a new event, type, category, and name are essential. Use a documented
+  program mapping only when the user's request names that program; otherwise
+  leave each missing value absent so the runtime reports it exactly. Split
+  bullet points or enumerated action items into separate work.create_task
+  steps.
 - For work.unassign: if the user says "unassign everyone", "remove all members",
   "clear assignments", or similar without naming specific people, emit
-  work.unassign with NO audience field. The runtime will automatically remove
-  all current assignees for that work item. Do NOT emit a work.overview step
+  work.unassign with NO target or audience field. The runtime will remove all
+  current assignees across the work items. Do NOT emit a work.overview step
   just to discover assignees — the runtime handles that internally.
 
 {COMMAND_REFERENCE}
@@ -1434,6 +1445,22 @@ def validate_intent(intent: object) -> dict | None:
     ):
         return None
     return {"capability": capability, "arguments": arguments}
+
+
+def _intent_argument_error(intent: object, visible_mentions: list[str] | None = None) -> str | None:
+    """Return the exact missing required field for one model intent."""
+    if not isinstance(intent, dict):
+        return "natural-language intent is missing"
+    capability = intent.get("capability")
+    arguments = intent.get("arguments", {})
+    if not isinstance(capability, str) or not isinstance(arguments, dict):
+        return "natural-language intent arguments are invalid"
+    from features.agent_runtime import validate_tool_arguments
+
+    error = validate_tool_arguments(capability, arguments)
+    if error:
+        return error
+    return None
 
 
 def validate_plan(plan: object) -> list[dict] | None:
@@ -1665,11 +1692,13 @@ class MistralCommandTranslator:
         response.raise_for_status()
         try:
             result = json.loads(_content(response))
-            log.info("RAW MISTRAL JSON: %s", json.dumps(result, ensure_ascii=False))
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError("Mistral returned invalid JSON") from exc
         intent = validate_intent(result.get("intent")) if isinstance(result, dict) else None
         if intent:
+            argument_error = _intent_argument_error(intent, mentioned_jids)
+            if argument_error:
+                return None, argument_error
             return intent, ""
         plan = validate_plan(result.get("plan")) if isinstance(result, dict) else None
         if plan:
@@ -1738,7 +1767,10 @@ class MistralCommandTranslator:
             result = json.loads(_content(response))
         except (json.JSONDecodeError, TypeError):
             return None
-        return validate_intent(result.get("intent")) if isinstance(result, dict) else None
+        intent = validate_intent(result.get("intent")) if isinstance(result, dict) else None
+        if intent and _intent_argument_error(intent, mentioned_jids):
+            return None
+        return intent
 
     def repair_intent(
         self,
@@ -1891,6 +1923,7 @@ class MistralCardDesigner:
         text: str,
         knowledge_context: str = "",
         attachment_context: str = "",
+        capability: str = "card.design",
     ) -> dict:
         response = self.client.post(
             MISTRAL_CHAT_URL,
@@ -1929,7 +1962,7 @@ class MistralCardDesigner:
             result = result["design"]
         if not isinstance(result, dict):
             raise ValueError("Mistral card designer returned no design brief")
-        return {"capability": "card.design", "arguments": result}
+        return {"capability": capability, "arguments": result}
 
 
 def _self_jids(client, config: dict) -> set[str]:
@@ -1958,7 +1991,7 @@ def _without_self_mentions(message, self_jids: set[str]):
         Message=copy.deepcopy(message.Message),
     )
     try:
-        msg = cloned.Message
+        msg = _unwrap_message(cloned)
         for field_desc, value in msg.ListFields():
             if not field_desc.name.endswith("Message"):
                 continue
@@ -1985,9 +2018,13 @@ def _with_command_text(
     extra_mentions: list[str] | None = None,
 ):
     cloned = _without_self_mentions(message, self_jids)
+    message_attrs = vars(message) if hasattr(message, "__dict__") else {}
+    transaction_factory = message_attrs.get("_pbbot_session_factory")
+    if transaction_factory is not None:
+        cloned._pbbot_session_factory = transaction_factory
     if me_jid:
         cloned._pbbot_me_jid = me_jid
-    msg = cloned.Message
+    msg = _unwrap_message(cloned)
     try:
         if extra_mentions:
             for field_desc, value in msg.ListFields():
@@ -2112,7 +2149,7 @@ def register(client, config: dict) -> Callable:
             return False
         chat = message.Info.MessageSource.Chat
         trace = AgentTrace(str(getattr(message.Info, "ID", "nl-request")))
-        trace.record("received", actor=message.Info.MessageSource.Sender, text=body)
+        trace.record("received")
         if translator is None:
             client.send_message(chat, "⚠️ Natural-language commands are not configured yet.")
             return True
@@ -2141,7 +2178,7 @@ def register(client, config: dict) -> Callable:
                         store = WorkStore(config["db_session_factory"])
                         store.reconcile_user_identity(jid, pn)
                     except Exception as exc:
-                        log.warning("Failed to reconcile LID: %s", exc)
+                        log.warning("Failed to reconcile one WhatsApp identity alias")
             return pn
 
         visible_mentions = []
@@ -2153,6 +2190,13 @@ def register(client, config: dict) -> Callable:
         structured_translation = False
         compiled_steps: list[tuple[str | None, list[str], dict | None, dict | None]] = []
         plan_outputs: dict[str, dict] = {}
+        plan_transaction = None
+
+        def abort_plan() -> bool:
+            if plan_transaction:
+                plan_transaction.rollback()
+            return True
+
         try:
             attachment_context = ""
             image_message = getattr(message.Message, "imageMessage", None)
@@ -2162,13 +2206,15 @@ def register(client, config: dict) -> Callable:
                     "card renderer as the person's image; use explicit URLs in the "
                     "message for external logos."
                 )
-            translation, _ = translator.translate(
+            translation, translation_error = translator.translate(
                 body,
                 visible_mentions,
                 knowledge_context,
                 attachment_context=attachment_context,
             )
-            log.info("DEBUG MISTRAL TRANSLATION: %s", json.dumps(translation, ensure_ascii=False) if isinstance(translation, (dict, list)) else repr(translation))
+            if translation_error:
+                client.send_message(chat, f"⚠️ {public_text(translation_error, limit=240)}")
+                return abort_plan()
             structured_translation = isinstance(translation, dict) and (
                 "capability" in translation or "plan" in translation
             )
@@ -2194,19 +2240,44 @@ def register(client, config: dict) -> Callable:
                             log.exception("Plan completeness repair failed")
                             repaired_plan = None
                         if repaired_plan is None:
-                            log.warning("Plan rejected by completeness preflight: %s", completeness_issue)
-                            return True
+                            log.warning("Plan rejected by completeness preflight")
+                            client.send_message(
+                                chat,
+                                "⚠️ I couldn't split that workflow into safe, independent actions.",
+                            )
+                            return abort_plan()
                         translation = {"plan": repaired_plan}
                 steps = translation.get("plan") or [translation]
                 from features.nl_plan import PlanReferenceError, record_output, resolve_step, step_name
+                from features.transaction import TRANSACTIONAL_PLAN_CAPABILITIES
+                from db.transaction import PlanTransaction
+
+                if len(steps) > 1:
+                    if not config.get("db_session_factory") or not all(
+                        step.get("capability") in TRANSACTIONAL_PLAN_CAPABILITIES
+                        for step in steps
+                    ):
+                        client.send_message(
+                            chat,
+                            "⚠️ I can't safely combine database work with external WhatsApp changes. Send those actions as separate commands.",
+                        )
+                        return abort_plan()
+                    plan_transaction = PlanTransaction(config["db_session_factory"], client)
+                execution_factory = (
+                    plan_transaction.factory
+                    if plan_transaction
+                    else config.get("db_session_factory")
+                )
+                execution_client = plan_transaction.client if plan_transaction else client
 
                 for index, raw_step in enumerate(steps):
                     try:
                         step = resolve_step(raw_step, plan_outputs)
                         current_step_name = step_name(step, index)
                     except PlanReferenceError as exc:
-                        client.send_message(chat, f"⚠️ {exc}")
-                        return True
+                        log.warning("plan reference resolution failed: %s", exc)
+                        client.send_message(chat, "⚠️ That workflow referenced an unavailable prior result.")
+                        return abort_plan()
                     step = _inherit_plan_context(step, plan_outputs)
                     trace.record(
                         "step_prepared",
@@ -2214,7 +2285,7 @@ def register(client, config: dict) -> Callable:
                         capability=step.get("capability"),
                     )
                     needs_semantic_repair, entity_candidates = _needs_semantic_repair(
-                        step, body, config.get("db_session_factory")
+                        step, body, execution_factory
                     )
                     if needs_semantic_repair:
                         try:
@@ -2232,18 +2303,17 @@ def register(client, config: dict) -> Callable:
                                 **({"step_id": current_step_name} if step.get("step_id") else {}),
                                 **repaired,
                             }
-                            log.info(
-                                "repaired semantic scope actor=%s capability=%s",
-                                sender_jid,
-                                step.get("capability"),
-                            )
+                            log.info("repaired semantic scope capability=%s", step.get("capability"))
                         else:
                             log.warning(
-                                "semantic intent remained unresolved actor=%s capability=%s",
-                                sender_jid,
+                                "semantic intent remained unresolved capability=%s",
                                 step.get("capability"),
                             )
-                            return True
+                            client.send_message(
+                                chat,
+                                "⚠️ I couldn't identify every work item in that request.",
+                            )
+                            return abort_plan()
                     step = _canonicalize_entity_scope(step, entity_candidates)
                     step = _fix_everyone_audience(step, body, visible_mentions)
                     if _needs_target_repair(step, body, visible_mentions):
@@ -2258,23 +2328,30 @@ def register(client, config: dict) -> Callable:
                             log.exception("Semantic target repair failed")
                             repaired = None
                         if repaired is not None:
-                            log.info(
-                                "repaired missing semantic target actor=%s capability=%s",
-                                sender_jid,
-                                repaired.get("capability"),
-                            )
+                            log.info("repaired missing semantic target capability=%s", repaired.get("capability"))
                             step = repaired
+                    argument_error = _intent_argument_error(step, visible_mentions)
+                    if argument_error:
+                        client.send_message(chat, f"⚠️ {public_text(argument_error, limit=240)}")
+                        return abort_plan()
                     runtime_target_mentions, target_error = _resolve_runtime_target_scope(
                         client,
                         message,
                         step,
                         self_jids,
-                        config.get("db_session_factory"),
+                        execution_factory,
                         visible_mentions,
                     )
                     if target_error:
-                        client.send_message(chat, f"⚠️ {target_error}")
-                        return True
+                        client.send_message(chat, f"⚠️ {public_text(target_error, limit=240)}")
+                        return abort_plan()
+                    from features.nl_runtime import validate_mutation_policy
+                    mutation_error = validate_mutation_policy(
+                        step, body, runtime_target_mentions
+                    )
+                    if mutation_error:
+                        client.send_message(chat, f"⚠️ {public_text(mutation_error, limit=240)}")
+                        return abort_plan()
                     card_design = None
                     from features.nl_operations import is_direct_capability
 
@@ -2286,11 +2363,11 @@ def register(client, config: dict) -> Callable:
                     if direct_operation is not None:
                         command = f"<direct {step.get('capability')}>"
                         result = _execute_direct_operation(
-                            client,
+                            execution_client,
                             message,
                             direct_operation,
                             runtime_target_mentions,
-                            config.get("db_session_factory"),
+                            execution_factory,
                             body,
                         )
                         from features.nl_runtime import verify_operation_result
@@ -2302,37 +2379,34 @@ def register(client, config: dict) -> Callable:
                                 capability=step.get("capability"),
                                 reason="direct tool returned no successful result",
                             )
-                            return True
+                            client.send_message(
+                                chat,
+                                f"⚠️ I couldn't complete `{step.get('capability', 'that action')}`. No further steps were run.",
+                            )
+                            return abort_plan()
                         postcondition_error = verify_operation_result(step, result)
                         if postcondition_error:
                             log.error(
-                                "direct operation postcondition failed capability=%s reason=%s arguments=%s result=%s",
+                                "direct operation postcondition failed capability=%s reason=%s",
                                 step.get("capability"),
                                 postcondition_error,
-                                step.get("arguments"),
-                                result,
                             )
-                            return True
+                            client.send_message(chat, f"⚠️ {public_text(postcondition_error, limit=240)}.")
+                            return abort_plan()
                         capability = step.get("capability", "")
                         record_output(plan_outputs, current_step_name, result)
                         trace.record(
                             "step_observed",
                             step_id=current_step_name,
                             capability=capability,
-                            result=result if isinstance(result, dict) else {"ok": bool(result)},
+                            result_keys=sorted(result) if isinstance(result, dict) else [],
                         )
                         if isinstance(result, dict):
                             if "event_id" in result:
                                 plan_outputs.setdefault("event", result)
                             if "task_id" in result:
                                 plan_outputs.setdefault("task", result)
-                        log.info(
-                            "natural-language plan step actor=%s capability=%s target_resolver=%s command=%s",
-                            sender_jid,
-                            capability,
-                            "direct",
-                            command,
-                        )
+                        log.info("natural-language plan step capability=%s target_resolver=direct", capability)
                         continue
                     elif _is_card_design_intent(step):
                         design_translation = step
@@ -2342,6 +2416,7 @@ def register(client, config: dict) -> Callable:
                                     body,
                                     knowledge_context,
                                     attachment_context,
+                                    capability=step.get("capability", "card.design"),
                                 )
                             except Exception:
                                 log.exception(
@@ -2355,13 +2430,13 @@ def register(client, config: dict) -> Callable:
                                 chat,
                                 "⚠️ I couldn't resolve enough information to execute that request.",
                             )
-                            return True
+                            return abort_plan()
                         command, card_design = compiled_design
                     else:
                         command = compile_intent(
                             step,
                             body,
-                            config.get("db_session_factory"),
+                            execution_factory,
                             visible_mentions,
                             allow_text_target_fallback=False,
                         )
@@ -2370,7 +2445,7 @@ def register(client, config: dict) -> Callable:
                                 chat,
                                 "⚠️ I couldn't resolve enough information to execute that request.",
                             )
-                            return True
+                            return abort_plan()
                     compiled_steps.append((
                         command,
                         runtime_target_mentions,
@@ -2384,8 +2459,7 @@ def register(client, config: dict) -> Callable:
                         command=command,
                     )
                     log.info(
-                        "natural-language plan step actor=%s capability=%s target_resolver=%s command=%s",
-                        sender_jid,
+                        "natural-language plan step capability=%s target_resolver=%s",
                         step.get("capability"),
                         (
                             step.get("arguments", {}).get("audience", {}).get("resolver")
@@ -2396,8 +2470,29 @@ def register(client, config: dict) -> Callable:
                                 else step.get("arguments", {}).get("target_scope")
                             )
                         ),
-                        command,
                     )
+                    if plan_transaction:
+                        translated = _with_command_text(
+                            message,
+                            command,
+                            self_jids,
+                            sender_jid if explicit_self_target and ME_ALIAS_RE.search(command) else "",
+                            extra_mentions=runtime_target_mentions,
+                        )
+                        translated._pbbot_nl_no_target_mentions = (
+                            not visible_mentions and not runtime_target_mentions and not explicit_self_target
+                        )
+                        if card_design is not None:
+                            translated._pbbot_card_design = card_design
+                        translated._pbbot_nl_command = True
+                        dispatch(translated, plan_transaction.factory, plan_transaction.client)
+                        if plan_transaction.failed:
+                            plan_transaction.rollback()
+                            client.send_message(
+                                chat,
+                                "⚠️ A workflow step failed, so no step was committed. Please try the request again.",
+                            )
+                            return True
             else:
                 command = translation
         except Exception:
@@ -2406,13 +2501,13 @@ def register(client, config: dict) -> Callable:
                 chat,
                 "⚠️ I couldn't safely resolve that request for execution.",
             )
-            return True
+            return abort_plan()
         if translation is None:
             client.send_message(
                 chat,
                 "⚠️ I couldn't safely resolve that request for execution.",
             )
-            return True
+            return abort_plan()
         if not structured_translation:
             # Compatibility for older model responses while all current
             # responses migrate to the structured compiler.
@@ -2429,36 +2524,55 @@ def register(client, config: dict) -> Callable:
             )
             compiled_steps = [(command, [], None, None)]
 
-        for command, runtime_target_mentions, card_design, direct_operation in compiled_steps:
-            log.info(
-                "natural-language command actor=%s command=%s",
-                sender_jid,
-                command,
-            )
-            if direct_operation is not None:
-                _execute_direct_operation(
-                    client,
+        if not plan_transaction:
+            for command, runtime_target_mentions, card_design, direct_operation in compiled_steps:
+                log.info("natural-language command compiled")
+                if direct_operation is not None:
+                    _execute_direct_operation(
+                        client,
+                        message,
+                        direct_operation,
+                        runtime_target_mentions,
+                        config.get("db_session_factory"),
+                        body,
+                    )
+                    continue
+                translated = _with_command_text(
                     message,
-                    direct_operation,
-                    runtime_target_mentions,
-                    config.get("db_session_factory"),
-                    body,
+                    command,
+                    self_jids,
+                    sender_jid if explicit_self_target and ME_ALIAS_RE.search(command) else "",
+                    extra_mentions=runtime_target_mentions,
                 )
-                continue
-            translated = _with_command_text(
-                message,
-                command,
-                self_jids,
-                sender_jid if explicit_self_target and ME_ALIAS_RE.search(command) else "",
-                extra_mentions=runtime_target_mentions,
-            )
-            translated._pbbot_nl_no_target_mentions = (
-                not visible_mentions and not runtime_target_mentions and not explicit_self_target
-            )
-            if card_design is not None:
-                translated._pbbot_card_design = card_design
-            translated._pbbot_nl_command = True
-            dispatch(translated)
+                translated._pbbot_nl_no_target_mentions = (
+                    not visible_mentions and not runtime_target_mentions and not explicit_self_target
+                )
+                if card_design is not None:
+                    translated._pbbot_card_design = card_design
+                translated._pbbot_nl_command = True
+                dispatch(translated)
+        if plan_transaction:
+            try:
+                plan_transaction.commit()
+            except Exception as exc:
+                from db.transaction import TransactionDeliveryError
+                if isinstance(exc, TransactionDeliveryError):
+                    # The database commit is already durable. Do not tell the
+                    # user that the workflow rolled back just because a
+                    # confirmation message could not be delivered.
+                    log.warning("natural-language plan committed with delivery failures")
+                    client.send_message(
+                        chat,
+                        "✅ The workflow was committed, but one or more confirmations could not be delivered.",
+                    )
+                    return True
+                log.exception("natural-language plan transaction commit failed")
+                plan_transaction.rollback()
+                client.send_message(
+                    chat,
+                    "⚠️ The workflow could not be committed, so no step was kept.",
+                )
+                return True
         trace.record("completed", compiled_steps=len(compiled_steps))
         log.info("agent trace %s", trace.summary())
         return True

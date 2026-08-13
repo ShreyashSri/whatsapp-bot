@@ -156,6 +156,29 @@ def test_reminder_escalation(db_session_factory, reminder_store, admin_user, mem
         assert len(audit_entries) >= 1
 
 
+def test_escalation_delivery_failure_does_not_repeat_the_reminder(
+    db_session_factory, reminder_store, admin_user, member_user
+):
+    reminder_store.update_config(
+        actor=admin_user,
+        escalation_threshold=1,
+        escalation_channel="admin@s.whatsapp.net",
+    )
+    event_store = EventStore(db_session_factory)
+    event = event_store.create_event(name="Escalation Retry", type="organization")
+    assignment = event_store.assign(event["id"], member_user.jid)
+
+    client = MagicMock()
+    client.send_message.side_effect = [None, RuntimeError("channel unavailable")]
+    result = reminder_store.run_reminders(client, admin_user, force_ignore_window=True)
+
+    assert result["sent"] == 1
+    assert result["escalated"] == 0
+    assert reminder_store.run_reminders(client, admin_user, force_ignore_window=True)["eligible"] == 0
+    history = reminder_store.get_history(assignment["id"])
+    assert "escalation delivery unavailable" in history[0]["details"]
+
+
 def test_reminder_history(db_session_factory, reminder_store, admin_user, member_user):
     event_store = EventStore(db_session_factory)
     evt = event_store.create_event(name="History Event", type="organization")

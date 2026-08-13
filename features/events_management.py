@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 from db.event_store import EventStore
 from db.auth import gate, normalize_jid
 from db.work_store import WorkStore
+from features.subgroups import _get_text as _shared_get_text
+from features.text import public_error, public_text, split_command_fields
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -37,14 +39,7 @@ VALID_ASSIGNMENT_STATUSES: frozenset[str] = frozenset({"pending", "in_progress",
 # ---------------------------------------------------------------------------
 
 def _get_text(message: "MessageEv") -> str:
-    msg = message.Message
-    if msg.conversation:
-        return msg.conversation.strip()
-    if msg.extendedTextMessage and msg.extendedTextMessage.text:
-        return msg.extendedTextMessage.text.strip()
-    if msg.imageMessage and msg.imageMessage.caption:
-        return msg.imageMessage.caption.strip()
-    return ""
+    return _shared_get_text(message)
 
 
 def _reply(client: "NewClient", chat_jid, text: str) -> None:
@@ -63,7 +58,7 @@ def _cmd_events(client: "NewClient", chat_jid, store: EventStore) -> None:
             _reply(client, chat_jid, "📅 *No active events right now.*")
             return
         lines = [
-            f"• *[{ev['id']}]* {ev['name']} _({ev['type']})_ [`{ev['status']}`] - 👥 {ev.get('assignment_count', 0)} assigned"
+            f"• *[{ev['id']}]* {public_text(ev['name'], limit=180)} _({ev['type']})_ [`{ev['status']}`] - 👥 {ev.get('assignment_count', 0)} assigned"
             for ev in events
         ]
         _reply(client, chat_jid, f"*📋 Active Events ({len(events)})*\n\n" + "\n".join(lines))
@@ -74,7 +69,7 @@ def _cmd_events(client: "NewClient", chat_jid, store: EventStore) -> None:
 
 def _cmd_create_event(client: "NewClient", chat_jid, args: str, store: EventStore) -> None:
     """!create-event <type> | <name> | [description]"""
-    parts = [p.strip() for p in args.split("|")]
+    parts = split_command_fields(args)
     if len(parts) < 2:
         _reply(client, chat_jid, "⚠️ Usage: `!create-event <participation|organization> | <Name> | [Description]`")
         return
@@ -89,10 +84,10 @@ def _cmd_create_event(client: "NewClient", chat_jid, args: str, store: EventStor
 
     try:
         event = store.create_event(name=name, type=ev_type, description=desc, status="active")
-        _reply(client, chat_jid, f"✅ Event *{name}* created successfully! (ID: {event['id']})")
+        _reply(client, chat_jid, f"✅ Event *{public_text(name, limit=180)}* created successfully! (ID: {event['id']})")
     except Exception as exc:
         log.error("Failed to create event: %s", exc)
-        _reply(client, chat_jid, f"❌ Failed to create event: {exc}")
+        _reply(client, chat_jid, "❌ I could not create that event.")
 
 
 def _cmd_delete_event(client: "NewClient", chat_jid, args: str, store: EventStore) -> None:
@@ -114,7 +109,7 @@ def _cmd_delete_event(client: "NewClient", chat_jid, args: str, store: EventStor
 
 def _cmd_set_status(client: "NewClient", chat_jid, args: str, store: EventStore) -> None:
     """!set-status <event_id> | <status>"""
-    parts = [p.strip() for p in args.split("|")]
+    parts = split_command_fields(args)
     if len(parts) != 2 or not parts[0].isdigit():
         _reply(client, chat_jid, "⚠️ Usage: `!set-status <event_id> | <status>`")
         return
@@ -122,7 +117,7 @@ def _cmd_set_status(client: "NewClient", chat_jid, args: str, store: EventStore)
         updated = store.set_status(event_id=int(parts[0]), status=parts[1].lower())
         _reply(client, chat_jid, f"✅ Event {parts[0]} status changed to `{updated['status']}`.")
     except ValueError as exc:
-        _reply(client, chat_jid, f"❌ {exc}")
+        _reply(client, chat_jid, f"❌ {public_error(exc, 'I could not update that event status.')}")
     except Exception as exc:
         log.error("Failed to update status: %s", exc)
         _reply(client, chat_jid, "❌ Failed to update event status.")
@@ -136,7 +131,7 @@ def _cmd_my(client: "NewClient", chat_jid, sender_jid: str, store: EventStore) -
             _reply(client, chat_jid, "📋 *You have no active event assignments right now.*")
             return
         lines = [
-            f"• *[{a['event_id']}]* {a['event_name']} _({a['event_type']})_ - Status: `{a['status']}`"
+            f"• *[{a['event_id']}]* {public_text(a['event_name'], limit=180)} _({a['event_type']})_ - Status: `{a['status']}`"
             for a in assignments
         ]
         _reply(client, chat_jid, f"*📌 Your Assigned Events ({len(assignments)})*\n\n" + "\n".join(lines))
@@ -147,7 +142,7 @@ def _cmd_my(client: "NewClient", chat_jid, sender_jid: str, store: EventStore) -
 
 def _cmd_my_status(client: "NewClient", chat_jid, sender_jid: str, args: str, store: EventStore) -> None:
     """!my-status <event_id> | <status>"""
-    parts = [p.strip() for p in args.split("|")]
+    parts = split_command_fields(args)
     if len(parts) < 2 or not parts[0].isdigit():
         _reply(client, chat_jid,
                "⚠️ Usage: `!my-status <event_id> | <status>`\nExample: `!my-status 1 | completed`")

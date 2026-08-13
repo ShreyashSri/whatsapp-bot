@@ -43,12 +43,18 @@ def register_features(client, config: dict) -> Callable:
     # handler, so start it after the four existing message features.
     register_incidents(client, config)
 
-    def dispatch(message: MessageEv) -> None:
+    def dispatch(message: MessageEv, session_factory=None, client_override=None) -> None:
         # Natural-language messages are translated into a normal command and
         # re-enter this dispatcher. This keeps all existing command ownership,
         # authorization, validation, and auditing in one path.
+        active_client = client_override or client
+        if session_factory is not None:
+            try:
+                message._pbbot_session_factory = session_factory
+            except (AttributeError, TypeError):
+                pass
         try:
-            if natural_language_handler and natural_language_handler(client, message, dispatch):
+            if natural_language_handler and natural_language_handler(active_client, message, dispatch):
                 return
         except Exception:
             log.exception("natural-language handler failed")
@@ -56,9 +62,13 @@ def register_features(client, config: dict) -> Callable:
         # Workload commands have one owner. Returning here is the central
         # collision guard for the historical events/tasks handlers.
         try:
-            if work_handler and work_handler(client, message):
+            if work_handler and work_handler(active_client, message):
+                if session_factory is not None and getattr(session_factory, "failed", False):
+                    return
                 return
         except Exception:
+            if session_factory is not None and hasattr(session_factory, "mark_failed"):
+                session_factory.mark_failed()
             log.exception("work handler failed")
         for handler in handlers:
             if not handler:
@@ -66,8 +76,10 @@ def register_features(client, config: dict) -> Callable:
             # One failing feature must not silence the features registered
             # after it, and the failure has to be visible in the logs.
             try:
-                handler(client, message)
+                handler(active_client, message)
             except Exception:
+                if session_factory is not None and hasattr(session_factory, "mark_failed"):
+                    session_factory.mark_failed()
                 log.exception("feature handler %s failed",
                               getattr(handler, "__module__", handler))
 

@@ -11,19 +11,13 @@ import logging
 from typing import TYPE_CHECKING
 
 from neonize.events import MessageEv
+from features.subgroups import _get_text
+from features.text import public_text
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
 
 log = logging.getLogger(__name__)
-
-def _get_text(message: MessageEv) -> str:
-    text = message.Message.conversation or ""
-    if message.Message.extendedTextMessage and message.Message.extendedTextMessage.text:
-        text = message.Message.extendedTextMessage.text
-    elif message.Message.imageMessage and message.Message.imageMessage.caption:
-        text = message.Message.imageMessage.caption
-    return text.strip()
 
 def _reply(client: "NewClient", chat_jid, text: str) -> None:
     client.send_message(chat_jid, text)
@@ -118,6 +112,8 @@ MODULE_HELP = {
         "Link a task to an event by adding `| event <event_id>`; list linked tasks with `!work tasks event <event_id>`.\n"
         "`!work assign event <id> | @user` / `!work assign task <id> | @user`\n"
         "`!work unassign event <id> | @user` / `!work unassign task <id> | @user`\n"
+        "`!undo` — undo the latest reversible event, task, assignment, or collection change.\n"
+        "Compatibility roots remain supported: `!create-event`, `!update-event`, `!delete-event`, `!add-task`, `!update-task`, and `!delete-task`.\n"
         "`!work set-status event <id> [@user] <pending|in_progress|completed|cancelled>`\n\n"
         "`!work reminders config frequency 12 | window 09:00-18:00 | threshold 3 | channel @admin`\n"
         "`!work reminders run` — trigger an idempotent reminder run.\n\n"
@@ -172,8 +168,7 @@ MODULE_HELP = {
         "• `!update-edit 18 Waiting for approval`\n"
         "• `!history task 7`\n"
         "• `!status event 4`\n"
-        "• `!set-status event 4 in_progress`\n"
-        "• `!help-update`"
+        "• `!set-status event 4 in_progress`"
     ),
     "incidents": (
         "*🚨 Incident Alerts*\n\n"
@@ -296,14 +291,15 @@ def register(client: "NewClient", config: dict) -> callable:
                     "add-subgroup": "subgroups", "remove-from-subgroup": "subgroups",
                     "delete-subgroup": "subgroups", "list-subgroups": "subgroups",
                     "subgroup-info": "subgroups", "events": "work", "tasks": "work", "task": "work",
-                    "assign": "work", "unassign": "work", "work": "work", "my": "work",
+                    "assign": "work", "unassign": "work", "undo": "work", "work": "work", "my": "work",
                     "update": "work", "edit": "work", "history": "work", "status": "work", "set-status": "work",
                     "start": "work", "complete": "work", "create": "work",
-                    "create-event": "work", "delete-event": "work", "my-status": "work",
+                    "create-event": "work", "update-event": "work", "delete-event": "work",
                     "add-user": "admin", "remove-user": "admin", "users": "admin",
                     "admins": "admin", "admin-list": "admin", "admins-list": "admin",
                     "add-task": "work", "complete-task": "work", "update-task": "work", "delete-task": "work",
-                    "update-edit": "work", "help-update": "work",
+                    "update-edit": "work", "schema": "schema", "labels": "labels", "label": "labels",
+                    "report": "reports", "reports": "reports", "audit": "reports",
                     "reminders": "reminders", "reminder-config": "reminders",
                     "reminder-run": "reminders", "reminder-history": "reminders"
                 }
@@ -313,7 +309,7 @@ def register(client: "NewClient", config: dict) -> callable:
                     _reply(client, chat, MODULE_HELP[module])
                 else:
                     known = ", ".join(MODULE_HELP.keys())
-                    _reply(client, chat, f"⚠️ Unknown command '{args}'.\nAvailable options: {known}")
+                    _reply(client, chat, f"⚠️ Unknown command '{public_text(args, limit=80)}'.\nAvailable options: {known}")
             return
 
     log.info("✅ Help feature registered")

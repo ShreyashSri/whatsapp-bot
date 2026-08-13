@@ -14,6 +14,23 @@ from .work_store import WorkStore
 
 VALID_STATUSES = ("todo", "in_progress", "done", "cancelled")
 VALID_PRIORITIES = ("low", "medium", "high")
+TASK_STATUS_ALIASES = {
+    "pending": "todo",
+    "todo": "todo",
+    "in_progress": "in_progress",
+    "in progress": "in_progress",
+    "completed": "done",
+    "complete": "done",
+    "done": "done",
+    "cancelled": "cancelled",
+    "canceled": "cancelled",
+}
+
+
+def normalize_task_status(value: str) -> str:
+    """Normalize public task wording to the task table vocabulary."""
+    normalized = str(value or "").strip().casefold()
+    return TASK_STATUS_ALIASES.get(normalized, normalized)
 
 _TRANSITIONS: dict[str, set[str]] = {
     "todo":        {"in_progress", "done", "cancelled"},

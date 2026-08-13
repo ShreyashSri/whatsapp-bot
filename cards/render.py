@@ -23,6 +23,8 @@ from typing import Any
 
 import httpx
 
+from features.url_policy import safe_public_url
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -161,6 +163,8 @@ def validate_card_design(value: object) -> dict[str, Any] | None:
         if not (logo_url.startswith("https://") or logo_url.startswith("http://")
                 or logo_url.startswith("data:image/")):
             return None
+        if logo_url.startswith("data:image/") and len(logo_url) > 5_000_000:
+            return None
 
     highlight_terms = value.get("highlight_terms", [])
     if highlight_terms is None:
@@ -242,21 +246,67 @@ _EXT_TO_MIME: dict[str, str] = {
     "webp": "image/webp",
 }
 
+_DATA_IMAGE_RE = re.compile(
+    r"^data:(image/(?:png|jpeg|jpg|gif|webp|svg\+xml));base64,([A-Za-z0-9+/=]+)$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_data_image(source: str) -> str:
+    """Accept only canonical base64 image data, never inline HTML/SVG text."""
+    match = _DATA_IMAGE_RE.fullmatch(source.strip())
+    if not match:
+        raise ValueError("image data must be a base64-encoded image")
+    mime, encoded = match.groups()
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        raise ValueError("image data is not valid base64") from None
+    if not raw or len(raw) > 5 * 1024 * 1024:
+        raise ValueError("image is too large")
+    return f"data:{mime.lower()};base64,{base64.b64encode(raw).decode()}"
+
 
 async def _fetch_image_as_data_url(url: str) -> str:
     """Fetch an image URL and return a base64 ``data:`` URL."""
-    async with httpx.AsyncClient(follow_redirects=True) as http:
-        resp = await http.get(url, timeout=15)
-        resp.raise_for_status()
+    current = url.strip()
+    if not safe_public_url(current):
+        raise ValueError("image URL must point to a public HTTP(S) host")
+    max_bytes = 5 * 1024 * 1024
+    async with httpx.AsyncClient(follow_redirects=False, timeout=15) as http:
+        for _ in range(3):
+            async with http.stream("GET", current) as resp:
+                if 300 <= resp.status_code < 400:
+                    from urllib.parse import urljoin
+                    location = resp.headers.get("location", "")
+                    current = urljoin(current, location)
+                    if not safe_public_url(current):
+                        raise ValueError("image redirect points outside public HTTP(S) hosts")
+                    continue
+                resp.raise_for_status()
+                raw_length = resp.headers.get("content-length")
+                if raw_length and raw_length.isdigit() and int(raw_length) > max_bytes:
+                    raise ValueError("image is too large")
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in resp.aiter_bytes():
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise ValueError("image is too large")
+                    chunks.append(chunk)
+                content = b"".join(chunks)
+                ct_mime = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                break
+        else:
+            raise ValueError("image URL redirected too many times")
 
-    ct_mime = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-    ext = url.split("?")[0].split("#")[0].rsplit(".", 1)[-1].lower()
+    ext = current.split("?")[0].split("#")[0].rsplit(".", 1)[-1].lower()
     inferred = _EXT_TO_MIME.get(ext)
     mime = ct_mime if ct_mime.startswith("image/") else inferred
     if not mime:
         raise ValueError(f"Couldn't determine image type (content-type: {ct_mime or 'unknown'})")
 
-    b64 = base64.b64encode(resp.content).decode()
+    b64 = base64.b64encode(content).decode()
     return f"data:{mime};base64,{b64}"
 
 
@@ -264,7 +314,7 @@ async def _resolve_image_as_data_url(source: str) -> str:
     """Return an image ``data:`` URL from either a data URL or a remote URL."""
     cleaned = source.strip()
     if cleaned.startswith("data:image/"):
-        return cleaned
+        return _normalize_data_image(cleaned)
     return await _fetch_image_as_data_url(cleaned)
 
 
@@ -369,6 +419,7 @@ def _build_original_html(
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:;">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=JetBrains+Mono:wght@600;700&display=swap">
@@ -470,6 +521,7 @@ def _build_html(
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:;">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=JetBrains+Mono:wght@600;700&display=swap">
@@ -930,6 +982,7 @@ def _build_talk_html(
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:;">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700&display=swap">

@@ -18,7 +18,10 @@ from typing import TYPE_CHECKING
 
 from neonize.events import MessageEv
 
+from db.auth import normalize_group_jid, normalize_jid
 from db.media_store import MediaStore
+from features.subgroups import _get_text as _shared_get_text
+from features.text import public_text
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -27,13 +30,7 @@ log = logging.getLogger(__name__)
 
 
 def _get_text(message: MessageEv) -> str:
-    """Extract text body from a message (handles both plain, extended, and image captions)."""
-    text = message.Message.conversation or ""
-    if message.Message.extendedTextMessage and message.Message.extendedTextMessage.text:
-        text = message.Message.extendedTextMessage.text
-    elif message.Message.imageMessage and message.Message.imageMessage.caption:
-        text = message.Message.imageMessage.caption
-    return text.strip()
+    return _shared_get_text(message)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -106,7 +103,7 @@ def _platform_status_line(entry: dict) -> str:
 
 
 def _format_todo_entry(entry: dict) -> str:
-    return f"*#{entry['id']}* — {entry['text']}\n   {_platform_status_line(entry)}"
+    return f"*#{entry['id']}* — {public_text(entry.get('text', ''), limit=500)}\n   {_platform_status_line(entry)}"
 
 
 def _format_posted_entry(entry: dict) -> str:
@@ -115,7 +112,7 @@ def _format_posted_entry(entry: dict) -> str:
         when = datetime.fromisoformat(ts).astimezone(IST).strftime("%b %d, %Y %I:%M %p")
     except (ValueError, TypeError):
         when = ts
-    return f"*#{entry['id']}* — {entry['text']}\n   Posted: {when}"
+    return f"*#{entry['id']}* — {public_text(entry.get('text', ''), limit=500)}\n   Posted: {public_text(when, limit=80)}"
 
 
 
@@ -179,7 +176,7 @@ async def _handle_media_command(
         state["todo"].append(entry)
         state["nextId"] += 1
         _write_posts(store, state)
-        _reply(client, chat_jid, f"✅ Added *#{entry['id']}* — {entry['text']}")
+        _reply(client, chat_jid, f"✅ Added *#{entry['id']}* — {public_text(entry['text'], limit=500)}")
         return
 
     # --- !remove ---
@@ -206,7 +203,7 @@ async def _handle_media_command(
             return
 
         _write_posts(store, state)
-        _reply(client, chat_jid, f"🗑️ Removed *#{removed['id']}* from {where} — {removed['text']}")
+        _reply(client, chat_jid, f"🗑️ Removed *#{removed['id']}* from {where} — {public_text(removed['text'], limit=500)}")
         return
 
     # --- !posted <id> <stage> ---
@@ -226,7 +223,7 @@ async def _handle_media_command(
         if not platform:
             _reply(
                 client, chat_jid,
-                f'⚠️ Unknown stage "{args[1]}". Use one of: design (d), instagram (insta / ig), '
+                f'⚠️ Unknown stage "{public_text(args[1], limit=40)}". Use one of: design (d), instagram (insta / ig), '
                 "linkedin (li), twitter (x / tw).",
             )
             return
@@ -277,7 +274,7 @@ async def _handle_media_command(
         if not platform:
             _reply(
                 client, chat_jid,
-                f'⚠️ Unknown stage "{args[1]}". Use one of: design (d), instagram (insta / ig), '
+                f'⚠️ Unknown stage "{public_text(args[1], limit=40)}". Use one of: design (d), instagram (insta / ig), '
                 "linkedin (li), twitter (x / tw).",
             )
             return
@@ -319,7 +316,7 @@ async def _handle_media_command(
 
 def register(client: "NewClient", config: dict) -> callable:
     """Register the media task-manager feature on the neonize client."""
-    media_group_id = config.get("media_group_id")
+    media_group_id = normalize_group_jid(config.get("media_group_id"))
 
     if not media_group_id:
         log.warning("MEDIA_GROUP_ID not set — skipping media task-manager feature.")
@@ -332,7 +329,7 @@ def register(client: "NewClient", config: dict) -> callable:
 
     def on_message(client: "NewClient", message: MessageEv):
         chat_obj = message.Info.MessageSource.Chat
-        chat = f"{chat_obj.User}@{chat_obj.Server}"
+        chat = normalize_jid(chat_obj)
         # Handle media-group commands
         if chat == media_group_id:
             try:

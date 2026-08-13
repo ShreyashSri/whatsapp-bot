@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -19,7 +21,7 @@ from neonize.client import NewClient
 from neonize.events import ConnectedEv, MessageEv, PairStatusEv
 
 from db.database import create_database
-from db.auth import normalize_jid
+from db.auth import normalize_group_jid, normalize_jid
 from db.migration import migrate_legacy_json, migrate_unified_work, upgrade_unified_schema
 from features import fellowship_alerts
 from features.registry import register_features
@@ -86,6 +88,38 @@ def _jid_string(jid) -> str:
     return str(jid)
 
 
+def _configured_groups(config: dict, *keys: str) -> set[str]:
+    """Return normalized group JIDs from config keys and GROUP_IDS."""
+    groups = set()
+    for value in config.get("group_ids", set()) or set():
+        normalized = normalize_group_jid(value)
+        if normalized.endswith("@g.us"):
+            groups.add(normalized)
+    for key in keys:
+        normalized = normalize_group_jid(config.get(key))
+        if normalized.endswith("@g.us"):
+            groups.add(normalized)
+    return groups
+
+
+def _allowed_inbound_groups(config: dict) -> set[str]:
+    """Return groups explicitly configured to accept bot commands."""
+    # MEDIA_GROUP_ID is a command destination by design; incident and
+    # fellowship groups are webhook destinations and remain outbound-only.
+    return _configured_groups(config, "pbbot_group_id", "media_group_id")
+
+
+def _allowed_outbound_groups(config: dict) -> set[str]:
+    """Return every configured group the bot may deliver to."""
+    return _configured_groups(
+        config,
+        "pbbot_group_id",
+        "media_group_id",
+        "incident_group_id",
+        "fellowship_alert_group_id",
+    )
+
+
 # Kept available for callers that import bot configuration, without creating a
 # database connection or a Neonize session as an import side effect.
 config = _build_config()
@@ -123,48 +157,13 @@ def main() -> None:
     if not session_db.is_absolute():
         session_db = Path.cwd() / session_db
     client = NewClient(str(session_db))
-    allowed_group = runtime_config.get("pbbot_group_id")
+    allowed_inbound_groups = _allowed_inbound_groups(runtime_config)
+    allowed_outbound_groups = _allowed_outbound_groups(runtime_config)
 
-    # TEST-ONLY GUARD: remove this block when production routing is designed.
-    allowed_outbound_groups = {
-        group_id
-        for group_id in (
-            allowed_group,
-            runtime_config.get("fellowship_alert_group_id"),
-        )
-        if group_id
-    }
-
-    # Outbound destination guard: allow messages only to configured bot groups.
-    # Enforce the destination policy at the last possible point. This also
-    # covers outbound messages originating from independent features such as
-    # the incident webhook, not just replies to inbound messages.
-    original_send_message = client.send_message
-
-    def guarded_send_message(chat_jid, *args, **kwargs):
-        if isinstance(chat_jid, str):
-            chat_str = normalize_jid(chat_jid)
-            if "@" in chat_str:
-                u, s = chat_str.split("@", 1)
-            else:
-                u, s = chat_str, "s.whatsapp.net"
-            try:
-                from neonize.utils import build_jid
-                chat_jid = build_jid(u, s)
-            except Exception as e:
-                log.warning("Failed to build JID for %s: %s", chat_jid, e)
-
-        chat_id = _jid_string(chat_jid) if chat_jid else ""
-        if (
-            chat_id.endswith("@s.whatsapp.net")
-            or chat_id.endswith("@lid")
-            or (chat_id.endswith("@g.us") and chat_id in allowed_outbound_groups)
-        ):
-            return original_send_message(chat_jid, *args, **kwargs)
-        log.warning("Blocked outbound message to non-PBBot chat: %s", chat_id or "(unknown)")
-        return None
-
-    client.send_message = guarded_send_message
+    # Enforce destination policy at the live client boundary. This protects
+    # replies, media, moderation, group settings, and webhook deliveries.
+    from features.neonize_policy import install_outbound_policy
+    install_outbound_policy(client, allowed_outbound_groups)
 
     # WhatsApp may replay pending/history messages immediately after a
     # reconnect. Fail closed during startup and ignore anything timestamped
@@ -314,6 +313,39 @@ def main() -> None:
 
 
     dispatch = register_features(client, runtime_config)
+
+    # Neonize invokes MessageEv callbacks synchronously. A single bounded
+    # worker preserves message order while keeping slow natural-language/API
+    # work out of the transport callback.
+    dispatch_queue: queue.Queue = queue.Queue(maxsize=64)
+
+    def _dispatch_worker() -> None:
+        while True:
+            queued_message = dispatch_queue.get()
+            try:
+                queued_info = getattr(queued_message, "Info", None)
+                queued_source = getattr(queued_info, "MessageSource", None)
+                queued_chat = getattr(queued_source, "Chat", None)
+                queued_id = getattr(queued_info, "ID", "")
+                from db.nl_state import claim_message
+                if not claim_message(
+                    runtime_config["db_session_factory"],
+                    queued_id,
+                    getattr(queued_source, "Sender", ""),
+                    _jid_string(queued_chat),
+                ):
+                    continue
+                dispatch(queued_message)
+            except Exception:
+                log.exception("message dispatch worker failed")
+            finally:
+                dispatch_queue.task_done()
+
+    threading.Thread(
+        target=_dispatch_worker,
+        name="MessageDispatch",
+        daemon=True,
+    ).start()
     log.info(
         "Registering fellowship alerts before WhatsApp connect: group=%s port=%s secret_configured=%s",
         runtime_config.get("fellowship_alert_group_id") or "(not set)",
@@ -334,7 +366,11 @@ def main() -> None:
         
         # Dynamically register incoming LID senders to the alias registry
         # so overview() can find their phone-based assignments.
-        sender_str = getattr(info.MessageSource, "Sender", None)
+        source = getattr(info, "MessageSource", None)
+        if source is None:
+            return
+
+        sender_str = getattr(source, "Sender", None)
         if sender_str:
             from db.auth import normalize_jid as _nj, jid_user as _ju
             sender = _nj(sender_str)
@@ -362,7 +398,6 @@ def main() -> None:
                     import threading
                     threading.Thread(target=resolve_in_bg, daemon=True).start()
 
-        source = getattr(info, "MessageSource", None)
         chat = getattr(source, "Chat", None)
         chat_id = _jid_string(chat) if chat else ""
         if time.monotonic() < accept_messages_after:
@@ -372,15 +407,20 @@ def main() -> None:
         if message_timestamp <= startup_timestamp:
             return
 
-        # TEST-ONLY GUARD: remove this exact-group check when production
-        # routing is designed.
+        chat_id = normalize_jid(chat_id)
         if (
-            not allowed_group
-            or not chat_id.endswith("@g.us")
-            or chat_id != allowed_group
+            not chat_id.endswith("@g.us")
+            or chat_id not in allowed_inbound_groups
         ):
             return
-        dispatch(message)
+        try:
+            dispatch_queue.put_nowait(message)
+        except queue.Full:
+            log.warning("message dispatch queue is full; dropping message %s", getattr(info, "ID", ""))
+            try:
+                client.send_message(chat, "⚠️ The bot is busy. Please send that command again in a moment.")
+            except Exception:
+                log.exception("could not report a full dispatch queue")
 
     log.info("Starting WhatsApp bot...")
     log.info("Groups: %s", config["group_ids"] or "(none)")

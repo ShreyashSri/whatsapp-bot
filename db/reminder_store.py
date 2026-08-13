@@ -263,10 +263,10 @@ class ReminderStore:
 
                 new_missed_count = assignment.missed_count + 1
                 is_escalated = new_missed_count >= cfg["escalation_threshold"]
-                new_state = "escalated" if is_escalated else "sent"
-
+                from features.text import public_text
+                safe_target_name = public_text(target_name, limit=180)
                 msg = (
-                    f"⏰ *Reminder*: You have a pending assignment for {target_type} *{target_name}* "
+                    f"⏰ *Reminder*: You have a pending assignment for {target_type} *{safe_target_name}* "
                     f"(Assignment #{assignment_id}).\n"
                     f"Please submit your progress update using `!work update {target_type} {target_id} note <value>`."
                 )
@@ -280,34 +280,41 @@ class ReminderStore:
                     client.send_message(target_jid_obj, msg)
                     sent_ok = True
                 except Exception as exc:
-                    log.warning("Failed to send reminder to %s: %s", user_jid, exc)
-                    err_detail = str(exc)
+                    log.warning("Failed to send reminder: %s", exc)
+                    err_detail = "delivery unavailable"
 
                 if sent_ok:
                     assignment.missed_count = new_missed_count
-                    assignment.reminder_state = new_state
-                    res_str = "escalated" if is_escalated else "sent"
+                    escalation_sent = False
+                    escalation_error = False
+                    if is_escalated and cfg["escalation_channel"] and client and hasattr(client, "send_message"):
+                        esc_target = cfg["escalation_channel"]
+                        try:
+                            esc_jid_obj = _make_neonize_jid(esc_target)
+                            client.send_message(
+                                esc_jid_obj,
+                                f"🚨 *Escalation Alert*: A member has missed {new_missed_count} "
+                                f"reminders for {target_type.capitalize()} *{safe_target_name}* (Assignment #{assignment_id}).",
+                            )
+                            escalation_sent = True
+                        except Exception as esc_err:
+                            escalation_error = True
+                            log.warning("Failed to send escalation alert: %s", esc_err)
+                    assignment.reminder_state = "escalated" if escalation_sent else "sent"
+                    res_str = "escalated" if escalation_sent else "sent"
+                    details = f"Reminder delivered (missed_count={new_missed_count})"
+                    if escalation_error:
+                        details += "; escalation delivery unavailable"
                     log_entry = ReminderLog(
                         assignment_id=assignment_id,
                         timestamp=now,
                         channel="whatsapp",
                         result=res_str,
-                        details=f"Reminder sent to {user_jid} (missed_count={new_missed_count})",
+                        details=details,
                     )
                     session.add(log_entry)
-                    if is_escalated:
+                    if escalation_sent:
                         results["escalated"] += 1
-                        esc_target = cfg["escalation_channel"]
-                        if esc_target and client and hasattr(client, "send_message"):
-                            try:
-                                esc_jid_obj = _make_neonize_jid(esc_target)
-                                client.send_message(
-                                    esc_jid_obj,
-                                    f"🚨 *Escalation Alert*: User @{user_jid.split('@')[0]} has missed {new_missed_count} "
-                                    f"reminders for {target_type.capitalize()} *{target_name}* (Assignment #{assignment_id}).",
-                                )
-                            except Exception as esc_err:
-                                log.warning("Failed to send escalation alert: %s", esc_err)
                     else:
                         results["sent"] += 1
                 else:
@@ -316,7 +323,7 @@ class ReminderStore:
                         timestamp=now,
                         channel="whatsapp",
                         result="failed",
-                        details=f"Delivery failed: {err_detail}",
+                        details=f"Delivery failed: {err_detail or 'unavailable'}",
                     )
                     session.add(log_entry)
                     results["failed"] += 1

@@ -8,6 +8,7 @@ from db.auth import gate, jid_user, normalize_jid
 from db.report_store import ReportStore
 from features.subgroups import _get_mentioned_jids, _get_text
 from features.work import _send
+from features.text import public_text
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -22,7 +23,7 @@ _MAX_CELL = 24
 def _cell(value: str) -> str:
     """Keep columns phone-readable: long lists collapse to a count, and the full
     values stay available through `!work history`."""
-    text = str(value)
+    text = public_text(value)
     if len(text) <= _MAX_CELL:
         return text
     items = [item for item in text.split(",") if item.strip()]
@@ -33,7 +34,7 @@ def _cell(value: str) -> str:
 
 def _table(fields: list[str], rows: list[dict]) -> str:
     """Render a fixed-width table so WhatsApp's monospace block keeps columns aligned."""
-    headers = ["member"] + fields + ["status"]
+    headers = ["member"] + [public_text(field, limit=64) for field in fields] + ["status"]
     body = [[row["name"]] + [_cell(row["values"].get(field, "-")) for field in fields] + [row["status"]]
             for row in rows]
     widths = [max(len(str(cell)) for cell in column) for column in zip(headers, *body)] if body \
@@ -45,7 +46,7 @@ def _table(fields: list[str], rows: list[dict]) -> str:
 
 def _owner_label(jid: str, display_name: str | None = None) -> str:
     """Use the stored name when available while keeping mention metadata separate."""
-    label = str(display_name or "").strip()
+    label = public_text(display_name or "", limit=80)
     return f"@{label}" if label else (f"@+{jid_user(jid)}" if jid else "unassigned")
 
 
@@ -56,16 +57,19 @@ def _cmd_progress(client, chat, store: ReportStore, args: str) -> None:
         return
     data = store.cohort(int(tokens[1]))
     if not data["rows"]:
-        client.send_message(chat, f"📭 Nobody is assigned to *{data['event_name']}* yet.")
+        client.send_message(
+            chat,
+            f"📭 Nobody is assigned to *{public_text(data['event_name'], limit=180)}* yet.",
+        )
         return
     # Build a simple readable list instead of (or alongside) the table
-    lines = [f"📊 *{data['event_name']}* — {len(data['rows'])} assignment(s)", ""]
+    lines = [f"📊 *{public_text(data['event_name'], limit=180)}* — {len(data['rows'])} assignment(s)", ""]
     for row in data["rows"]:
         row["name"] = _owner_label(row.get("user_jid", ""), row.get("name"))
         scope = row.get("scope", "")
-        scope_label = f" _(via {scope})_" if scope else ""
+        scope_label = f" _(via {public_text(scope, limit=80)})_" if scope else ""
         status_label = f"`{row['status']}`"
-        task_title = row.get("values", {}).get("task", "")
+        task_title = public_text(row.get("values", {}).get("task", ""), limit=120)
         task_label = f" — _{task_title}_" if task_title else ""
         lines.append(f"• *{row['name']}*{scope_label}{task_label} — {status_label}")
     if data["fields"]:
@@ -83,7 +87,7 @@ def _cmd_status_list(client, chat, store: ReportStore, status: str) -> None:
     for row in rows:
         row["name"] = _owner_label(row.get("user_jid", ""), row.get("name"))
         missed = f" | missed {row['missed_count']}" if row["missed_count"] else ""
-        lines.append(f"• `{row['target_type']} {row['target_id']}` *{row['title']}* — {row['name']}{missed}")
+        lines.append(f"• `{row['target_type']} {row['target_id']}` *{public_text(row['title'], limit=120)}* — {row['name']}{missed}")
     _send(client, chat, "\n".join(lines), [row["user_jid"] for row in rows if row.get("user_jid")])
 
 
@@ -117,8 +121,12 @@ def _cmd_audit(client, chat, store: ReportStore, args: str, mentions: list[str])
     for entry in entries:
         entry["actor"] = _owner_label(entry.get("actor_jid", ""), entry.get("actor"))
         stamp = entry["timestamp"].strftime("%Y-%m-%d %H:%M")
-        lines.append(f"• `{entry['operation']}` by {entry['actor']} ({entry['actor_role']}) "
-                     f"via {entry['source']} — {entry['result']} _{stamp}_")
+        lines.append(
+            f"• `{public_text(entry['operation'], limit=80)}` by {entry['actor']} "
+            f"({public_text(entry['actor_role'], limit=32)}) "
+            f"via {public_text(entry['source'], limit=32)} — "
+            f"{public_text(entry['result'], limit=32)} _{stamp}_"
+        )
     _send(client, chat, "\n".join(lines), [entry["actor_jid"] for entry in entries if entry.get("actor_jid")])
 
 
@@ -160,6 +168,6 @@ def register(client: "NewClient", config: dict) -> callable:
                 client.send_message(chat, "Usage: `!reports [progress event <id>|pending|completed]`")
         except Exception as exc:
             log.info("report command failed: %s", exc)
-            client.send_message(chat, f"⚠️ {exc}")
+            client.send_message(chat, "⚠️ I couldn't load that report.")
 
     return on_message

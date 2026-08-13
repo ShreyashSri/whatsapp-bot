@@ -14,6 +14,7 @@ from db.auth import gate, normalize_jid
 from db.event_store import EventStore
 from db.task_store import TaskStore
 from features.subgroups import _get_mentioned_jids, _get_text
+from features.text import public_error, public_text, split_command_fields
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -37,7 +38,7 @@ def _parse_assign_args(args: str) -> tuple[str, int | None, str]:
     target_type is 'event' or 'task'.
     target_id is None when the args are malformed.
     """
-    parts = [p.strip() for p in args.split("|", 1)]
+    parts = split_command_fields(args, limit=1)
     head = parts[0]
     remainder = parts[1].strip() if len(parts) > 1 else ""
 
@@ -87,7 +88,7 @@ def _cmd_assign(
         return
 
     assignee_jid = normalize_jid(mentions[0])
-    display = f"@{assignee_jid.split('@')[0]}"
+    display = f"@{public_text(assignee_jid.split('@')[0], limit=80)}"
 
     try:
         if target_type == "task":
@@ -99,7 +100,7 @@ def _cmd_assign(
                    f"✅ {display} assigned to event #{target_id}. "
                    f"Status: `{result['status']}`")
     except ValueError as exc:
-        _reply(client, chat, f"❌ {exc}")
+        _reply(client, chat, f"❌ {public_error(exc, 'I could not assign that work item.')}")
     except Exception:
         log.exception("Failed to assign %s #%s", target_type, target_id)
         _reply(client, chat, f"❌ Failed to assign to {target_type} #{target_id}.")
@@ -133,13 +134,13 @@ def _cmd_unassign(
                 _reply(client, chat, "⚠️ Mention a user to unassign from an event.")
                 return
             assignee_jid = normalize_jid(mentions[0])
-            display = f"@{assignee_jid.split('@')[0]}"
+            display = f"@{public_text(assignee_jid.split('@')[0], limit=80)}"
             if event_store.unassign(event_id=target_id, user_id=assignee_jid):
                 _reply(client, chat, f"✅ {display} unassigned from event #{target_id}.")
             else:
                 _reply(client, chat, f"⚠️ {display} is not assigned to event #{target_id}.")
     except ValueError as exc:
-        _reply(client, chat, f"❌ {exc}")
+        _reply(client, chat, f"❌ {public_error(exc, 'I could not remove that assignment.')}")
     except Exception:
         log.exception("Failed to unassign %s #%s", target_type, target_id)
         _reply(client, chat, f"❌ Failed to unassign from {target_type} #{target_id}.")

@@ -14,6 +14,8 @@ from db.task_store import TaskStore
 from db.work_store import PROGRESS_STATUSES, WorkStore
 from db.reminder_store import ReminderStore
 from features.subgroups import _get_mentioned_jids, _get_text
+from features.text import split_command_fields
+from features.text import public_error, public_text
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -23,8 +25,14 @@ WORK_COMMANDS = ("!my", "!work", "!events", "!tasks", "!task",
                  "!update", "!update-edit", "!history", "!status", "!set-status",
                  "!complete-task", "!assign", "!unassign", "!add-task",
                  "!update-task", "!delete-task", "!create-event", "!delete-event",
-                 "!update-event", "!schema")
+                 "!update-event", "!schema", "!undo")
 WORK_SUBCOMMANDS = {"assign", "unassign", "update", "edit", "history", "status", "set-status", "complete", "start", "create", "tasks", "reminders", "reminder", "schema"}
+
+
+def _mark_transaction_failed(session_factory) -> None:
+    marker = getattr(session_factory, "mark_failed", None)
+    if callable(marker):
+        marker()
 
 
 def _format(row: dict, display_names: dict[str, str] | None = None) -> str:
@@ -38,7 +46,10 @@ def _format(row: dict, display_names: dict[str, str] | None = None) -> str:
     progress = row.get("status") or "unassigned"
     event_kind = f" | {row['event_type']}/{row['event_category']}" if typ == "event" and row.get("event_type") else ""
     lifecycle = f" | lifecycle `{row['lifecycle_status']}`" if row.get("lifecycle_status") else ""
-    return f"• `{typ} {ident}` *{row.get('title', row.get('name', ''))}* — `{progress}`{event_kind}{who}{due}{lifecycle}"
+    title = public_text(row.get("title", row.get("name", "")), limit=180)
+    # Status values are controlled identifiers; keep their ASCII spelling so
+    # callers and operators can copy them into the next command.
+    return f"• `{typ} {ident}` *{title}* — `{progress}`{event_kind}{who}{due}{lifecycle}"
 
 
 def _text_value(value) -> str:
@@ -397,10 +408,10 @@ def _send(client, chat, text: str, mention_jids: list[str] | None = None) -> Non
 
         name = display_names.get(normalized) or display_names.get(resolved_jid)
         if name:
-            label = name
+            label = public_text(name, limit=80)
         else:
             phone = _phone_for_jid(client, resolved_jid) or _phone_for_jid(client, normalized)
-            label = jid_user(phone or normalized)
+            label = public_text(jid_user(phone or normalized), limit=80)
 
         # Replace both +LID/+phone and plain @LID/@phone forms.
         original_user = jid_user(normalized)
@@ -446,7 +457,7 @@ def _parse_date(label: str, value: str) -> datetime:
 
 def _legacy_field_args(raw: str) -> dict:
     result = {}
-    for part in raw.split("|")[1:]:
+    for part in split_command_fields(raw)[1:]:
         key, _, value = part.strip().partition(" ")
         if not value and ":" in part:
             key, value = (item.strip() for item in part.split(":", 1))
@@ -481,7 +492,7 @@ def _legacy_field_args(raw: str) -> dict:
 
 
 def _create_task(store: TaskStore, raw: str, sender: str):
-    parts = [part.strip() for part in raw.split("|")]
+    parts = split_command_fields(raw)
     title = parts[0].strip()
     if not title:
         raise ValueError("task title is required")
@@ -600,7 +611,7 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                 ) or "unassigned"
                 due = f" | due {task.due_date.strftime('%Y-%m-%d')}" if task.due_date else ""
                 lines.append(
-                    f"• `task {task.id}` *{task.title}* — `{task.status}` "
+                    f"• `task {task.id}` *{public_text(task.title, limit=160)}* — `{task.status}` "
                     f"({task.priority}){due} | {assignees}"
                 )
             _send(client, chat, "\n".join(lines), mention_jids=all_assignee_jids)
@@ -641,7 +652,7 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             if not is_admin:
                 _send(client, chat, "⛔ Only administrators can create work.")
                 return True
-            parts = [p.strip() for p in args[len(tokens[0]):].strip().split("|")]
+            parts = split_command_fields(args[len(tokens[0]):].strip())
             if len(parts) < 2 or parts[0].lower() not in ("event", "task"):
                 _send(client, chat, "Usage: `!work create event | <participation|organization> | <category> | <name> | [description]` or `!work create task | <title> | [description] | [due YYYY-MM-DD] | [priority low|medium|high]`")
                 return True
@@ -651,18 +662,30 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                 event_type, category = validate_event_type_category(parts[1], parts[2])
                 # Everything after the description may carry `start`, `end`, and
                 # `labels` fields, so parse the tail the same way tasks do.
-                extras = _legacy_field_args("|" + "|".join(parts[5:])) if len(parts) > 5 else {}
+                from features.text import encode_command_field
+                extras = _legacy_field_args(
+                    "|" + "|".join(encode_command_field(part) for part in parts[5:])
+                ) if len(parts) > 5 else {}
                 event = EventStore(factory).create_event(
                     name=parts[3], type=event_type, category=category,
                     description=parts[4] if len(parts) > 4 else "", status="active",
                     labels=extras.get("labels"), start_date=extras.get("start_date"),
                     end_date=extras.get("end_date"))
                 audit(factory, actor, "event.create", "whatsapp", {"event_id": event["id"], "name": event["name"]})
-                _send(client, chat, f"✅ Event `{event['id']}` created: *{event['name']}*")
+                from db.nl_state import record_undo
+                record_undo(factory, sender, "event.create", {"event_id": event["id"]})
+                _send(client, chat, f"✅ Event `{event['id']}` created: *{public_text(event['name'], limit=180)}*")
             else:
-                task = _create_task(TaskStore(factory), "|".join(parts[1:]), sender)
+                from features.text import encode_command_field
+                task = _create_task(
+                    TaskStore(factory),
+                    " | ".join(encode_command_field(part) for part in parts[1:]),
+                    sender,
+                )
                 audit(factory, actor, "task.create", "whatsapp", {"task_id": task.id, "title": task.title})
-                _send(client, chat, f"✅ Task `{task.id}` created: *{task.title}*")
+                from db.nl_state import record_undo
+                record_undo(factory, sender, "task.create", {"task_id": task.id})
+                _send(client, chat, f"✅ Task `{task.id}` created: *{public_text(task.title, limit=180)}*")
             return True
 
         if action == "schema":
@@ -681,34 +704,44 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                                         f"`!schema set {typ} {ident} | org text | prs number`.")
                     return True
                 lines = [f"📐 *Schema — {typ} {ident}*"]
-                lines += [f"• `{item['name']}` {item['field_type']}"
-                          + (f" — {', '.join(item['options'])}" if item["options"] else "")
+                lines += [f"• `{public_text(item['name'], limit=64)}` {item['field_type']}"
+                          + (f" — {', '.join(public_text(option, limit=64) for option in item['options'])}" if item["options"] else "")
                           for item in fields]
                 _send(client, chat, "\n".join(lines))
                 return True
             if not is_admin:
                 _send(client, chat, "⛔ Only administrators can change event schemas.")
                 return True
-            head, _, spec_text = rest.partition("|")
+            schema_parts = split_command_fields(rest, limit=1)
+            head = schema_parts[0]
+            spec_text = schema_parts[1] if len(schema_parts) > 1 else ""
             typ, ident, _, _ = _target(head.split(), 0)
             if verb in ("set", "add"):
-                specs = [part for part in spec_text.split("|") if part.strip()]
+                specs = [part for part in split_command_fields(spec_text) if part.strip()]
                 if not specs:
                     raise ValueError(f"usage: !schema {verb} {typ} {ident} | <name> <type>  (types: "
                                      + ", ".join(FIELD_TYPES) + ")")
                 fields = (store_schema.set_fields(ident, specs) if verb == "set"
                           else store_schema.add_field(ident, specs[0]))
                 audit(factory, actor, f"schema.{verb}", "whatsapp", {"event_id": ident, "specs": specs})
+                from db.nl_state import record_undo
+                record_undo(factory, sender, "barrier", {})
                 _send(client, chat, f"✅ Schema for `{typ} {ident}` now has "
-                                    + ", ".join(f"`{item['name']}`" for item in fields) + ".")
+                                    + ", ".join(f"`{public_text(item['name'], limit=64)}`" for item in fields) + ".")
             elif verb in ("remove", "delete") and spec_text.strip():
                 removed = store_schema.remove_field(ident, spec_text)
                 audit(factory, actor, "schema.delete", "whatsapp", {"event_id": ident, "field": spec_text.strip().lower()})
-                _send(client, chat, f"🗑️ Field `{spec_text.strip().lower()}` removed."
+                if removed:
+                    from db.nl_state import record_undo
+                    record_undo(factory, sender, "barrier", {})
+                _send(client, chat, f"🗑️ Field `{public_text(spec_text.strip().lower(), limit=64)}` removed."
                       if removed else "📭 No such field on this event.")
             elif verb in ("clear", "delete", "remove"):
                 count = store_schema.clear(ident)
                 audit(factory, actor, "schema.delete", "whatsapp", {"event_id": ident, "cleared": count})
+                if count:
+                    from db.nl_state import record_undo
+                    record_undo(factory, sender, "barrier", {})
                 _send(client, chat, f"🗑️ Cleared {count} field(s) from `{typ} {ident}`.")
             else:
                 raise ValueError("usage: !schema <set|add|remove|clear|fields> event <id> | <name> <type>")
@@ -724,6 +757,8 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                 admin=is_admin,
             )
             audit(factory, actor, "update.edit", "whatsapp", {"revision_id": revision["id"]})
+            from db.nl_state import record_undo
+            record_undo(factory, sender, "barrier", {})
             _send(client, chat, f"✅ Update `{revision['id']}` edited successfully.")
             return True
 
@@ -736,17 +771,35 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
             targets, aliases = _assign_targets(client, chat, message, " ".join(tokens[next_index:]), jid, factory)
             if not targets:
                 raise ValueError("mention at least one user or subgroup to assign or unassign")
+            before_rows = store.overview(target_type=typ, target_id=ident, admin=True)
+            before_users = [row["user_jid"] for row in before_rows if row.get("user_jid")]
             for temporary_jid, phone_jid in aliases.items():
                 store.reconcile_user_identity(temporary_jid, phone_jid)
             if action == "assign":
                 rows = store.assign_many(typ, ident, targets)
                 assigned_jids = [row["user_jid"] for row in rows if row.get("user_jid")]
                 audit(factory, actor, f"{typ}.assign", "whatsapp", {"target_id": ident, "users": targets})
+                changed = [
+                    jid for jid in assigned_jids
+                    if jid_user(jid) not in {jid_user(item) for item in before_users}
+                ]
+                if changed:
+                    from db.nl_state import record_undo
+                    record_undo(factory, sender, "assignments.change", {
+                        "target_type": typ, "target_id": ident,
+                        "action": "assign", "before": before_users, "changed": changed,
+                    })
                 visible = ", ".join(f"@+{jid_user(j)}" for j in assigned_jids)
                 _send(client, chat, f"✅ Assigned `{typ} {ident}` to {visible}.", mention_jids=assigned_jids)
             else:
                 removed = store.unassign_many(typ, ident, targets)
                 audit(factory, actor, f"{typ}.unassign", "whatsapp", {"target_id": ident, "users": removed})
+                if removed:
+                    from db.nl_state import record_undo
+                    record_undo(factory, sender, "assignments.change", {
+                        "target_type": typ, "target_id": ident,
+                        "action": "unassign", "before": before_users, "changed": removed,
+                    })
                 _send(client, chat, f"✅ Removed {len(removed)} assignment(s) from `{typ} {ident}`."
                       if removed else "📭 No matching assignments found.")
             return True
@@ -763,7 +816,11 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                 _send(client, chat, "📭 No progress history yet.")
             else:
                 lines = [f"🕘 *History — {typ} {ident}*"]
-                lines.extend(f"• `{item['field']}`: {item['value']} _(update {item['id']})_" for item in history)
+                lines.extend(
+                    f"• `{public_text(item['field'], limit=64)}`: "
+                    f"{public_text(item['value'], limit=300)} _(update {item['id']})_"
+                    for item in history
+                )
                 _send(client, chat, "\n".join(lines))
             return True
 
@@ -784,6 +841,8 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                 admin=is_admin,
             )
             audit(factory, actor, "update.submit", "whatsapp", {"target": f"{typ} {ident}", "field": field, "revision_id": result["id"]})
+            from db.nl_state import record_undo
+            record_undo(factory, sender, "barrier", {})
             _send(client, chat, f"✅ Update `{result['id']}` recorded for `{typ} {ident}`.")
             return True
 
@@ -812,6 +871,8 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                 admin=is_admin,
             )
             audit(factory, actor, f"{typ}.status", "whatsapp", {"target_id": ident, "status": result["status"]})
+            from db.nl_state import record_undo
+            record_undo(factory, sender, "barrier", {})
             if action == "complete" and typ == "task":
                 # Keep the task lifecycle in sync with the assignee's
                 # completed progress while retaining separate status fields.
@@ -828,15 +889,20 @@ def _handle_work_subcommand(client, chat, message, actor, sender: str, args: str
                 admin=is_admin,
             )
             audit(factory, actor, f"{typ}.status", "whatsapp", {"target_id": ident, "status": result["status"]})
+            from db.nl_state import record_undo
+            record_undo(factory, sender, "barrier", {})
             _send(client, chat, f"✅ `{typ} {ident}` set to `{result['status']}`.")
             return True
     except Exception as exc:
+        _mark_transaction_failed(factory)
         log.info("work command failed: %s", exc)
-        _send(client, chat, f"⚠️ {exc}")
+        _send(client, chat, f"⚠️ {public_error(exc, 'I could not complete that work request.')}")
     return True
 
 
 def handle(client, message, session_factory) -> bool:
+    overrides = vars(message) if hasattr(message, "__dict__") else {}
+    session_factory = overrides.get("_pbbot_session_factory", session_factory)
     if not message.Info or not message.Info.MessageSource:
         return False
     source = message.Info.MessageSource
@@ -853,13 +919,21 @@ def handle(client, message, session_factory) -> bool:
     if not actor:
         return True
     sender = normalize_jid(source.Sender)
+    if command == "!undo":
+        try:
+            from db.nl_state import undo_last
+            message_text = undo_last(session_factory, sender)
+            _send(client, chat, message_text or "📭 There is no reversible action to undo.")
+        except (TypeError, ValueError) as exc:
+            _send(client, chat, f"⚠️ {public_error(exc, 'I could not update that assignment.')}")
+        return True
     if command == "!work" and args.strip().split()[:1] and args.strip().split()[0].lower() in WORK_SUBCOMMANDS:
         return _handle_work_subcommand(client, chat, message, actor, sender, args.strip(), session_factory)
     if command in ("!assign", "!unassign"):
         if actor.role != "admin":
             _send(client, chat, "⛔ Only administrators can change assignments.")
             return True
-        parts = [part.strip() for part in args.split("|", 1)]
+        parts = split_command_fields(args, limit=1)
         head = parts[0].split()
         typ = head[0].lower() if head and head[0].lower() in ("event", "task") else "event"
         ident_token = head[1] if typ in ("event", "task") and len(head) > 1 else (head[0] if head else "")
@@ -869,18 +943,39 @@ def handle(client, message, session_factory) -> bool:
             return True
         try:
             store = WorkStore(session_factory)
+            before_rows = store.overview(
+                target_type=typ, target_id=int(ident_token), admin=True
+            )
+            before_users = [row["user_jid"] for row in before_rows if row.get("user_jid")]
             for temporary_jid, phone_jid in aliases.items():
                 store.reconcile_user_identity(temporary_jid, phone_jid)
             if command == "!assign":
                 rows = store.assign_many(typ, int(ident_token), targets)
                 assigned_jids = [row["user_jid"] for row in rows if row.get("user_jid")]
+                changed = [
+                    jid for jid in assigned_jids
+                    if jid_user(jid) not in {jid_user(item) for item in before_users}
+                ]
+                if changed:
+                    from db.nl_state import record_undo
+                    record_undo(session_factory, sender, "assignments.change", {
+                        "target_type": typ, "target_id": int(ident_token),
+                        "action": "assign", "before": before_users, "changed": changed,
+                    })
                 visible = ", ".join(f"@+{jid_user(j)}" for j in assigned_jids)
                 _send(client, chat, f"✅ Assigned `{typ} {ident_token}` to {visible}.", mention_jids=assigned_jids)
             else:
                 removed = store.unassign_many(typ, int(ident_token), targets)
+                if removed:
+                    from db.nl_state import record_undo
+                    record_undo(session_factory, sender, "assignments.change", {
+                        "target_type": typ, "target_id": int(ident_token),
+                        "action": "unassign", "before": before_users, "changed": removed,
+                    })
                 _send(client, chat, f"✅ Removed {len(removed)} assignment(s)." if removed else "📭 Assignment not found.")
         except Exception as exc:
-            _send(client, chat, f"⚠️ {exc}")
+            _mark_transaction_failed(session_factory)
+            _send(client, chat, f"⚠️ {public_error(exc, 'I could not update that task.')}")
         return True
     if command in ("!add-task", "!update-task", "!delete-task"):
         if actor.role != "admin":
@@ -890,24 +985,31 @@ def handle(client, message, session_factory) -> bool:
             tasks = TaskStore(session_factory)
             if command == "!add-task":
                 task = _create_task(tasks, args, sender)
-                _send(client, chat, f"✅ Task `{task.id}` created: *{task.title}*")
+                from db.nl_state import record_undo
+                record_undo(session_factory, sender, "task.create", {"task_id": task.id})
+                _send(client, chat, f"✅ Task `{task.id}` created: *{public_text(task.title, limit=180)}*")
             elif command == "!delete-task":
                 if not args.strip().isdigit():
                     raise ValueError("usage: !delete-task <id>")
                 tasks.delete(int(args.strip()))
                 audit(session_factory, actor, "task.delete", "whatsapp", {"task_id": int(args.strip())})
+                from db.nl_state import record_undo
+                record_undo(session_factory, sender, "barrier", {})
                 _send(client, chat, f"🗑️ Task `{args.strip()}` deleted.")
             else:
-                parts = [part.strip() for part in args.split("|", 1)]
+                parts = split_command_fields(args, limit=1)
                 if len(parts) != 2 or not parts[0].isdigit():
                     raise ValueError("usage: !update-task <id> | field value")
                 fields = _legacy_field_args("|" + parts[1])
                 task = tasks.update(int(parts[0]), title=fields.get("title"), description=fields.get("description"),
                                     due_date=fields.get("due_date"), priority=fields.get("priority"), status=fields.get("status"), force_status=True)
                 audit(session_factory, actor, "task.update", "whatsapp", {"task_id": task.id, "fields": sorted(fields)})
+                from db.nl_state import record_undo
+                record_undo(session_factory, sender, "barrier", {})
                 _send(client, chat, f"✅ Task `{task.id}` updated.")
         except Exception as exc:
-            _send(client, chat, f"⚠️ {exc}")
+            _mark_transaction_failed(session_factory)
+            _send(client, chat, f"⚠️ {public_error(exc, 'I could not update that event.')}")
         return True
     if command in ("!create-event", "!delete-event", "!update-event"):
         if actor.role != "admin":
@@ -916,7 +1018,7 @@ def handle(client, message, session_factory) -> bool:
         try:
             events = EventStore(session_factory)
             if command == "!update-event":
-                parts = [part.strip() for part in args.split("|", 1)]
+                parts = split_command_fields(args, limit=1)
                 if len(parts) != 2 or not parts[0].isdigit():
                     raise ValueError("usage: !update-event <id> | name <value> [| desc <value>] [| start YYYY-MM-DD] [| end YYYY-MM-DD] [| labels a,b]")
                 fields = _legacy_field_args("|" + parts[1])
@@ -927,23 +1029,30 @@ def handle(client, message, session_factory) -> bool:
                                             labels=fields.get("labels"), start_date=fields.get("start_date"),
                                             end_date=fields.get("end_date"))
                 audit(session_factory, actor, "event.update", "whatsapp", {"event_id": event["id"], "fields": sorted(fields)})
-                _send(client, chat, f"✅ Event `{event['id']}` updated: *{event['name']}*")
+                from db.nl_state import record_undo
+                record_undo(session_factory, sender, "barrier", {})
+                _send(client, chat, f"✅ Event `{event['id']}` updated: *{public_text(event['name'], limit=180)}*")
             elif command == "!create-event":
-                parts = [part.strip() for part in args.split("|")]
+                parts = split_command_fields(args)
                 if len(parts) < 2:
                     raise ValueError("usage: !create-event <type> | <name> | [description]")
                 event_type, category = validate_event_type_category(parts[0], "other")
                 event = events.create_event(type=event_type, category=category, name=parts[1], description=parts[2] if len(parts) > 2 else "", status="active")
-                _send(client, chat, f"✅ Event `{event['id']}` created: *{event['name']}*")
+                from db.nl_state import record_undo
+                record_undo(session_factory, sender, "event.create", {"event_id": event["id"]})
+                _send(client, chat, f"✅ Event `{event['id']}` created: *{public_text(event['name'], limit=180)}*")
             else:
                 if not args.strip().isdigit():
                     raise ValueError("usage: !delete-event <id>")
                 if not events.delete_event(int(args.strip())):
                     raise ValueError("event not found")
                 audit(session_factory, actor, "event.delete", "whatsapp", {"event_id": int(args.strip())})
+                from db.nl_state import record_undo
+                record_undo(session_factory, sender, "barrier", {})
                 _send(client, chat, f"🗑️ Event `{args.strip()}` deleted.")
         except Exception as exc:
-            _send(client, chat, f"⚠️ {exc}")
+            _mark_transaction_failed(session_factory)
+            _send(client, chat, f"⚠️ {public_error(exc, 'I could not complete that event request.')}")
         return True
     legacy_actions = {
         "!update": "update", "!update-edit": "edit", "!history": "history",
@@ -954,15 +1063,18 @@ def handle(client, message, session_factory) -> bool:
             if actor.role != "admin":
                 _send(client, chat, "⛔ Only administrators can change lifecycle status.")
                 return True
-            parts = [part.strip() for part in args.split("|", 1)]
+            parts = split_command_fields(args, limit=1)
             if len(parts) != 2 or not parts[0].isdigit() or not parts[1]:
                 _send(client, chat, "Usage: `!set-status <event_id> | <draft|active|completed|cancelled>`")
                 return True
             try:
                 EventStore(session_factory).set_status(int(parts[0]), parts[1].lower())
+                from db.nl_state import record_undo
+                record_undo(session_factory, sender, "barrier", {})
                 _send(client, chat, f"✅ Event `{parts[0]}` lifecycle set to `{parts[1].lower()}`.")
             except Exception as exc:
-                _send(client, chat, f"⚠️ {exc}")
+                _mark_transaction_failed(session_factory)
+                _send(client, chat, f"⚠️ {public_error(exc, 'I could not update that status.')}")
             return True
         return _handle_work_subcommand(client, chat, message, actor, sender,
                                        f"{legacy_actions[command]} {args}".strip(), session_factory)

@@ -21,6 +21,7 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
     Message,
 )
 from neonize.utils.jid import Jid2String, JIDToNonAD
+from features.text import public_text
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -185,7 +186,7 @@ def register(client: "NewClient", config: dict) -> callable:
                 continue
 
             # Clean message — no @names visible, but mentionedJID ensures notifications
-            text = f"📢 Tagging all members of {group_subject}"
+            text = f"📢 Tagging all members of {public_text(group_subject or 'the community group', limit=120)}"
 
             # Construct the protobuf Message directly so we have full control
             # over mentionedJID (avoids the regex-based ghost_mentions hack).

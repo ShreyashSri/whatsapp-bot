@@ -28,7 +28,8 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
 )
 
 from db.subgroup_store import SubgroupStore
-from db.auth import gate, get_active_admin_jids, normalize_jid
+from db.auth import gate, get_active_admin_jids, jid_user, normalize_jid
+from features.text import public_error, public_text, split_command_fields
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -69,9 +70,29 @@ def _write_subgroups(store: SubgroupStore, data: dict[str, list[str]]) -> None:
 # Message text extraction
 # ---------------------------------------------------------------------------
 
-def _get_text(message: "MessageEv") -> str:
-    """Extract plain text body from a message."""
+def _unwrap_message(message: "MessageEv"):
+    """Return the innermost text-bearing protobuf message."""
     msg = message.Message
+    for _ in range(5):
+        found_wrapper = False
+        for field_desc, value in msg.ListFields():
+            if field_desc.name in (
+                "ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2",
+                "documentWithCaptionMessage", "groupMentionedMessage",
+            ):
+                inner = getattr(value, "message", None)
+                if inner and inner.ListFields():
+                    msg = inner
+                    found_wrapper = True
+                    break
+        if not found_wrapper:
+            break
+    return msg
+
+
+def _get_text(message: "MessageEv") -> str:
+    """Extract plain text body from a message, including wrapped messages."""
+    msg = _unwrap_message(message)
     if msg.conversation:
         return msg.conversation.strip()
     if msg.extendedTextMessage and msg.extendedTextMessage.text:
@@ -83,7 +104,7 @@ def _get_text(message: "MessageEv") -> str:
 
 def _get_mentioned_jids(message: "MessageEv") -> list[str]:
     """Extract mentionedJID strings from the message's contextInfo."""
-    msg = message.Message
+    msg = _unwrap_message(message)
     mentions: list[str] = []
 
     # Walk through wrapper layers (ephemeral, viewOnce, etc.)
@@ -247,7 +268,7 @@ def _cmd_add_subgroup(
     client, chat_jid, body: str, mentioned_jids: list[str], store: SubgroupStore
 ) -> None:
     """!add-subgroup <name> | @user1 @user2 … or !add-subgroup <name> | @everyone"""
-    parts = body.split("|", 1)
+    parts = split_command_fields(body, limit=1)
     raw_name = parts[0].strip().lstrip("@")
 
     if not raw_name:
@@ -273,23 +294,23 @@ def _cmd_add_subgroup(
     try:
         added_count, total = add_subgroup_members(store, name, mentioned_jids)
     except ValueError as exc:
-        _reply(client, chat_jid, f"⚠️ {exc}")
+        _reply(client, chat_jid, f"⚠️ {public_error(exc, 'I could not update that subgroup.')}")
         return
 
     if added_count:
         _reply(
             client, chat_jid,
-            f"✅ Added {added_count} member(s) to *@{name}* (total: {total}).",
+            f"✅ Added {added_count} member(s) to *@{public_text(name, limit=80)}* (total: {total}).",
         )
     else:
-        _reply(client, chat_jid, f"ℹ️ All mentioned users are already in *@{name}* ({total} members).")
+        _reply(client, chat_jid, f"ℹ️ All mentioned users are already in *@{public_text(name, limit=80)}* ({total} members).")
 
 
 def _cmd_remove_from_subgroup(
     client, chat_jid, body: str, mentioned_jids: list[str], store: SubgroupStore
 ) -> None:
     """!remove-from-subgroup <name> | @user1 @user2 … or !remove-from-subgroup <name> | @everyone"""
-    parts = body.split("|", 1)
+    parts = split_command_fields(body, limit=1)
     raw_name = parts[0].strip().lstrip("@")
     name = raw_name.lower()
 
@@ -308,18 +329,18 @@ def _cmd_remove_from_subgroup(
             store, name, mentioned_jids
         )
     except ValueError as exc:
-        _reply(client, chat_jid, f"⚠️ {exc}")
+        _reply(client, chat_jid, f"⚠️ {public_error(exc, 'I could not update that subgroup.')}")
         return
 
     if not deleted:
         _reply(
             client, chat_jid,
-            f"✅ Removed {removed_count} member(s) from *@{name}* ({remaining_count} remaining).",
+            f"✅ Removed {removed_count} member(s) from *@{public_text(name, limit=80)}* ({remaining_count} remaining).",
         )
     else:
         _reply(
             client, chat_jid,
-            f"🗑️ Subgroup *@{name}* deleted (no members remaining).",
+            f"🗑️ Subgroup *@{public_text(name, limit=80)}* deleted (no members remaining).",
         )
 
 
@@ -333,12 +354,12 @@ def _cmd_delete_subgroup(client, chat_jid, name_raw: str, store: SubgroupStore) 
 
     subgroups = _read_subgroups(store)
     if name not in subgroups:
-        _reply(client, chat_jid, f"⚠️ Subgroup *@{name}* does not exist.")
+        _reply(client, chat_jid, f"⚠️ Subgroup *@{public_text(name, limit=80)}* does not exist.")
         return
 
     del subgroups[name]
     _write_subgroups(store, subgroups)
-    _reply(client, chat_jid, f"🗑️ Subgroup *@{name}* deleted.")
+    _reply(client, chat_jid, f"🗑️ Subgroup *@{public_text(name, limit=80)}* deleted.")
 
 
 def _cmd_list_subgroups(client, chat_jid, store: SubgroupStore) -> None:
@@ -348,7 +369,7 @@ def _cmd_list_subgroups(client, chat_jid, store: SubgroupStore) -> None:
         _reply(client, chat_jid, "📭 No subgroups defined yet.")
         return
 
-    lines = [f"• *@{name}* — {len(members)} member(s)" for name, members in sorted(subgroups.items())]
+    lines = [f"• *@{public_text(name, limit=80)}* — {len(members)} member(s)" for name, members in sorted(subgroups.items())]
     _reply(client, chat_jid, f"*📋 Subgroups ({len(subgroups)})*\n\n" + "\n".join(lines))
 
 
@@ -362,13 +383,16 @@ def _cmd_subgroup_info(client, chat_jid, name_raw: str, store: SubgroupStore) ->
 
     subgroups = _read_subgroups(store)
     if name not in subgroups:
-        _reply(client, chat_jid, f"⚠️ Subgroup *@{name}* does not exist.")
+        _reply(client, chat_jid, f"⚠️ Subgroup *@{public_text(name, limit=80)}* does not exist.")
         return
 
     members = subgroups[name]
     # Build @mentions so members render as tagged contacts (with names)
-    mention_parts = [f"@{jid.split('@')[0]}" for jid in members]
-    text = f"*@{name}* — {len(members)} member(s)\n\n" + "\n".join(f"  • {m}" for m in mention_parts)
+    mention_parts = [
+        f"@{('member' if normalize_jid(jid).endswith('@lid') else jid_user(jid))}"
+        for jid in members
+    ]
+    text = f"*@{public_text(name, limit=80)}* — {len(members)} member(s)\n\n" + "\n".join(f"  • {m}" for m in mention_parts)
 
     # Send as protobuf so mentionedJID makes WhatsApp resolve names
     proto_msg = Message(

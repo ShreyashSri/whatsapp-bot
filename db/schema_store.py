@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Callable
 
 from sqlalchemy import delete, select
@@ -14,6 +15,7 @@ FIELD_TYPES = ("text", "number", "boolean", "date", "url", "single_select", "mul
 SELECT_TYPES = ("single_select", "multi_select")
 _TRUE = {"true", "yes", "y", "1", "done", "accepted"}
 _FALSE = {"false", "no", "n", "0", "pending", "rejected"}
+_FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 def parse_field_spec(raw: str) -> tuple[str, str, list[str] | None]:
@@ -31,6 +33,8 @@ def parse_field_spec(raw: str) -> tuple[str, str, list[str] | None]:
     name, field_type = name.strip().lower(), field_type.strip().lower() or "text"
     if not name:
         raise ValueError("field name is required")
+    if not _FIELD_NAME_RE.fullmatch(name):
+        raise ValueError("field names must use letters, numbers, hyphens, or underscores")
     if field_type not in FIELD_TYPES:
         raise ValueError(f"field type must be one of: {', '.join(FIELD_TYPES)}")
     if field_type in SELECT_TYPES and not options:

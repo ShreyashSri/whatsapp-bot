@@ -773,8 +773,8 @@ def test_named_collection_membership_is_compiled_from_live_entity_context():
 def test_model_output_cannot_escape_the_command_allowlist():
     assert validate_command("!work update event 4 prs 3") == "!work update event 4 prs 3"
     assert validate_command("delete everything") is None
-    assert validate_command("!update-event 4 | name old") is None
-    assert validate_command("!reminders") is None
+    assert validate_command("!update-event 4 | name old") == "!update-event 4 | name old"
+    assert validate_command("!reminders") == "!reminders"
     assert validate_command("!work\n!remove 1") is None
     assert validate_command("```!my```") is None
 

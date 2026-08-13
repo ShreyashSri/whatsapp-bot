@@ -8,6 +8,96 @@ so a Neonize upgrade cannot silently add an unreviewed capability.
 
 from __future__ import annotations
 
+from functools import wraps
+
+
+DESTINATION_METHODS = frozenset({
+    "send_message", "send_image", "send_video", "send_audio", "send_document",
+    "send_sticker", "send_contact", "reply_message", "pin_message",
+    "revoke_message", "set_disappearing_timer", "set_group_announce",
+    "set_group_locked", "set_group_name", "set_group_photo", "set_group_topic",
+    "update_group_participants", "leave_group", "link_group", "unlink_group",
+})
+
+
+class OutboundDestinationError(RuntimeError):
+    """Raised when a destination-bearing Neonize call leaves bot scope."""
+
+
+def _jid_text(value) -> str:
+    from db.auth import normalize_jid
+
+    user = getattr(value, "User", "")
+    server = getattr(value, "Server", "")
+    if user and server:
+        return normalize_jid(f"{user}@{server}")
+    return normalize_jid(value)
+
+
+def _allowed_destination(value, allowed_groups: set[str]) -> bool:
+    jid = _jid_text(value)
+    if jid.endswith("@s.whatsapp.net") or jid.endswith("@lid"):
+        return True
+    return jid.endswith("@g.us") and jid in allowed_groups
+
+
+def _destinations(method: str, args: tuple, kwargs: dict) -> list[object]:
+    if method in {"link_group", "unlink_group"}:
+        return [
+            args[0] if args else (kwargs.get("parent") or kwargs.get("parent_chat")),
+            args[1] if len(args) > 1 else (kwargs.get("child") or kwargs.get("child_chat")),
+        ]
+    if method == "reply_message":
+        candidates = []
+        message = kwargs.get("message")
+        if message is None and len(args) > 1:
+            message = args[1]
+        source = getattr(getattr(message, "Info", None), "MessageSource", None)
+        candidates.append(getattr(source, "Chat", None))
+        return candidates
+    if args:
+        return [args[0]]
+    for key in ("chat", "chat_jid", "jid", "parent_chat", "group_jid"):
+        if key in kwargs:
+            return [kwargs[key]]
+    return []
+
+
+def install_outbound_policy(client, allowed_groups) -> None:
+    """Guard all exposed destination-bearing methods on one live client.
+
+    Direct-user delivery remains valid for reminders and explicit contact
+    operations. Group delivery is restricted to configured bot groups. The
+    wrapper raises a typed error so a blocked side effect cannot be reported
+    as successful by a caller that ignores a ``None`` return value.
+    """
+    from db.auth import normalize_jid
+
+    groups = {normalize_jid(value) for value in (allowed_groups or set()) if normalize_jid(value)}
+    if getattr(client, "_pbbot_outbound_policy_installed", False):
+        return
+
+    for method in DESTINATION_METHODS:
+        original = getattr(client, method, None)
+        if not callable(original):
+            continue
+
+        @wraps(original)
+        def guarded(*args, __method=method, __original=original, **kwargs):
+            destinations = _destinations(__method, args, kwargs)
+            if not destinations or any(
+                not _allowed_destination(destination, groups)
+                for destination in destinations
+            ):
+                rendered = ", ".join(_jid_text(item) for item in destinations if item) or "(unknown)"
+                raise OutboundDestinationError(
+                    f"outbound {__method} destination is outside configured bot scope: {rendered}"
+                )
+            return __original(*args, **kwargs)
+
+        setattr(client, method, guarded)
+    client._pbbot_outbound_policy_installed = True
+
 EXPOSED_NEONIZE_METHODS = frozenset({
     "build_document_message", "build_image_message", "build_poll_vote_creation",
     "build_reaction", "create_group", "download_any", "get_blocklist",

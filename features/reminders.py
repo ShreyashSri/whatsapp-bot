@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from db.auth import gate, normalize_jid
 from db.reminder_store import ReminderStore
 from features.subgroups import _get_mentioned_jids, _get_text
+from features.text import public_error, public_text, split_command_fields
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -31,7 +32,8 @@ REMINDER_CMDS = (
 
 
 def _fmt_config(cfg: dict) -> str:
-    chan = f"@{cfg['escalation_channel'].split('@')[0]}" if cfg.get("escalation_channel") else "none"
+    channel = cfg.get("escalation_channel")
+    chan = "configured admin channel" if channel else "none"
     return (
         f"⚙️ *Reminder Configuration*\n"
         f"• Frequency: `{cfg['frequency_hours']}h`\n"
@@ -43,7 +45,7 @@ def _fmt_config(cfg: dict) -> str:
 
 def _parse_config_args(args: str, mentions: list[str]) -> dict:
     result: dict = {}
-    parts = [p.strip() for p in args.split("|") if p.strip()]
+    parts = [p.strip() for p in split_command_fields(args) if p.strip()]
     for part in parts:
         colon_key = part.split(":", 1)[0].strip().lower() if ":" in part else ""
         if colon_key in ("frequency", "frequency_hours", "freq", "f", "window", "active_window", "w", "threshold", "escalation_threshold", "t", "channel", "escalation_channel", "c"):
@@ -67,7 +69,7 @@ def _parse_config_args(args: str, mentions: list[str]) -> dict:
             if mentions:
                 result["escalation_channel"] = mentions[0]
             elif v:
-                result["escalation_channel"] = v
+                result["_channel_error"] = True
     if mentions and "escalation_channel" not in result:
         result["escalation_channel"] = mentions[0]
     return result
@@ -80,6 +82,9 @@ def _cmd_config(client: "NewClient", chat, args: str, actor, mentions: list[str]
         return
 
     parsed = _parse_config_args(args, mentions)
+    if parsed.pop("_channel_error", False):
+        client.send_message(chat, "⚠️ Select the escalation channel with a native WhatsApp @mention.")
+        return
     if not parsed:
         client.send_message(
             chat,
@@ -98,7 +103,7 @@ def _cmd_config(client: "NewClient", chat, args: str, actor, mentions: list[str]
         )
         client.send_message(chat, f"✅ Reminder config updated!\n\n{_fmt_config(updated)}")
     except ValueError as exc:
-        client.send_message(chat, f"⚠️ {exc}")
+        client.send_message(chat, f"⚠️ {public_error(exc, 'I could not update the reminder configuration.')}")
 
 
 def _cmd_run(client: "NewClient", chat, actor, store: ReminderStore) -> None:
@@ -114,7 +119,11 @@ def _cmd_run(client: "NewClient", chat, actor, store: ReminderStore) -> None:
 
 
 def _cmd_history(client: "NewClient", chat, args: str, store: ReminderStore, *, actor=None) -> None:
-    assignment_id = int(args.strip()) if args.strip().isdigit() else None
+    raw_assignment_id = args.strip()
+    if raw_assignment_id and not raw_assignment_id.isdigit():
+        client.send_message(chat, "⚠️ Usage: `!reminder-history [assignment_id]`")
+        return
+    assignment_id = int(raw_assignment_id) if raw_assignment_id else None
     # Members can inspect only their own reminder history. Admins can inspect
     # all history, or narrow it to one assignment.
     user_jid = None if actor is None or actor.role == "admin" else actor.jid
@@ -128,7 +137,7 @@ def _cmd_history(client: "NewClient", chat, args: str, store: ReminderStore, *, 
         ts = log_entry["timestamp"].strftime("%Y-%m-%d %H:%M UTC")
         assignment_info = f"Assignment #{log_entry['assignment_id']}"
         res = log_entry["result"].upper()
-        details = f" ({log_entry['details']})" if log_entry["details"] else ""
+        details = f" ({public_text(log_entry['details'], limit=180)})" if log_entry["details"] else ""
         lines.append(f"[{ts}] *{assignment_info}* [{res}]{details}")
 
     client.send_message(chat, "\n".join(lines))

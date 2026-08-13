@@ -6,7 +6,7 @@ from features.agent_runtime import MAX_PLAN_STEPS, tool_spec, validate_plan_pref
 
 def test_plan_preflight_accepts_dependencies_on_prior_steps():
     assert validate_plan_preflight([
-        {"step_id": "event", "capability": "work.create_event", "arguments": {"name": "Event"}},
+        {"step_id": "event", "capability": "work.create_event", "arguments": {"type": "organization", "category": "other", "name": "Event"}},
         {
             "step_id": "task",
             "capability": "work.create_task",
@@ -85,14 +85,14 @@ def test_plan_preflight_rejects_later_dependency():
             "capability": "work.create_task",
             "arguments": {"title": "Task", "event_id": "$event.event_id"},
         },
-        {"step_id": "event", "capability": "work.create_event", "arguments": {"name": "Event"}},
+        {"step_id": "event", "capability": "work.create_event", "arguments": {"type": "organization", "category": "other", "name": "Event"}},
     ])
     assert "later or unknown" in error
 
 
 def test_plan_preflight_rejects_output_not_declared_by_producer():
     error = validate_plan_preflight([
-        {"step_id": "event", "capability": "work.create_event", "arguments": {"name": "Event"}},
+        {"step_id": "event", "capability": "work.create_event", "arguments": {"type": "organization", "category": "other", "name": "Event"}},
         {
             "step_id": "task",
             "capability": "work.create_task",
@@ -104,7 +104,7 @@ def test_plan_preflight_rejects_output_not_declared_by_producer():
 
 def test_plan_preflight_rejects_duplicate_step_ids():
     error = validate_plan_preflight([
-        {"step_id": "same", "capability": "work.create_event", "arguments": {"name": "Event"}},
+        {"step_id": "same", "capability": "work.create_event", "arguments": {"type": "organization", "category": "other", "name": "Event"}},
         {"step_id": "same", "capability": "work.create_task", "arguments": {"title": "Task"}},
     ])
     assert "duplicate" in error

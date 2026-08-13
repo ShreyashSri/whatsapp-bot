@@ -41,6 +41,30 @@ class AuditLog(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ProcessedMessage(Base):
+    """Inbound message IDs claimed by the dispatcher for retry idempotency."""
+
+    __tablename__ = "processed_messages"
+
+    message_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    chat_jid: Mapped[str] = mapped_column(String(128), primary_key=True)
+    actor_jid: Mapped[str] = mapped_column(String(128), nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UndoAction(Base):
+    """The latest reversible state-changing action for each user."""
+
+    __tablename__ = "undo_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_jid: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JsonDocument, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class JidAlias(Base):
     """Maps linked device LIDs to primary phone JIDs."""
     __tablename__ = "jid_aliases"

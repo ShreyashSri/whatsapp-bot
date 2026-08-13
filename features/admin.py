@@ -4,6 +4,7 @@ import logging
 from db.auth import (gate, normalize_jid, remove_or_demote_user, upsert_user)
 from features.subgroups import _get_mentioned_jids, _get_text
 from db.models import User
+from features.text import public_text
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ def register(client, config):
             with factory() as session:
                 admins = session.query(User).filter(User.role == "admin", User.active.is_(True)).order_by(User.jid).all()
             if not admins: reply(chat, "📭 No active admins found.")
-            else: reply(chat, "*👥 Active Admins*\n" + "\n".join(f"• {u.display_name or u.jid}" for u in admins))
+            else: reply(chat, "*👥 Active Admins*\n" + "\n".join(f"• {public_text(u.display_name or ('member' if u.jid.endswith('@lid') else u.jid), limit=80)}" for u in admins))
             return
 
         # Commands requiring active admin access (!add-user, !remove-user, !users)
@@ -49,14 +50,16 @@ def register(client, config):
                 results = []
                 for jid in mentions:
                     _, action = remove_or_demote_user(factory, jid, actor=actor)
-                    results.append(f"{jid.split('@')[0]} ({action})")
+                    results.append(
+                        f"{public_text('member' if normalize_jid(jid).endswith('@lid') else normalize_jid(jid).split('@')[0], limit=80)} ({action})"
+                    )
                 reply(chat, f"✅ Processed {len(mentions)} user(s): {', '.join(results)}.")
             else:
                 with factory() as session:
                     users = session.query(User).order_by(User.jid).all()
                 if not users: reply(chat, "📭 No users configured.")
-                else: reply(chat, "*👥 All Users*\n" + "\n".join(f"• {u.display_name or u.jid} — {u.role}{'' if u.active else ' (inactive)'}" for u in users))
+                else: reply(chat, "*👥 All Users*\n" + "\n".join(f"• {public_text(u.display_name or ('member' if u.jid.endswith('@lid') else u.jid), limit=80)} — {u.role}{'' if u.active else ' (inactive)'}" for u in users))
         except ValueError as exc:
-            log.info("Rejected admin operation actor=%s: %s", actor_jid, exc)
-            reply(chat, f"⚠️ {exc}")
+            log.info("Rejected admin operation: %s", exc)
+            reply(chat, "⚠️ That user administration request could not be completed.")
     return on_message

@@ -13,6 +13,7 @@ accepting incomplete intents.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Callable
 
 from db.auth import get_active_admin_jids, normalize_jid
@@ -100,6 +101,8 @@ def verify_operation_result(intent: dict, result: object) -> str | None:
         if tool_spec(capability).produces:
             return "the operation returned no structured result"
         return None
+    if result.get("ok") is False:
+        return str(result.get("error") or "the operation could not be completed")
     from features.agent_runtime import tool_spec
     missing_outputs = [
         field for field in tool_spec(capability).produces
@@ -121,6 +124,69 @@ def verify_operation_result(intent: dict, result: object) -> str | None:
             and str(result.get("event_id")) != str(expected_event)
         ):
             return "task was not linked to the requested event"
+    return None
+
+
+def validate_mutation_policy(intent: dict, text: str, members: list[str] | None = None) -> str | None:
+    """Fail closed when a destructive intent has no bounded, explicit scope."""
+    capability = str(intent.get("capability") or "")
+    destructive = {
+        "admin.remove_user", "collections.remove", "collections.delete",
+        "labels.remove", "labels.delete", "work.unassign", "work.delete_event",
+        "work.delete_task", "schema.delete", "whatsapp.remove_group_members",
+        "whatsapp.leave_group", "whatsapp.revoke_message", "whatsapp.block_contacts",
+        "whatsapp.unlink_group",
+    }
+    if capability not in destructive:
+        return None
+    lowered = str(text or "").casefold()
+    verbs = {
+        "admin.remove_user": ("remove", "deactivate", "delete"),
+        "collections.remove": ("remove", "delete", "exclude", "leave"),
+        "collections.delete": ("delete", "remove"),
+        "labels.remove": ("remove", "delete", "exclude", "leave"),
+        "labels.delete": ("delete", "remove"),
+        "work.unassign": ("unassign", "remove"),
+        "work.delete_event": ("delete", "remove"),
+        "work.delete_task": ("delete", "remove"),
+        "schema.delete": ("delete", "remove", "clear"),
+        "whatsapp.remove_group_members": ("remove", "kick"),
+        "whatsapp.leave_group": ("leave",),
+        "whatsapp.revoke_message": ("revoke", "delete"),
+        "whatsapp.block_contacts": ("block",),
+        "whatsapp.unlink_group": ("unlink",),
+    }
+    if not any(re.search(rf"\b{re.escape(verb)}\b", lowered) for verb in verbs[capability]):
+        return f"{capability} requires explicit destructive wording"
+    arguments = intent.get("arguments", {})
+    if capability == "collections.delete" and not str(arguments.get("collection") or "").strip():
+        return "collections.delete requires argument collection"
+    if capability == "work.assign":
+        has_target = any(
+            arguments.get(key) is not None
+            for key in ("target", "target_id", "target_name", "event_id", "task_id")
+        )
+        if not has_target:
+            return "work.assign requires argument target"
+    if capability == "work.unassign":
+        has_target = any(
+            arguments.get(key) is not None
+            for key in ("target", "target_id", "target_name", "event_id", "task_id")
+        )
+        # The direct adapter supports an explicit "unassign everything"
+        # operation. It is safe only when the user actually used bulk wording;
+        # a missing target in any other request remains an exact validation
+        # error.
+        if not has_target and not re.search(r"\b(?:all|everything|every|everyone)\b", lowered):
+            return "work.unassign requires argument target"
+        audience_declared = any(
+            arguments.get(key) is not None
+            for key in ("audience", "target_scope", "target_collection", "mention_indices", "collections")
+        )
+        if audience_declared and not members:
+            return "work.unassign requires argument audience"
+    if capability in {"collections.remove", "labels.remove", "whatsapp.remove_group_members"} and not members:
+        return f"{capability} requires argument audience"
     return None
 
 

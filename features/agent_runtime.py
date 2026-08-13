@@ -35,7 +35,7 @@ _CAPABILITY_NAMES = (
     "help.show", "admin.add_user", "admin.remove_user", "admin.list_users", "admin.list_admins",
     "labels.list", "labels.of", "labels.add", "labels.remove", "labels.delete",
     "collections.add", "collections.remove", "collections.delete", "collections.list", "collections.info",
-    "work.my", "work.overview", "work.history", "work.status", "work.start", "work.complete", "work.update", "work.edit",
+    "work.my", "work.undo", "work.overview", "work.history", "work.status", "work.start", "work.complete", "work.update", "work.edit",
     "work.set_lifecycle", "work.update_event", "work.delete_event", "work.delete_task",
     "work.assign", "work.unassign", "work.create_event", "work.create_task", "work.list_event_tasks",
     "reports.summary", "reports.progress", "reports.status", "audit.list",
@@ -73,6 +73,7 @@ TOOL_SPECS.update({
     "work.my": ToolSpec(
         "work.my", produces=frozenset({"rows", "row_count"}), executor="direct"
     ),
+    "work.undo": ToolSpec("work.undo", mutating=True),
     "work.overview": ToolSpec(
         "work.overview", produces=frozenset({"rows", "row_count"}), executor="direct"
     ),
@@ -230,6 +231,7 @@ _TOOL_ARGUMENTS = {
     "collections.list": (),
     "collections.info": ("collection",),
     "work.my": ("status?",),
+    "work.undo": (),
     "work.overview": ("status?", "target?"),
     "work.history": ("target",),
     "work.status": ("target",),
@@ -243,7 +245,7 @@ _TOOL_ARGUMENTS = {
     "work.delete_task": ("target",),
     "work.assign": ("target", "audience?", "collections?"),
     "work.unassign": ("target", "audience?", "collections?"),
-    "work.create_event": ("type?", "category?", "name", "description?", "start?", "end?", "labels?"),
+    "work.create_event": ("type", "category", "name", "description?", "start?", "end?", "labels?"),
     "work.create_task": ("title", "description?", "due?", "priority?", "event_id?"),
     "work.list_event_tasks": ("event", "status?"),
     "reports.progress": ("target",),
@@ -291,7 +293,7 @@ _TOOL_ARGUMENTS = {
     "whatsapp.is_on_whatsapp": ("numbers",),
     "whatsapp.block_contacts": ("audience",),
     "whatsapp.unblock_contacts": ("audience",),
-    "whatsapp.pin_message": ("seconds?",),
+    "whatsapp.pin_message": ("seconds",),
     "whatsapp.revoke_message": (),
     "whatsapp.set_group_photo": (),
     "whatsapp.contact_devices": ("audience",),
@@ -332,7 +334,7 @@ _TOOL_REQUIRED = {
     "work.delete_task": ("target",),
     "work.assign": ("target",),
     "work.unassign": ("target",),
-    "work.create_event": ("name",),
+    "work.create_event": ("type", "category", "name"),
     "work.create_task": ("title",),
     "work.list_event_tasks": ("event",),
     "reports.progress": ("target",),
@@ -363,6 +365,11 @@ _TOOL_REQUIRED = {
     "whatsapp.unblock_contacts": ("audience",),
     "whatsapp.is_on_whatsapp": ("numbers",),
     "whatsapp.contact_devices": ("audience",),
+    "whatsapp.set_group_announce": ("enabled",),
+    "whatsapp.set_group_locked": ("locked",),
+    "whatsapp.set_group_topic": ("topic",),
+    "whatsapp.set_disappearing_timer": ("seconds",),
+    "whatsapp.pin_message": ("seconds",),
     "whatsapp.resolve_contact": ("identifier",),
     "whatsapp.group_info_from_link": ("link",),
     "whatsapp.create_group": ("name",),
@@ -420,6 +427,7 @@ _DESTRUCTIVE_CAPABILITIES = frozenset({
 })
 _DESCRIPTIONS = {
     "work.my": "show the sender's assigned events and tasks",
+    "work.undo": "undo the sender's latest reversible bot action",
     "work.overview": "show overall work or a scoped event/task overview",
     "work.list_event_tasks": "list structured tasks linked to an event",
     "work.create_event": "create an event and return its durable event ID",
@@ -503,7 +511,18 @@ class AgentTrace:
     events: list[dict[str, Any]] = field(default_factory=list)
 
     def record(self, kind: str, **payload: Any) -> None:
-        self.events.append({"kind": kind, "at": time.time(), **payload})
+        # Traces are INFO-level operational telemetry, not a transcript. Keep
+        # only bounded control metadata so message bodies, JIDs, model JSON,
+        # commands, and tool results cannot leak into ordinary logs.
+        allowed = {
+            "structured", "steps", "step_id", "capability", "reason",
+            "compiled_steps", "result_keys",
+        }
+        clean = {key: payload[key] for key in allowed if key in payload}
+        if "result" in payload and "result_keys" not in clean:
+            result = payload["result"]
+            clean["result_keys"] = sorted(result) if isinstance(result, dict) else []
+        self.events.append({"kind": kind, "at": time.time(), **clean})
 
     def summary(self) -> dict[str, Any]:
         return {

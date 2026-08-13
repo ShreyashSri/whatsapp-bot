@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from db.auth import audit, gate, jid_user, normalize_jid
 from db.subgroup_store import SubgroupStore
 from features.subgroups import _NAME_RE, _get_mentioned_jids, _get_text
+from features.text import public_error, public_text, split_command_fields
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -132,8 +133,9 @@ def register(client: "NewClient", config: dict) -> callable:
                                            ("create", "add", "assign", "remove", "delete")):
                 target = normalize_jid(mentions[0]) if mentions else normalize_jid(source.Sender)
                 names = _labels_of(store, target)
-                client.send_message(chat, f"🏷️ Labels for @{target.split('@')[0]}: "
-                                          + (", ".join(f"`{name}`" for name in names) if names else "_none_"))
+                public_target = "member" if target.endswith("@lid") else jid_user(target)
+                client.send_message(chat, f"🏷️ Labels for @{public_target}: "
+                                          + (", ".join(f"`{public_text(name, limit=80)}`" for name in names) if names else "_none_"))
                 return
 
             if not action or action == "list":
@@ -142,21 +144,23 @@ def register(client: "NewClient", config: dict) -> callable:
                     client.send_message(chat, "📭 No labels yet. Create one with `!labels create <name> | @user`.")
                     return
                 lines = [f"🏷️ *Labels ({len(data)})*"]
-                lines += [f"• `{name}` — {len(members)} member(s)" for name, members in sorted(data.items())]
+                lines += [f"• `{public_text(name, limit=80)}` — {len(members)} member(s)" for name, members in sorted(data.items())]
                 client.send_message(chat, "\n".join(lines))
                 return
 
-            head, _, member_text = rest.partition("|")
+            label_parts = split_command_fields(rest, limit=1)
+            head = label_parts[0]
+            member_text = label_parts[1] if len(label_parts) > 1 else ""
             name = _valid_name(head)
             if action == "delete":
                 if not is_admin:
                     client.send_message(chat, "⛔ Only administrators can delete a label.")
                     return
                 if not store.delete(name):
-                    client.send_message(chat, f"📭 No label named `{name}`.")
+                    client.send_message(chat, f"📭 No label named `{public_text(name, limit=80)}`.")
                     return
                 audit(factory, actor, "label.delete", "whatsapp", {"label": name})
-                client.send_message(chat, f"🗑️ Label `{name}` deleted.")
+                client.send_message(chat, f"🗑️ Label `{public_text(name, limit=80)}` deleted.")
                 return
 
             targets = [normalize_jid(jid) for jid in mentions if normalize_jid(jid)]
@@ -173,20 +177,20 @@ def register(client: "NewClient", config: dict) -> callable:
                 added, total = add_label_members(store, name, targets)
                 audit(factory, actor, "label.create" if action == "create" else "label.assign",
                       "whatsapp", {"label": name, "added": added})
-                client.send_message(chat, f"✅ Label `{name}` now has {total} member(s)."
+                client.send_message(chat, f"✅ Label `{public_text(name, limit=80)}` now has {total} member(s)."
                                    + (f" Added {len(added)}." if added else " No new members."))
                 return
 
             if action == "remove":
                 removed, deleted = remove_label_members(store, name, targets)
                 audit(factory, actor, "label.remove", "whatsapp", {"label": name, "removed": removed})
-                client.send_message(chat, f"✅ Removed {removed} member(s) from `{name}`."
+                client.send_message(chat, f"✅ Removed {removed} member(s) from `{public_text(name, limit=80)}`."
                                     + ("" if not deleted else " Label deleted (now empty)."))
                 return
 
             client.send_message(chat, "Usage: `!labels [list|create|assign|remove|delete] <name> | @user`")
         except Exception as exc:
             log.info("label command failed: %s", exc)
-            client.send_message(chat, f"⚠️ {exc}")
+            client.send_message(chat, f"⚠️ {public_error(exc, 'I could not update that label.')}")
 
     return on_message

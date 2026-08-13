@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 from flask import Flask, jsonify, request
 from sqlalchemy.exc import IntegrityError
 from db.models import FellowshipAlert
+from db.auth import normalize_group_jid
+from features.text import public_text, public_url
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -23,17 +25,18 @@ def _clean(value, fallback: str = "Not specified") -> str:
     if value is None:
         return fallback
     text = " ".join(str(value).split()).strip()
-    return text[:MAX_FIELD_LENGTH] if text else fallback
+    return public_text(text[:MAX_FIELD_LENGTH] if text else fallback, limit=MAX_FIELD_LENGTH)
 
 def _build_chat_jid(value: str):
     """Build a Neonize JID while keeping the Flask app testable without Neonize."""
     try:
         from neonize.utils import build_jid
 
-        if "@" in value:
-            user, server = value.split("@", 1)
-            return build_jid(user, server)
-        return build_jid(value)
+        normalized = normalize_group_jid(value)
+        if not normalized:
+            raise ValueError("fellowship alert group must be a WhatsApp group JID")
+        user, server = normalized.split("@", 1)
+        return build_jid(user, server)
     except Exception:
         return value
 
@@ -61,7 +64,7 @@ def _format_alert(payload: dict) -> str:
         lines.append(f"Tags: {_clean(tags_text)}")
     lines.extend([
         "",
-        f"Apply: {_clean(payload.get('apply_link'), 'Link unavailable')}",
+        f"Apply: {public_url(payload.get('apply_link'), limit=MAX_FIELD_LENGTH) or 'Link unavailable'}",
     ])
     return "\n".join(lines)
 

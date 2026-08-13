@@ -8,15 +8,19 @@ they never manufacture a WhatsApp command or mention context.
 from __future__ import annotations
 
 from typing import Callable
+import logging
 import re
 
 from db.auth import jid_user, normalize_jid
 from features.work import _send
+from features.text import public_text, public_url
 
 # Mutating capabilities use this module as their single semantic execution
 # boundary. Legacy command handlers call the same feature-domain services.
 from features.agent_runtime import TOOL_SPECS
 from features.agent_runtime import tool_spec
+
+log = logging.getLogger(__name__)
 
 
 def _jid_text(value) -> str:
@@ -161,7 +165,7 @@ def _mention_text(client, chat, jids):
     jids = list(dict.fromkeys(_jid_text(jid) for jid in jids if _jid_text(jid)))
     names = _get_display_name_map(client, chat, jids)
     return ", ".join(
-        f"@{names.get(jid, jid_user(jid))}"
+        f"@{public_text(names.get(jid, jid_user(jid)), limit=80)}"
         for jid in jids
     )
 
@@ -178,6 +182,10 @@ def _authorize_tool(factory, sender, client, chat, capability):
         tool_spec(capability).permission,
         capability,
     )
+
+
+def _failed_operation(error: str) -> dict:
+    return {"ok": False, "error": error}
 
 
 class _OperationMessageProxy:
@@ -224,7 +232,10 @@ def _resolve_operation_chat(message, intent):
         resolver = raw.get("resolver") or raw.get("kind")
         if resolver == "current_chat":
             return message.Info.MessageSource.Chat
-        return None
+        if resolver == "plan_output":
+            raw = raw.get("value")
+        else:
+            return None
     value = str(raw).strip()
     if "@" not in value:
         return None
@@ -294,7 +305,7 @@ def execute_whatsapp_send(client, message, intent: dict, factory) -> dict | None
         return None
     text = str(intent.get("arguments", {}).get("text") or "").strip()
     if not text:
-        return None
+        return _failed_operation("whatsapp.send requires argument text")
     client.send_message(chat, text)
     return {"sent": True, "chat": _jid_text(chat), "text": text}
 
@@ -307,7 +318,7 @@ def execute_whatsapp_reply(client, message, intent: dict, factory) -> dict | Non
         return None
     text = str(intent.get("arguments", {}).get("text") or "").strip()
     if not text:
-        return None
+        return _failed_operation("whatsapp.reply requires argument text")
     try:
         client.reply_message(text, message)
     except Exception:
@@ -326,7 +337,7 @@ def execute_whatsapp_react(client, message, intent: dict, factory) -> dict | Non
         raise ValueError("reaction must be a short emoji or symbol")
     message_id = getattr(message.Info, "ID", "")
     if not message_id or not reaction:
-        return None
+        return _failed_operation("whatsapp.react requires the triggering message and reaction")
     payload = client.build_reaction(chat, source.Sender, message_id, reaction)
     client.send_message(chat, payload)
     return {"reacted": True, "message_id": message_id, "reaction": reaction}
@@ -378,8 +389,8 @@ def execute_whatsapp_group_info(client, message, intent: dict, factory) -> dict 
     data = _serialize_group_info(_current_group_info(client, message))
     client.send_message(
         chat,
-        f"👥 *{data['name'] or 'Current group'}* — {data['member_count']} member(s)\n"
-        f"Topic: {data['topic'] or '_none_'}",
+        f"👥 *{public_text(data['name'] or 'Current group', limit=120)}* — {data['member_count']} member(s)\n"
+        f"Topic: {public_text(data['topic'] or '_none_', limit=180)}",
     )
     return data
 
@@ -393,9 +404,11 @@ def execute_whatsapp_group_members(client, message, intent: dict, factory) -> di
     data = _serialize_group_info(_current_group_info(client, message))
     lines = [f"👥 *Group members* — {data['member_count']}"]
     for member in data["members"]:
-        label = member["display_name"] or member["phone_number"] or member["jid"].split("@", 1)[0]
+        label = member["display_name"] or member["phone_number"] or (
+            "member" if member["jid"].endswith("@lid") else member["jid"].split("@", 1)[0]
+        )
         suffix = " (admin)" if member["is_admin"] or member["is_super_admin"] else ""
-        lines.append(f"• {label}{suffix}")
+        lines.append(f"• {public_text(label, limit=100)}{suffix}")
     client.send_message(chat, "\n".join(lines))
     return {
         "group_jid": data["group_jid"],
@@ -430,8 +443,8 @@ def execute_whatsapp_user_info(client, message, intent: dict, members: list[str]
     client.send_message(
         chat,
         "👤 User info\n" + "\n".join(
-            f"• {row['jid'] or 'unknown'}"
-            + (f" — {row['business_name']}" if row["business_name"] else "")
+            f"• {public_text(row['jid'] or 'unknown', limit=120)}"
+            + (f" — {public_text(row['business_name'], limit=120)}" if row["business_name"] else "")
             for row in rows
         ) if rows else "👤 No user information found.",
     )
@@ -446,7 +459,7 @@ def execute_whatsapp_send_attachment(client, message, intent: dict, factory) -> 
         return None
     payload = getattr(message, "Message", None)
     if payload is None or not hasattr(client, "download_any"):
-        return None
+        return _failed_operation("whatsapp.send_attachment requires an attached file")
     fields = {field.name for field, _ in payload.ListFields()} if hasattr(payload, "ListFields") else set()
     media_kind = next(
         (kind for kind in ("image", "video", "audio", "document", "sticker")
@@ -454,13 +467,13 @@ def execute_whatsapp_send_attachment(client, message, intent: dict, factory) -> 
         None,
     )
     if media_kind is None:
-        return None
+        return _failed_operation("whatsapp.send_attachment requires an attached file")
     data = client.download_any(payload)
     if not data:
-        return None
+        return _failed_operation("the attached file could not be downloaded")
     arguments = intent.get("arguments", {})
-    caption = str(arguments.get("caption") or "").strip() or None
-    filename = str(arguments.get("filename") or "").strip() or None
+    caption = public_text(arguments.get("caption"), limit=500) or None
+    filename = public_text(arguments.get("filename"), limit=120) or None
     if media_kind == "image":
         client.send_image(chat, data, caption=caption)
     elif media_kind == "video":
@@ -481,11 +494,11 @@ def execute_whatsapp_group_membership(
     source = message.Info.MessageSource
     chat = source.Chat
     if getattr(chat, "Server", "") != "g.us":
-        return None
+        return _failed_operation("whatsapp group membership is available only in a group chat")
     if not _authorize_tool(factory, source.Sender, client, chat, intent["capability"]):
         return None
     if not members:
-        return None
+        return _failed_operation("whatsapp group membership requires argument audience")
     from neonize.utils import ParticipantChange, build_jid
 
     jids = []
@@ -508,14 +521,14 @@ def execute_whatsapp_rename_group(client, message, intent: dict, factory) -> dic
     source = message.Info.MessageSource
     chat = source.Chat
     if getattr(chat, "Server", "") != "g.us":
-        return None
+        return _failed_operation("whatsapp.rename_group is available only in a group chat")
     if not _authorize_tool(factory, source.Sender, client, chat, "whatsapp.rename_group"):
         return None
     name = str(intent.get("arguments", {}).get("name") or "").strip()
     if not name or len(name) > 100:
         raise ValueError("group name must be between 1 and 100 characters")
     client.set_group_name(chat, name)
-    client.send_message(chat, f"✅ Group renamed to *{name}*.")
+    client.send_message(chat, f"✅ Group renamed to *{public_text(name, limit=100)}*.")
     return {"renamed": True, "name": name, "group_jid": _jid_text(chat)}
 
 
@@ -524,13 +537,17 @@ def execute_whatsapp_group_invite(client, message, intent: dict, factory) -> dic
     source = message.Info.MessageSource
     chat = source.Chat
     if getattr(chat, "Server", "") != "g.us":
-        return None
+        return _failed_operation("whatsapp.group_invite is available only in a group chat")
     if not _authorize_tool(factory, source.Sender, client, chat, "whatsapp.group_invite"):
         return None
-    raw_revoke = intent.get("arguments", {}).get("revoke", False)
-    revoke = raw_revoke is True or str(raw_revoke).strip().casefold() in {"true", "yes", "1", "revoke"}
-    link = client.get_group_invite_link(chat, revoke=revoke)
-    client.send_message(chat, f"🔗 Group invite link: {link}")
+    raw_revoke = intent.get("arguments", {}).get("revoke")
+    if raw_revoke is None:
+        revoke = False
+        link = client.get_group_invite_link(chat)
+    else:
+        revoke = _coerce_bool(raw_revoke)
+        link = client.get_group_invite_link(chat, revoke=revoke)
+    client.send_message(chat, f"🔗 Group invite link: {public_url(link, limit=500)}")
     return {"link": str(link), "revoked": revoke, "group_jid": _jid_text(chat)}
 
 
@@ -555,7 +572,7 @@ def execute_whatsapp_joined_groups(client, message, intent: dict, factory) -> di
     client.send_message(
         chat,
         "👥 Joined groups\n" + "\n".join(
-            f"• {item['name'] or item['group_jid']} ({item['member_count']})"
+            f"• {public_text(item['name'] or ('group' if item['group_jid'].endswith('@g.us') else item['group_jid']), limit=120)} ({item['member_count']})"
             for item in groups
         ) if groups else "📭 No joined groups found.",
     )
@@ -579,14 +596,18 @@ def execute_whatsapp_community_subgroups(client, message, intent: dict, factory)
     client.send_message(
         chat,
         "👥 Community subgroups\n" + "\n".join(
-            f"• {item['name'] or item['group_jid']}" for item in groups
+            f"• {public_text(item['name'] or ('group' if item['group_jid'].endswith('@g.us') else item['group_jid']), limit=120)}" for item in groups
         ) if groups else "📭 No linked subgroups found.",
     )
     return {"groups": groups, "group_count": len(groups)}
 
 
 def _coerce_bool(value) -> bool:
-    return value is True or str(value).strip().casefold() in {"true", "yes", "1", "on", "enabled"}
+    if value is True or str(value).strip().casefold() in {"true", "yes", "1", "on", "enabled"}:
+        return True
+    if value is False or str(value).strip().casefold() in {"false", "no", "0", "off", "disabled"}:
+        return False
+    raise ValueError("a boolean value is required (true or false)")
 
 
 def execute_whatsapp_group_setting(client, message, intent: dict, factory) -> dict | None:
@@ -595,7 +616,7 @@ def execute_whatsapp_group_setting(client, message, intent: dict, factory) -> di
     chat = source.Chat
     capability = intent["capability"]
     if getattr(chat, "Server", "") != "g.us":
-        return None
+        return _failed_operation(f"{capability} is available only in a group chat")
     if not _authorize_tool(factory, source.Sender, client, chat, capability):
         return None
     arguments = intent.get("arguments", {})
@@ -626,8 +647,7 @@ def execute_whatsapp_group_setting(client, message, intent: dict, factory) -> di
         client.send_message(chat, "✅ Group setting updated.")
         return {"updated": True, "capability": capability, **value, "group_jid": _jid_text(chat)}
     except (TypeError, ValueError) as exc:
-        client.send_message(chat, f"⚠️ {exc}")
-        return None
+        return _failed_operation(public_error(exc, "that group setting value is invalid"))
 
 
 def execute_whatsapp_message_primitive(client, message, intent: dict, factory) -> dict | None:
@@ -646,7 +666,7 @@ def execute_whatsapp_message_primitive(client, message, intent: dict, factory) -
             if not name or len(name) > 100 or not re.fullmatch(r"\+?[0-9][0-9 ()-]{3,30}", number):
                 raise ValueError("contact name or number is invalid")
             client.send_contact(chat, name, number)
-            client.send_message(chat, f"✅ Sent contact card for *{name}*.")
+            client.send_message(chat, f"✅ Sent contact card for *{public_text(name, limit=100)}*.")
             return {"sent": True, "type": "contact", "name": name, "number": number}
 
         question = str(arguments.get("question") or "").strip()
@@ -671,8 +691,7 @@ def execute_whatsapp_message_primitive(client, message, intent: dict, factory) -
         client.send_message(chat, "✅ Poll sent.")
         return {"sent": True, "type": "poll", "question": question, "options": options, "selectable_count": selectable}
     except (TypeError, ValueError) as exc:
-        client.send_message(chat, f"⚠️ {exc}")
-        return None
+        return _failed_operation(public_error(exc, "the contact or poll details are invalid"))
 
 
 def execute_whatsapp_profile_pictures(
@@ -684,7 +703,7 @@ def execute_whatsapp_profile_pictures(
     if not _authorize_tool(factory, source.Sender, client, chat, "whatsapp.profile_pictures"):
         return None
     if not members:
-        return None
+        return _failed_operation("whatsapp.profile_pictures requires argument audience")
     from neonize.utils import build_jid
 
     profiles = []
@@ -699,7 +718,7 @@ def execute_whatsapp_profile_pictures(
     client.send_message(
         chat,
         "🖼️ Profile pictures\n" + "\n".join(
-            f"• {row['jid']}: {row['url'] or 'no public picture'}" for row in profiles
+            f"• {public_text('member' if row['jid'].endswith('@lid') else row['jid'], limit=120)}: {public_url(row['url'], limit=500) if row['url'] else 'no public picture'}" for row in profiles
         ),
     )
     return {"profiles": profiles, "profile_count": len(profiles)}
@@ -725,7 +744,7 @@ def execute_whatsapp_group_join_requests(client, message, intent: dict, factory)
     rows = _participant_request_rows(client.get_group_request_participants(chat))
     client.send_message(
         chat,
-        "📥 Group join requests\n" + "\n".join(f"• {row['jid']}" for row in rows)
+        "📥 Group join requests\n" + "\n".join(f"• {public_text('member' if row['jid'].endswith('@lid') else row['jid'], limit=120)}" for row in rows)
         if rows else "📭 No pending group join requests.",
     )
     return {"requests": rows, "request_count": len(rows)}
@@ -740,7 +759,7 @@ def execute_whatsapp_linked_group_members(client, message, intent: dict, factory
     rows = _participant_request_rows(client.get_linked_group_participants(chat))
     client.send_message(
         chat,
-        "👥 Linked group participants\n" + "\n".join(f"• {row['jid']}" for row in rows)
+        "👥 Linked group participants\n" + "\n".join(f"• {public_text('member' if row['jid'].endswith('@lid') else row['jid'], limit=120)}" for row in rows)
         if rows else "📭 No linked group participants found.",
     )
     return {"members": rows, "member_count": len(rows)}
@@ -769,8 +788,8 @@ def execute_whatsapp_create_group(
     info = client.create_group(name, participants)
     group_jid = _jid_text(getattr(info, "JID", None))
     if not group_jid:
-        return None
-    client.send_message(chat, f"✅ Group created: *{name}* ({len(participants)} member(s)).")
+        return _failed_operation("group creation returned no group ID")
+    client.send_message(chat, f"✅ Group created: *{public_text(name, limit=100)}* ({len(participants)} member(s)).")
     return {"group_jid": group_jid, "name": name, "member_jids": list(dict.fromkeys(members))}
 
 
@@ -788,8 +807,8 @@ def execute_whatsapp_join_group(client, message, intent: dict, factory) -> dict 
     group_jid = client.join_group_with_link(invite)
     value = _jid_text(group_jid) or (group_jid if "@" in group_jid else "")
     if not value:
-        return None
-    client.send_message(chat, f"✅ Joined group {value}.")
+        return _failed_operation("group join returned no group ID")
+    client.send_message(chat, f"✅ Joined group {public_text(value, limit=120)}.")
     return {"group_jid": value}
 
 
@@ -798,7 +817,7 @@ def execute_whatsapp_leave_group(client, message, intent: dict, factory) -> dict
     source = message.Info.MessageSource
     chat = source.Chat
     if getattr(chat, "Server", "") != "g.us":
-        return None
+        return _failed_operation("whatsapp.leave_group is available only in a group chat")
     if not _authorize_tool(factory, source.Sender, client, chat, "whatsapp.leave_group"):
         return None
     client.leave_group(chat)
@@ -832,7 +851,7 @@ def execute_whatsapp_is_on_whatsapp(client, message, intent: dict, factory) -> d
     client.send_message(
         chat,
         "📱 WhatsApp availability\n" + "\n".join(
-            f"• {row['number'] or row['jid']}: {'yes' if row['exists'] else 'no'}" for row in rows
+            f"• {public_text(row['number'] or ('member' if row['jid'].endswith('@lid') else row['jid']), limit=120)}: {'yes' if row['exists'] else 'no'}" for row in rows
         ),
     )
     return {"numbers": rows, "number_count": len(rows)}
@@ -848,7 +867,7 @@ def execute_whatsapp_blocklist(
     if not _authorize_tool(factory, source.Sender, client, chat, capability):
         return None
     if not members:
-        return None
+        return _failed_operation(f"{capability} requires argument audience")
     from neonize.utils import BlocklistAction, build_jid
 
     jids = []
@@ -857,7 +876,7 @@ def execute_whatsapp_blocklist(
         if server == "s.whatsapp.net":
             jids.append(build_jid(user, server))
     if not jids:
-        return None
+        return _failed_operation(f"{capability} requires phone-based audience members")
     action = BlocklistAction.BLOCK if capability == "whatsapp.block_contacts" else BlocklistAction.UNBLOCK
     for jid in jids:
         client.update_blocklist(jid, action)
@@ -872,15 +891,17 @@ def execute_whatsapp_message_moderation(client, message, intent: dict, factory) 
     chat = source.Chat
     capability = intent["capability"]
     if getattr(chat, "Server", "") != "g.us":
-        return None
+        return _failed_operation(f"{capability} is available only in a group chat")
     if not _authorize_tool(factory, source.Sender, client, chat, capability):
         return None
     message_id = str(getattr(message.Info, "ID", "") or "")
     if not message_id:
-        return None
+        return _failed_operation("the triggering message has no message ID")
     if capability == "whatsapp.pin_message":
-        raw_seconds = intent.get("arguments", {}).get("seconds", 86400)
-        seconds = int(raw_seconds or 0)
+        raw_seconds = intent.get("arguments", {}).get("seconds")
+        if raw_seconds is None or str(raw_seconds).strip() == "":
+            return _failed_operation("whatsapp.pin_message requires argument seconds")
+        seconds = int(raw_seconds)
         if seconds < 0 or seconds > 2_592_000:
             raise ValueError("pin duration must be between 0 and 2592000 seconds")
         client.pin_message(chat, source.Sender, message_id, seconds)
@@ -901,13 +922,13 @@ def execute_whatsapp_set_group_photo(client, message, intent: dict, factory) -> 
         return None
     payload = getattr(message, "Message", None)
     if payload is None or not hasattr(client, "download_any"):
-        return None
+        return _failed_operation("whatsapp.set_group_photo requires an attached image")
     fields = {field.name for field, _ in payload.ListFields()} if hasattr(payload, "ListFields") else set()
     if "imageMessage" not in fields:
-        return None
+        return _failed_operation("whatsapp.set_group_photo requires an attached image")
     data = client.download_any(payload)
     if not data:
-        return None
+        return _failed_operation("the attached group photo could not be downloaded")
     client.set_group_photo(chat, data)
     client.send_message(chat, "✅ Group photo updated.")
     return {"updated": True, "group_jid": _jid_text(chat)}
@@ -933,7 +954,7 @@ def execute_whatsapp_contact_devices(
     devices = [_jid_text(item) for item in client.get_user_devices(*jids)]
     client.send_message(
         chat,
-        "📱 Contact devices\n" + "\n".join(f"• {device}" for device in devices)
+        "📱 Contact devices\n" + "\n".join(f"• {public_text(device, limit=120)}" for device in devices)
         if devices else "📭 No additional contact devices found.",
     )
     return {"devices": devices, "device_count": len(devices)}
@@ -952,7 +973,7 @@ def execute_whatsapp_blocklist_read(client, message, intent: dict, factory) -> d
     contacts = [value for value in contacts if value]
     client.send_message(
         chat,
-        "🚫 Blocked contacts\n" + "\n".join(f"• {value}" for value in contacts)
+        "🚫 Blocked contacts\n" + "\n".join(f"• {public_text('member' if value.endswith('@lid') else value, limit=120)}" for value in contacts)
         if contacts else "📭 No blocked contacts.",
     )
     return {"contacts": contacts, "contact_count": len(contacts)}
@@ -983,7 +1004,12 @@ def execute_whatsapp_resolve_contact(client, message, intent: dict, factory) -> 
         phone_jid = build_jid(compact, "s.whatsapp.net")
         lid_jid = client.get_lid_from_pn(phone_jid)
     result = {"phone_jid": str(phone_jid), "lid_jid": str(lid_jid)}
-    client.send_message(chat, f"🔎 Contact IDs\n• phone: {result['phone_jid']}\n• LID: {result['lid_jid']}")
+    client.send_message(
+        chat,
+        "🔎 Contact IDs\n"
+        f"• phone: {public_text(result['phone_jid'], limit=120)}\n"
+        f"• LID: {public_text(result['lid_jid'], limit=120)}",
+    )
     return result
 
 
@@ -1004,7 +1030,7 @@ def execute_whatsapp_group_info_from_link(client, message, intent: dict, factory
     result = _serialize_group_info(info)
     client.send_message(
         chat,
-        f"👥 *{result['name'] or result['group_jid']}* — {result['member_count']} member(s)",
+        f"👥 *{public_text(result['name'] or ('group' if result['group_jid'].endswith('@g.us') else result['group_jid']), limit=120)}* — {result['member_count']} member(s)",
     )
     return result
 
@@ -1014,7 +1040,10 @@ def _resolve_group_endpoint(message, value):
         resolver = value.get("resolver") or value.get("kind")
         if resolver == "current_chat":
             return message.Info.MessageSource.Chat
-        return None
+        if resolver == "plan_output":
+            value = value.get("value")
+        else:
+            return None
     raw = str(value or "").strip()
     if "@" not in raw:
         return None
@@ -1037,7 +1066,9 @@ def execute_whatsapp_group_link(client, message, intent: dict, factory) -> dict 
     parent = _resolve_group_endpoint(message, arguments.get("parent_chat"))
     child = _resolve_group_endpoint(message, arguments.get("child_chat"))
     if parent is None or child is None:
-        return None
+        return _failed_operation(
+            f"{capability} requires two plan-resolved group endpoints"
+        )
     if capability == "whatsapp.link_group":
         client.link_group(parent, child)
         verb = "linked"
@@ -1057,10 +1088,14 @@ def execute_whatsapp_profile_operation(client, message, intent: dict, factory) -
         return None
     arguments = intent.get("arguments", {})
     if capability == "whatsapp.contact_qr":
-        raw_revoke = arguments.get("revoke", False)
-        revoke = _coerce_bool(raw_revoke) or str(raw_revoke).casefold() == "revoke"
-        link = client.get_contact_qr_link(revoke=revoke)
-        client.send_message(chat, f"🔗 Bot contact QR link: {link}")
+        raw_revoke = arguments.get("revoke")
+        if raw_revoke is None:
+            revoke = False
+            link = client.get_contact_qr_link()
+        else:
+            revoke = _coerce_bool(raw_revoke)
+            link = client.get_contact_qr_link(revoke=revoke)
+        client.send_message(chat, f"🔗 Bot contact QR link: {public_url(link, limit=500)}")
         return {"link": str(link), "revoked": revoke}
     if capability == "whatsapp.set_profile_name":
         name = str(arguments.get("name") or "").strip()
@@ -1078,13 +1113,13 @@ def execute_whatsapp_profile_operation(client, message, intent: dict, factory) -
         return {"updated": True, "status": status}
     payload = getattr(message, "Message", None)
     if payload is None or not hasattr(client, "download_any"):
-        return None
+        return _failed_operation(f"{capability} requires an attached image")
     fields = {field.name for field, _ in payload.ListFields()} if hasattr(payload, "ListFields") else set()
     if "imageMessage" not in fields:
-        return None
+        return _failed_operation(f"{capability} requires an attached image")
     data = client.download_any(payload)
     if not data:
-        return None
+        return _failed_operation("the attached profile photo could not be downloaded")
     client.set_profile_photo(data)
     client.send_message(chat, "✅ Bot profile photo updated.")
     return {"updated": True, "photo": True}
@@ -1105,7 +1140,7 @@ def execute_whatsapp_account_info(client, message, intent: dict, factory) -> dic
     }
     client.send_message(
         chat,
-        f"🤖 Bot account\n• JID: {result['jid']}\n• LID: {result['lid']}\n• Name: {result['name']}\n• Platform: {result['platform']}",
+        f"🤖 Bot account\n• JID: {public_text(result['jid'], limit=120)}\n• LID: {public_text(result['lid'], limit=120)}\n• Name: {public_text(result['name'], limit=100)}\n• Platform: {public_text(result['platform'], limit=80)}",
     )
     return result
 
@@ -1130,6 +1165,10 @@ def execute_direct_tool(
     the adapters. This keeps the planner independent of dispatch details.
     """
     capability = str(intent.get("capability") or "")
+    from features.nl_runtime import validate_mutation_policy
+    mutation_error = validate_mutation_policy(intent, text, members)
+    if mutation_error:
+        return {"ok": False, "error": mutation_error}
     target_chat = _resolve_operation_chat(message, intent)
     if intent.get("arguments", {}).get("target_chat") is not None and target_chat is None:
         return None
@@ -1213,7 +1252,14 @@ def execute_direct_tool(
     if capability in {"whatsapp.send_contact", "whatsapp.send_poll"}:
         return execute_whatsapp_message_primitive(client, message, intent, factory)
     if capability in {"work.my", "work.overview", "work.list_event_tasks"}:
-        return execute_work_read(client, message, intent, factory, resolve_target=resolve_target)
+        return execute_work_read(
+            client,
+            message,
+            intent,
+            factory,
+            resolve_target=resolve_target,
+            resolved_members=members,
+        )
     handler = handlers.get(capability)
     if handler is None or capability not in TOOL_SPECS:
         return None
@@ -1231,7 +1277,14 @@ def _structured_work_row(row: dict) -> dict:
     return result
 
 
-def execute_work_read(client, message, intent: dict, factory, resolve_target=None) -> dict | None:
+def execute_work_read(
+    client,
+    message,
+    intent: dict,
+    factory,
+    resolve_target=None,
+    resolved_members: list[str] | None = None,
+) -> dict | None:
     """Read work through domain stores and expose structured rows to later steps."""
     source = message.Info.MessageSource
     chat = source.Chat
@@ -1246,11 +1299,20 @@ def execute_work_read(client, message, intent: dict, factory, resolve_target=Non
     sender = source.Sender
     arguments = intent.get("arguments", {})
     _raw_status = str(arguments.get("status") or "").strip().lower()
-    # Only accept statuses that actually exist in the DB schema.
-    # The NL model sometimes sets status="assigned" when the user says
-    # "assigned to @X" — discard those so the query isn't filtered to nothing.
     from db.work_store import PROGRESS_STATUSES
-    status = _raw_status if _raw_status in PROGRESS_STATUSES else None
+    status = {
+        "todo": "pending",
+        "open": "pending",
+        "unstarted": "pending",
+        "in progress": "in_progress",
+        "wip": "in_progress",
+        "ongoing": "in_progress",
+        "done": "completed",
+        "complete": "completed",
+        "finished": "completed",
+        "canceled": "cancelled",
+    }.get(_raw_status, _raw_status)
+    status = status if status in PROGRESS_STATUSES else None
     store = WorkStore(factory)
 
     # Build visible_mentions from the message protobuf (same logic as the NL compiler).
@@ -1297,6 +1359,10 @@ def execute_work_read(client, message, intent: dict, factory, resolve_target=Non
 
     try:
         if capability == "work.list_event_tasks":
+            from db.task_store import normalize_task_status
+            task_status = normalize_task_status(_raw_status) if _raw_status else None
+            if task_status not in {None, "todo", "in_progress", "done", "cancelled"}:
+                task_status = None
             event_id = arguments.get("event_id", arguments.get("target_id"))
             if not str(event_id or "").isdigit() and resolve_target:
                 ref = resolve_target({"target_type": "event", **arguments})
@@ -1307,15 +1373,23 @@ def execute_work_read(client, message, intent: dict, factory, resolve_target=Non
                 name_query = arguments.get("event_name") or arguments.get("target_name") or arguments.get("name") or arguments.get("event")
                 if name_query:
                     events = EventStore(factory).list_events(status="active")
-                    for e in events:
-                        if e["name"].lower() == str(name_query).lower() or str(name_query).lower() in e["name"].lower():
-                            event_id = e["id"]
-                            break
+                    from features.natural_language import _entity_match_score
+                    ranked = sorted(
+                        (
+                            (e, _entity_match_score(str(name_query), e["name"], e.get("category", "")))
+                            for e in events
+                        ),
+                        key=lambda item: (-item[1], item[0]["id"]),
+                    )
+                    if ranked and ranked[0][1] >= 0.4:
+                        event_id = ranked[0][0]["id"]
             if not str(event_id or "").isdigit():
                 # If the NL model misrouted a user-workload query to this
                 # capability (e.g. "list all tasks of @Shuvam"), fall back
                 # gracefully to a workload query for the mentioned users.
                 if visible_mentions:
+                    if actor.role != "admin":
+                        raise ValueError("work.list_event_tasks requires an event target")
                     # Re-route to user workload
                     target_jid = visible_mentions[0]
                     all_aliases = _alias_jids(target_jid)
@@ -1333,7 +1407,7 @@ def execute_work_read(client, message, intent: dict, factory, resolve_target=Non
                     _send(client, chat, "\n".join(lines) if rows else heading + "\n\n📭 No matching work.", mention_jids=all_work_jids)
                     return {"rows": [_structured_work_row(row) for row in rows], "row_count": len(rows)}
                 raise ValueError("event reference is required")
-            tasks = TaskStore(factory).list_for_event(int(event_id), status=status)
+            tasks = TaskStore(factory).list_for_event(int(event_id), status=task_status)
             rows = []
             for task in tasks:
                 assignments = store.overview(
@@ -1351,10 +1425,10 @@ def execute_work_read(client, message, intent: dict, factory, resolve_target=Non
             all_assignee_jids = [jid for row in rows for jid in row["assignees"]]
             display_names = _get_display_name_map(client, chat, all_assignee_jids)
             lines.extend(
-                f"• `task {row['task_id']}` *{row['title']}* — `{row['status']}` "
+                    f"• `task {row['task_id']}` *{public_text(row['title'], limit=160)}* — `{row['status']}` "
                 f"({row['priority']}) | "
                 + (", ".join(
-                    f"@{display_names.get(jid, jid_user(jid))}"
+                    f"@{public_text(display_names.get(jid, jid_user(jid)), limit=80)}"
                     for jid in row["assignees"]
                 ) or "unassigned")
                 for row in rows
@@ -1366,13 +1440,35 @@ def execute_work_read(client, message, intent: dict, factory, resolve_target=Non
             # "work.my" shows the sender's own workload.  The audience argument
             # may contain a mentioned user when the sender asks about someone
             # else (e.g. "@me show tasks for @Shuvam").
-            audience_jids = arguments.get("audience") or []
-            if isinstance(audience_jids, str):
-                audience_jids = [audience_jids]
-            if not audience_jids and visible_mentions:
+            raw_audience = arguments.get("audience")
+            audience_declared = raw_audience is not None
+            if isinstance(raw_audience, dict):
+                resolver = raw_audience.get("resolver") or raw_audience.get("kind")
+                if resolver == "sender":
+                    audience_jids = [sender]
+                elif resolver in {"explicit_mentions", "plan_output"}:
+                    audience_jids = list(resolved_members or visible_mentions)
+                else:
+                    audience_jids = []
+            elif isinstance(raw_audience, str):
+                candidate = normalize_jid(raw_audience)
+                known = {normalize_jid(item) for item in (resolved_members or visible_mentions)}
+                audience_jids = [candidate] if candidate in known else []
+            elif isinstance(raw_audience, list):
+                known = {normalize_jid(item) for item in (resolved_members or visible_mentions)}
+                audience_jids = [
+                    item for item in raw_audience
+                    if isinstance(item, str) and normalize_jid(item) in known
+                ]
+            else:
+                audience_jids = []
+            if not audience_jids and not audience_declared and visible_mentions:
                 audience_jids = list(visible_mentions)
+            if audience_declared and not audience_jids:
+                return _failed_operation("work.my requires a locally resolved audience")
             if audience_jids:
-                # Admin asking about someone else's workload.
+                if actor.role != "admin":
+                    raise ValueError("work.my only shows your own workload; administrators may query another member")
                 target_jid = audience_jids[0]
                 all_aliases = _alias_jids(target_jid)
                 rows = store.overview(
@@ -1384,11 +1480,6 @@ def execute_work_read(client, message, intent: dict, factory, resolve_target=Non
             else:
                 norm_sender = normalize_jid(sender)
                 all_aliases = _alias_jids(norm_sender)
-                import logging
-                logging.getLogger("features.natural_language").info(
-                    "work.my self-query debugging: sender=%s norm=%s aliases=%s",
-                    sender, norm_sender, all_aliases
-                )
                 rows = store.overview(
                     user_jid=all_aliases[0],
                     also_jids=all_aliases[1:],
@@ -1414,9 +1505,9 @@ def execute_work_read(client, message, intent: dict, factory, resolve_target=Non
         lines.extend(_format(row, display_names) for row in rows)
         _send(client, chat, "\n".join(lines) if rows else heading + "\n\n📭 No matching work.", mention_jids=all_work_jids)
         return {"rows": [_structured_work_row(row) for row in rows], "row_count": len(rows)}
-    except Exception as exc:
-        client.send_message(chat, f"⚠️ {exc}")
-        return None
+    except Exception:
+        log.exception("work read operation failed")
+        return _failed_operation("I couldn't load that work information.")
 
 
 def _parse_date(value):
@@ -1451,15 +1542,21 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
             if not name:
                 client.send_message(
                     chat,
-                    "⚠️ To create an event I need at least a *name*.\n"
+                    "⚠️ To create an event I need a name, event type, and category.\n"
                     "Example: `@me create a hackathon event called PBCTF 5.0`\n"
-                    "Optional extras: type (participation/organization), category, description, start/end dates.",
+                    "Use type `participation` or `organization`; optional extras are description and start/end dates.",
                 )
                 return None
+            event_type = str(arguments.get("type") or "").strip()
+            if not event_type:
+                return _failed_operation("work.create_event requires argument type")
+            category = str(arguments.get("category") or "").strip()
+            if not category:
+                return _failed_operation("work.create_event requires argument category")
             event = EventStore(factory).create_event(
                 name=name,
-                type=str(arguments.get("type") or "organization").strip(),
-                category=str(arguments.get("category") or "other").strip(),
+                type=event_type,
+                category=category,
                 description=arguments.get("description"),
                 labels=labels,
                 start_date=_parse_date(arguments.get("start")),
@@ -1469,7 +1566,9 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
             audit(factory, actor, "event.create", "natural_language", {
                 "event_id": event["id"], "name": event["name"],
             })
-            client.send_message(chat, f"✅ Event `{event['id']}` created: *{event['name']}*")
+            from db.nl_state import record_undo
+            record_undo(factory, source.Sender, "event.create", {"event_id": event["id"]})
+            client.send_message(chat, f"✅ Event `{event['id']}` created: *{public_text(event['name'], limit=180)}*")
             return {"event_id": event["id"], "event": event}
 
         from db.task_store import TaskStore
@@ -1516,14 +1615,18 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
         audit(factory, actor, "task.create", "natural_language", {
             "task_id": task.id, "title": task.title, "event_id": task.event_id,
         })
+        from db.nl_state import record_undo
+        record_undo(factory, source.Sender, "task.create", {"task_id": task.id})
         parent = f" under event {task.event_id}" if task.event_id else ""
-        client.send_message(chat, f"✅ Task `{task.id}` created{parent}: *{task.title}*")
+        client.send_message(chat, f"✅ Task `{task.id}` created{parent}: *{public_text(task.title, limit=180)}*")
         return {"task_id": task.id, "event_id": task.event_id, "task": {
             "id": task.id, "title": task.title, "event_id": task.event_id,
         }}
     except (TypeError, ValueError) as exc:
-        client.send_message(chat, f"⚠️ {exc}")
-        return None
+        log.info("work creation failed: %s", exc)
+        return _failed_operation(
+            "I couldn't create that work item. Check the required fields and date format."
+        )
 
 def execute_collection_mutation(
     client,
@@ -1545,6 +1648,7 @@ def execute_collection_mutation(
     from db.subgroup_store import SubgroupStore
     from features.subgroups import add_subgroup_members, remove_subgroup_members
     store = SubgroupStore(factory)
+    before_snapshot = store.read()
 
     try:
         if action == "list":
@@ -1552,7 +1656,7 @@ def execute_collection_mutation(
             if not subgroups:
                 client.send_message(chat, "📭 No subgroups defined yet.")
                 return {"subgroups": [], "collection_count": 0}
-            lines = [f"• *@{name}* — {len(m)} member(s)" for name, m in sorted(subgroups.items())]
+            lines = [f"• *@{public_text(name, limit=80)}* — {len(m)} member(s)" for name, m in sorted(subgroups.items())]
             client.send_message(chat, f"*📋 Subgroups ({len(subgroups)})*\n\n" + "\n".join(lines))
             return {"subgroups": list(subgroups.keys()), "collection_count": len(subgroups)}
 
@@ -1564,15 +1668,15 @@ def execute_collection_mutation(
                 return None
             subgroups = store.read()
             if collection not in subgroups:
-                client.send_message(chat, f"⚠️ Subgroup *@{collection}* does not exist.")
+                client.send_message(chat, f"⚠️ Subgroup *@{public_text(collection, limit=80)}* does not exist.")
                 return None
             members_list = subgroups[collection]
             display_names = _get_display_name_map(client, chat, members_list)
             mention_parts = [
-                f"@{display_names.get(jid, jid_user(jid))}"
+                f"@{public_text(display_names.get(jid, "member" if jid.endswith("@lid") else jid_user(jid)), limit=80)}"
                 for jid in members_list
             ]
-            text = f"*@{collection}* — {len(members_list)} member(s)\n\n" + "\n".join(f"  • {m}" for m in mention_parts)
+            text = f"*@{public_text(collection, limit=80)}* — {len(members_list)} member(s)\n\n" + "\n".join(f"  • {m}" for m in mention_parts)
             client.send_message(chat, text)
             return {"collection": collection, "members": members_list, "member_count": len(members_list)}
 
@@ -1582,10 +1686,12 @@ def execute_collection_mutation(
             if collection:
                 deleted = store.delete(collection)
                 if deleted:
-                    client.send_message(chat, f"🗑️ Subgroup *@{collection}* deleted.")
+                    from db.nl_state import record_undo
+                    record_undo(factory, source.Sender, "subgroups.snapshot", {"before": before_snapshot})
+                    client.send_message(chat, f"🗑️ Subgroup *@{public_text(collection, limit=80)}* deleted.")
                     return {"collection": collection, "action": action, "deleted": True}
                 else:
-                    client.send_message(chat, f"⚠️ Subgroup *@{collection}* does not exist.")
+                    client.send_message(chat, f"⚠️ Subgroup *@{public_text(collection, limit=80)}* does not exist.")
                     return None
             else:
                 # Delete ALL subgroups
@@ -1608,33 +1714,38 @@ def execute_collection_mutation(
         if action == "add":
             added, total = add_subgroup_members(store, collection, members)
             if added:
+                from db.nl_state import record_undo
+                record_undo(factory, source.Sender, "subgroups.snapshot", {"before": before_snapshot})
+            if added:
                 client.send_message(
                     chat,
-                    f"✅ Added {added} member(s) to @{collection} (total: {total}).",
+                    f"✅ Added {added} member(s) to @{public_text(collection, limit=80)} (total: {total}).",
                 )
             else:
                 client.send_message(
                     chat,
-                    f"ℹ️ All mentioned users are already in @{collection} ({total} members).",
+                    f"ℹ️ All mentioned users are already in @{public_text(collection, limit=80)} ({total} members).",
                 )
         else:
             removed, remaining, deleted = remove_subgroup_members(
                 store, collection, members
             )
+            if removed or deleted:
+                from db.nl_state import record_undo
+                record_undo(factory, source.Sender, "subgroups.snapshot", {"before": before_snapshot})
             if deleted:
                 client.send_message(
                     chat,
-                    f"🗑️ Subgroup @{collection} deleted (no members remaining).",
+                    f"🗑️ Subgroup @{public_text(collection, limit=80)} deleted (no members remaining).",
                 )
             else:
                 client.send_message(
                     chat,
-                    f"✅ Removed {removed} member(s) from @{collection} "
+                    f"✅ Removed {removed} member(s) from @{public_text(collection, limit=80)} "
                     f"({remaining} remaining).",
                 )
     except ValueError as exc:
-        client.send_message(chat, f"⚠️ {exc}")
-        return None
+        return _failed_operation(public_error(exc, "I couldn't update that subgroup."))
     return {"collection": collection, "action": action, "members": members}
 
 
@@ -1676,8 +1787,12 @@ def execute_label_mutation(
             return None
     try:
         store = SubgroupStore(factory)
+        before_snapshot = store.read()
         if action == "add":
             added, total = add_label_members(store, collection, targets)
+            if added:
+                from db.nl_state import record_undo
+                record_undo(factory, source.Sender, "subgroups.snapshot", {"before": before_snapshot})
             audit(
                 factory,
                 actor,
@@ -1687,11 +1802,14 @@ def execute_label_mutation(
             )
             client.send_message(
                 chat,
-                f"✅ Label {collection} now has {total} member(s)."
+                f"✅ Label {public_text(collection, limit=80)} now has {total} member(s)."
                 + (f" Added {len(added)}." if added else " No new members."),
             )
         else:
             removed, deleted = remove_label_members(store, collection, targets)
+            if removed or deleted:
+                from db.nl_state import record_undo
+                record_undo(factory, source.Sender, "subgroups.snapshot", {"before": before_snapshot})
             audit(
                 factory,
                 actor,
@@ -1701,12 +1819,11 @@ def execute_label_mutation(
             )
             client.send_message(
                 chat,
-                f"✅ Removed {removed} member(s) from {collection}."
+                f"✅ Removed {removed} member(s) from {public_text(collection, limit=80)}."
                 + ("" if not deleted else " Label deleted (now empty)."),
             )
     except ValueError as exc:
-        client.send_message(chat, f"⚠️ {exc}")
-        return None
+        return _failed_operation(public_error(exc, "I couldn't update that label."))
     return {"collection": collection, "action": action, "members": targets}
 
 
@@ -1750,6 +1867,7 @@ def execute_work_assignment(
                     client.send_message(chat, "📭 No assignments found to remove.")
                     return {"action": action, "members": []}
                 total_removed: list[str] = []
+                undo_items: list[dict] = []
                 for t_type, t_id in work_items:
                     t_targets = list(targets)
                     if not t_targets:
@@ -1763,19 +1881,33 @@ def execute_work_assignment(
                         audit(factory, actor, f"{t_type}.unassign", "natural_language",
                               {"target_id": t_id, "users": removed})
                         total_removed.extend(removed)
+                        if removed:
+                            undo_items.append({
+                                "target_type": t_type,
+                                "target_id": t_id,
+                                "before": removed,
+                            })
+                if undo_items:
+                    from db.nl_state import record_undo
+                    record_undo(
+                        factory,
+                        source.Sender,
+                        "assignments.bulk_unassign",
+                        {"items": undo_items},
+                    )
                 if total_removed:
                     client.send_message(chat, f"✅ Removed {len(total_removed)} assignment(s) across all work items.")
                 else:
                     client.send_message(chat, "📭 No matching assignments found.")
                 return {"action": action, "members": total_removed}
             except Exception as exc:
-                client.send_message(chat, f"⚠️ {exc}")
-                return None
+                log.info("bulk unassignment failed: %s", exc)
+                return _failed_operation("I couldn't remove those assignments.")
         target_name = intent.get("arguments", {}).get("target_name") or intent.get("arguments", {}).get("target_id") or ""
         if target_name:
             client.send_message(
                 chat,
-                f"⚠️ I couldn't find an event or task named *{target_name}*.\n"
+                f"⚠️ I couldn't find an event or task named *{public_text(target_name, limit=180)}*.\n"
                 "Use `!work` to see current events and their IDs, then try again with the exact ID.\n"
                 "Example: `@me assign event 1 to subgroup abc`",
             )
@@ -1786,6 +1918,8 @@ def execute_work_assignment(
     target_type, target_id = reference.split()
     store = WorkStore(factory)
     targets = list(dict.fromkeys(normalize_jid(member) for member in members if normalize_jid(member)))
+    before_rows = store.overview(target_type=target_type, target_id=int(target_id), admin=True)
+    before_users = [row["user_jid"] for row in before_rows if row.get("user_jid")]
 
     try:
         if action == "unassign" and not targets:
@@ -1809,6 +1943,13 @@ def execute_work_assignment(
         if action == "assign":
             rows = store.assign_many(target_type, int(target_id), targets)
             assigned_jids = [row["user_jid"] for row in rows]
+            changed = [jid for jid in assigned_jids if jid_user(jid) not in {jid_user(item) for item in before_users}]
+            if changed:
+                from db.nl_state import record_undo
+                record_undo(factory, source.Sender, "assignments.change", {
+                    "target_type": target_type, "target_id": int(target_id),
+                    "action": action, "before": before_users, "changed": changed,
+                })
             audit(
                 factory,
                 actor,
@@ -1827,6 +1968,12 @@ def execute_work_assignment(
             return {"target": f"{target_type} {target_id}", "action": action, "members": assigned_jids}
         else:
             removed = store.unassign_many(target_type, int(target_id), targets)
+            if removed:
+                from db.nl_state import record_undo
+                record_undo(factory, source.Sender, "assignments.change", {
+                    "target_type": target_type, "target_id": int(target_id),
+                    "action": action, "before": before_users, "changed": removed,
+                })
             audit(
                 factory,
                 actor,
@@ -1843,5 +1990,5 @@ def execute_work_assignment(
             )
             return {"target": f"{target_type} {target_id}", "action": action, "members": removed}
     except Exception as exc:
-        client.send_message(chat, f"⚠️ {exc}")
-        return None
+        log.info("work assignment failed: %s", exc)
+        return _failed_operation("I couldn't update that assignment.")
