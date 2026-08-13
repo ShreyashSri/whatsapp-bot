@@ -18,7 +18,7 @@ from db.event_store import EventStore
 from db.models import Assignment, Base, ProgressRevision, Task
 from db.task_store import TaskStore
 from db.work_store import WorkStore
-from features.work import _get_display_name_map, register as register_work
+from features.work import _add_child_task_assignees, _format, _get_display_name_map, register as register_work
 
 
 @pytest.fixture
@@ -79,6 +79,34 @@ def test_work_name_lookup_uses_neonize_jid_objects():
     assert len(seen) == 1
     assert getattr(seen[0], "User", "") == "919606214389"
     assert getattr(seen[0], "Server", "") == "s.whatsapp.net"
+
+
+def test_event_overview_shows_assignees_inherited_from_child_tasks():
+    rows = [
+        {
+            "target_type": "event",
+            "event_id": 3,
+            "title": "lfx",
+            "status": None,
+            "user_jid": None,
+            "lifecycle_status": "active",
+        },
+        {
+            "target_type": "task",
+            "task_id": 8,
+            "parent_event_id": 3,
+            "title": "tell result",
+            "status": "in_progress",
+            "user_jid": "shuvam@s.whatsapp.net",
+            "lifecycle_status": "in_progress",
+        },
+    ]
+
+    _add_child_task_assignees(rows)
+
+    event_line = _format(rows[0])
+    assert "task-assigned" in event_line
+    assert "tasks assigned to @+shuvam" in event_line
 
 
 def test_full_work_lifecycle(db_session_factory, handler, admin_user, member_user):

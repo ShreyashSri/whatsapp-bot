@@ -1331,7 +1331,7 @@ def execute_work_read(
         return None
     from db.task_store import TaskStore
     from db.work_store import WorkStore
-    from features.work import _format
+    from features.work import _add_child_task_assignees, _format
 
     sender = source.Sender
     arguments = intent.get("arguments", {})
@@ -1514,7 +1514,15 @@ def execute_work_read(
             if actor.role == "admin":
                 rows += store.unassigned(target_type=target_type)
             heading = "📋 *Work Overview*"
-        all_work_jids = [row["user_jid"] for row in rows if row.get("user_jid")]
+        _add_child_task_assignees(rows)
+        all_work_jids = [
+            jid
+            for row in rows
+            for jid in (
+                [row.get("user_jid")] if row.get("user_jid") else []
+            ) + row.get("child_task_assignees", [])
+            if jid
+        ]
         display_names = _get_display_name_map(client, chat, all_work_jids)
         lines = [heading]
         lines.extend(_format(row, display_names) for row in rows)

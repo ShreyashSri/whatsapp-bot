@@ -39,17 +39,44 @@ def _format(row: dict, display_names: dict[str, str] | None = None) -> str:
     typ = row["target_type"]
     ident = row.get("event_id") if typ == "event" else row.get("task_id")
     raw_jid = normalize_jid(row.get("user_jid")) if row.get("user_jid") else ""
+    child_jids = [normalize_jid(jid) for jid in row.get("child_task_assignees", []) if jid]
     # Keep a JID-backed token in the text.  _send resolves it to the current
     # WhatsApp contact name and attaches a real mention to the message.
-    who = f" @+{jid_user(raw_jid)}" if raw_jid else " unassigned"
+    if raw_jid:
+        who = f" @{jid_user(raw_jid)}"
+        progress = row.get("status") or "unassigned"
+    elif child_jids:
+        labels = ", ".join(f"@+{jid_user(jid)}" for jid in child_jids)
+        who = f" | tasks assigned to {labels}"
+        progress = "task-assigned"
+    else:
+        who = " unassigned"
+        progress = row.get("status") or "unassigned"
     due = f" | due {row['due_date'].strftime('%Y-%m-%d')}" if row.get("due_date") else ""
-    progress = row.get("status") or "unassigned"
     event_kind = f" | {row['event_type']}/{row['event_category']}" if typ == "event" and row.get("event_type") else ""
     lifecycle = f" | lifecycle `{row['lifecycle_status']}`" if row.get("lifecycle_status") else ""
     title = public_text(row.get("title", row.get("name", "")), limit=180)
     # Status values are controlled identifiers; keep their ASCII spelling so
     # callers and operators can copy them into the next command.
     return f"• `{typ} {ident}` *{title}* — `{progress}`{event_kind}{who}{due}{lifecycle}"
+
+
+def _add_child_task_assignees(rows: list[dict]) -> list[dict]:
+    """Annotate unassigned parent events with their child task assignees."""
+    by_event: dict[int, dict[str, str]] = {}
+    for row in rows:
+        if row.get("target_type") != "task" or row.get("parent_event_id") is None:
+            continue
+        jid = normalize_jid(row.get("user_jid")) if row.get("user_jid") else ""
+        if jid:
+            by_event.setdefault(row["parent_event_id"], {})[jid_user(jid)] = jid
+    for row in rows:
+        if row.get("target_type") != "event" or row.get("user_jid"):
+            continue
+        assignees = by_event.get(row.get("event_id"), {})
+        if assignees:
+            row["child_task_assignees"] = list(assignees.values())
+    return rows
 
 
 def _text_value(value) -> str:
@@ -570,8 +597,18 @@ def _overview(client, chat, store: WorkStore, actor, sender: str, command: str, 
                 "user_jid": None,
                 "lifecycle_status": row.get("parent_event_status"),
             }
+    _add_child_task_assignees([*events_by_id.values(), *task_rows])
     display_names = _get_display_name_map(
-        client, chat, [row.get("user_jid") for row in rows if row.get("user_jid")]
+        client,
+        chat,
+        [
+            jid
+            for row in [*rows, *events_by_id.values()]
+            for jid in (
+                [row.get("user_jid")] if row.get("user_jid") else []
+            ) + row.get("child_task_assignees", [])
+            if jid
+        ],
     )
     lines = [heading]
     if events_by_id:
