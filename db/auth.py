@@ -47,14 +47,31 @@ def jid_user(value) -> str:
 def current_user(session_factory: Callable, jid) -> User | None:
     with session_factory() as session:
         normalized = normalize_jid(jid)
+        wanted = jid_user(normalized)
+
+        # created LID user does not override the canonical phone user.
+        from .work_store import _JID_ALIASES
+
+        canonical = _JID_ALIASES.get(wanted)
+        if canonical:
+            user = session.get(User, normalize_jid(canonical))
+            if user is not None:
+                return user
+
+        # Direct JID lookup.
         user = session.get(User, normalized)
         if user is not None:
             return user
-        # WhatsApp can report the same person as @lid in inbound messages and
-        # @s.whatsapp.net in mentions. Bridge those representations.
-        wanted = jid_user(normalized)
-        return next((candidate for candidate in session.scalars(select(User)).all()
-                     if jid_user(candidate.jid) == wanted), None)
+
+        # Fallback: match the user portion directly.
+        return next(
+            (
+                candidate
+                for candidate in session.scalars(select(User)).all()
+                if jid_user(candidate.jid) == wanted
+            ),
+            None,
+        )
 
 
 def _clean_push_name(push_name) -> str:
