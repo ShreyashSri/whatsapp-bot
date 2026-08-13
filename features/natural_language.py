@@ -664,6 +664,42 @@ def _target_arguments(arguments: dict, text: str = "") -> dict:
                     result["target_name"] = value.strip()
                 break
 
+    explicit_target = re.search(
+        r"\b(?P<type>event|task)\s*[:#]?\s*(?P<value>\d+)\b",
+        text,
+        re.IGNORECASE,
+    )
+    has_explicit_id = any(
+        result.get(key) is not None
+        for key in ("target_id", "event_id", "task_id")
+    )
+    if explicit_target and not has_explicit_id:
+        result["target_type"] = explicit_target.group("type").casefold()
+        result["target_id"] = explicit_target.group("value")
+        result.pop("target_name", None)
+    elif not has_explicit_id:
+        named_target = re.search(
+            r"\b(?P<type>event|task)\s+(?:named\s+)?(?P<value>[^|\n]+?)"
+            r"(?=\s+(?:to|for|with|among)\b|\s+@|$)",
+            text,
+            re.IGNORECASE,
+        )
+        target_type = result.get("target_type")
+        if named_target and target_type in (None, named_target.group("type").casefold()):
+            value = named_target.group("value").strip(" ,:;-\t")
+            if value and not value.isdigit():
+                result["target_type"] = named_target.group("type").casefold()
+                result["target_name"] = value
+
+    target_type = result.get("target_type")
+    target_name = result.get("target_name")
+    if target_type in {"event", "task"} and (
+        isinstance(target_name, (int, float))
+        or (isinstance(target_name, str) and target_name.strip().isdigit())
+    ):
+        result["target_id"] = str(target_name).strip()
+        result.pop("target_name", None)
+
     has_explicit_target = any(
         result.get(key) is not None
         for key in ("target_id", "target_name", "event_id", "task_id")

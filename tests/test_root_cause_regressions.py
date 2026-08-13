@@ -16,6 +16,7 @@ from features.natural_language import (
     _intent_compile_error,
     _named_entity_candidates,
     _resolve_target_reference,
+    _target_arguments,
 )
 
 
@@ -128,6 +129,22 @@ def test_named_work_target_ties_fail_closed_instead_of_picking_first_task(factor
         [],
         allow_text_target_fallback=False,
     ) is None
+
+    named_task = tasks.create("tell result", admin.jid)
+    assert _resolve_target_reference(
+        factory,
+        _target_arguments(
+            {"target_type": "task", "target_name": "task"},
+            "assign task tell result to @Shuvam",
+        ),
+    ) == f"task {named_task.id}"
+    assert _resolve_target_reference(
+        factory,
+        _target_arguments(
+            {"target_type": "task", "target_name": str(named_task.id)},
+            f"assign task {named_task.id} to @Shuvam",
+        ),
+    ) == f"task {named_task.id}"
 
 
 def test_task_assignment_link_is_canonical_and_clears_legacy_owner(factory):

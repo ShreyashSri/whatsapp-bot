@@ -286,6 +286,25 @@ def test_target_word_order_is_normalized_at_the_shared_boundary():
     }
 
 
+def test_explicit_work_target_text_repairs_misplaced_model_fields():
+    assert _target_arguments(
+        {"target_type": "task", "target_name": "8"},
+        "@me assign task 8 to @Shuvam",
+    ) == {"target_type": "task", "target_id": "8"}
+    assert _target_arguments(
+        {"target_type": "task", "target_name": "task"},
+        "@me assign task tell result to @Shuvam",
+    ) == {"target_type": "task", "target_name": "tell result"}
+    assert _target_arguments(
+        {"target_type": "task", "target_name": "task"},
+        "@me assign task named tell result to @Shuvam",
+    ) == {"target_type": "task", "target_name": "tell result"}
+    assert _target_arguments(
+        {"target_name": "task"},
+        "@me assign task tell result to @Shuvam",
+    ) == {"target_type": "task", "target_name": "tell result"}
+
+
 def test_legacy_mutating_command_is_rejected_before_dispatch():
     client = MagicMock()
     client.get_me.return_value = SimpleNamespace(
