@@ -4,12 +4,13 @@ from sqlalchemy.orm import sessionmaker
 from unittest.mock import MagicMock, patch
 from flask import Flask
 
-from db.auth import authorize, upsert_user
+from db.auth import authorize, current_user, upsert_user
 from db.event_store import EventStore
 from db.models import Assignment, Base, EventFieldSchema, Task
 from db.reminder_store import ReminderStore
 from db.task_store import TaskStore
 from db.work_store import WorkStore
+from db.work_store import _JID_ALIASES
 from features.incidents import _build_chat_jid, register as register_incidents
 from features.natural_language import (
     compile_intent,
@@ -42,6 +43,20 @@ def test_authorize_accepts_push_name(factory):
 
     assert user is not None
     assert user.display_name == "New User"
+
+
+def test_lid_auth_uses_canonical_phone_user_when_both_rows_exist(factory, monkeypatch):
+    phone_user = upsert_user(
+        factory, "919606214389@s.whatsapp.net", role="admin", display_name="Admin"
+    )
+    upsert_user(factory, "256023117971610@lid", role="member", display_name="LID")
+    monkeypatch.setitem(_JID_ALIASES, "256023117971610", "919606214389")
+
+    resolved = current_user(factory, "256023117971610@lid")
+
+    assert resolved is not None
+    assert resolved.jid == phone_user.jid
+    assert resolved.role == "admin"
 
 
 def test_delete_event_keeps_dependent_schema(factory):
