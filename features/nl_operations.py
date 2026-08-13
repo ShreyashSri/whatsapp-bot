@@ -13,7 +13,7 @@ import re
 
 from db.auth import jid_user, normalize_group_jid, normalize_jid
 from features.work import _neonize_jid, _send
-from features.text import public_text, public_url
+from features.text import public_error, public_text, public_url
 
 # Mutating capabilities use this module as their single semantic execution
 # boundary. Legacy command handlers call the same feature-domain services.
@@ -1945,11 +1945,19 @@ def execute_work_assignment(
             except Exception as exc:
                 log.info("bulk unassignment failed: %s", exc)
                 return _failed_operation("I couldn't remove those assignments.")
-        target_name = intent.get("arguments", {}).get("target_name") or intent.get("arguments", {}).get("target_id") or ""
+        arguments = intent.get("arguments", {})
+        target_type = str(arguments.get("target_type") or "").casefold()
+        target_id = arguments.get("target_id")
+        target_name = arguments.get("target_name") or target_id or ""
         if target_name:
+            label = (
+                f"{target_type} {target_id}"
+                if target_type in {"event", "task"} and str(target_id or "").isdigit()
+                else f"named *{public_text(target_name, limit=180)}*"
+            )
             client.send_message(
                 chat,
-                f"⚠️ I couldn't find an event or task named *{public_text(target_name, limit=180)}*.\n"
+                f"⚠️ I couldn't find {label}.\n"
                 "Use `!work` to see current events and their IDs, then try again with the exact ID.\n"
                 "Example: `@me assign event 1 to subgroup abc`",
             )
@@ -1960,6 +1968,27 @@ def execute_work_assignment(
     target_type, target_id = reference.split()
     store = WorkStore(factory)
     targets = list(dict.fromkeys(normalize_jid(member) for member in members if normalize_jid(member)))
+
+    # Numeric references are resolved before the mutation boundary.  Give a
+    # stable, actionable error for a deleted/non-existent work item instead of
+    # falling through to the generic assignment failure.
+    from db.event_store import EventStore
+    from db.task_store import TaskStore
+    exists = (
+        EventStore(factory).get_event(int(target_id))
+        if target_type == "event"
+        else TaskStore(factory).get(int(target_id))
+        if target_type == "task"
+        else None
+    )
+    if exists is None:
+        client.send_message(
+            chat,
+            f"⚠️ I couldn't find {target_type} {target_id}. "
+            "Use `!work` to see current work and its IDs, then try again.",
+        )
+        return None
+
     before_rows = store.overview(target_type=target_type, target_id=int(target_id), admin=True)
     before_users = [row["user_jid"] for row in before_rows if row.get("user_jid")]
 

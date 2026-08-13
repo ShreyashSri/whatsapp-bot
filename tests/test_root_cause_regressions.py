@@ -146,6 +146,15 @@ def test_named_work_target_ties_fail_closed_instead_of_picking_first_task(factor
         ),
     ) == f"task {named_task.id}"
 
+    bare_task = tasks.create("fuck off", admin.jid)
+    assert _resolve_target_reference(
+        factory,
+        _target_arguments(
+            {"target_id": bare_task.id},
+            "assign fuck off to @Bibisha",
+        ),
+    ) == f"task {bare_task.id}"
+
 
 def test_task_assignment_link_is_canonical_and_clears_legacy_owner(factory):
     owner = upsert_user(factory, "owner@s.whatsapp.net", display_name="Owner")

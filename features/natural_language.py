@@ -523,13 +523,6 @@ def _resolve_collection_names(factory, requested: object) -> list[str]:
     """Resolve one or more stored collection names from a natural reference."""
     if not isinstance(requested, str) or not requested.strip() or not factory:
         return []
-    try:
-        from db.subgroup_store import SubgroupStore
-
-        names = list(SubgroupStore(factory).read())
-    except Exception:
-        log.info("Could not resolve collection names", exc_info=True)
-        return []
     single = _resolve_collection_name(factory, requested)
     return [single] if single else []
 
@@ -669,6 +662,26 @@ def _target_arguments(arguments: dict, text: str = "") -> dict:
         text,
         re.IGNORECASE,
     )
+    named_target = re.search(
+        r"\b(?P<type>event|task)\s+(?:named\s+)?(?P<value>[^|\n]+?)"
+        r"(?=\s+(?:to|for|with|among)\b|\s+@|$)",
+        text,
+        re.IGNORECASE,
+    )
+    # A model may return a numeric target_id but omit target_type.  In that
+    # shape the ID is not executable: the resolver would search for an item
+    # literally named "6" instead of treating it as task 6.  Recover only the
+    # missing type from the user's words; never replace an explicit structured
+    # ID, which may be a deliberate plan reference.
+    text_target = named_target
+    if text_target is None:
+        text_target = re.search(
+            r"\b(?:assign|delegate|give|unassign|remove)\s+(?:the\s+)?"
+            r"(?P<value>[^|\n]+?)"
+            r"(?=\s+(?:to|for|with|among)\b|\s+@|$)",
+            text,
+            re.IGNORECASE,
+        )
     has_explicit_id = any(
         result.get(key) is not None
         for key in ("target_id", "event_id", "task_id")
@@ -677,19 +690,23 @@ def _target_arguments(arguments: dict, text: str = "") -> dict:
         result["target_type"] = explicit_target.group("type").casefold()
         result["target_id"] = explicit_target.group("value")
         result.pop("target_name", None)
-    elif not has_explicit_id:
-        named_target = re.search(
-            r"\b(?P<type>event|task)\s+(?:named\s+)?(?P<value>[^|\n]+?)"
-            r"(?=\s+(?:to|for|with|among)\b|\s+@|$)",
-            text,
-            re.IGNORECASE,
-        )
+    elif text_target:
+        value = text_target.group("value").strip(" ,:;-\t")
         target_type = result.get("target_type")
-        if named_target and target_type in (None, named_target.group("type").casefold()):
-            value = named_target.group("value").strip(" ,:;-\t")
-            if value and not value.isdigit():
-                result["target_type"] = named_target.group("type").casefold()
+        text_type = text_target.groupdict().get("type")
+        if value and not value.isdigit():
+            # Bare forms such as "assign tell result to @Shuvam" have no
+            # explicit task/event word.  Keep the title so the exact-name
+            # resolver can identify the unique work item instead of searching
+            # for a model-produced numeric label.
+            if (not result.get("target_id") or (not text_type and not target_type)) and (
+                not isinstance(result.get("target_name"), str)
+                or result.get("target_name", "").strip().isdigit()
+                or result.get("target_name", "").strip().casefold() in {"task", "event"}
+            ):
                 result["target_name"] = value
+            if text_type and target_type not in {"event", "task"}:
+                result["target_type"] = text_type.casefold()
 
     target_type = result.get("target_type")
     target_name = result.get("target_name")
@@ -2369,6 +2386,25 @@ def _resolve_runtime_target_scope(
         list(visible_mentions or []),
     )
     error = validate_execution_ready(intent, resolution, list(visible_mentions or []))
+    if error and intent.get("capability") == "work.assign":
+        # Self mentions are intentionally removed from executable audiences so
+        # the bot cannot assign work to itself.  Preserve that safety rule, but
+        # explain the actual cause instead of reporting a missing audience.
+        from features.subgroups import _get_mentioned_jids, _resolve_lid_to_pn
+
+        raw_mentions = [normalize_jid(jid) for jid in _get_mentioned_jids(message)]
+        raw_mentions = [jid for jid in raw_mentions if jid]
+        self_mentions = []
+        for jid in raw_mentions:
+            candidates = {jid}
+            try:
+                candidates.add(normalize_jid(_resolve_lid_to_pn(client, jid)))
+            except Exception:
+                pass
+            if candidates & self_jids:
+                self_mentions.append(jid)
+        if raw_mentions and len(self_mentions) == len(raw_mentions):
+            error = "The bot cannot be assigned work. Mention a group member instead."
     return list(resolution.members), error
 
 

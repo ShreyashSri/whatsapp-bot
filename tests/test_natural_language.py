@@ -305,6 +305,45 @@ def test_explicit_work_target_text_repairs_misplaced_model_fields():
     ) == {"target_type": "task", "target_name": "tell result"}
 
 
+def test_work_assignment_target_type_is_recovered_when_model_only_returns_id():
+    assert _target_arguments(
+        {"target_id": 6},
+        "@me assign task raise pr to @Bibisha",
+    ) == {"target_id": 6, "target_type": "task"}
+
+
+def test_bare_work_title_wins_over_model_numeric_name():
+    assert _target_arguments(
+        {"target_name": "9"},
+        "@me assign fuck off to @Bibisha",
+    ) == {"target_name": "fuck off"}
+
+
+def test_self_assignment_reports_bot_target_instead_of_missing_audience():
+    client = MagicMock()
+    message = make_message("@me assign task 6 to @Bibisha")
+    intent = {
+        "capability": "work.assign",
+        "arguments": {
+            "target_type": "task",
+            "target_id": 6,
+            "audience": {"resolver": "explicit_mentions"},
+        },
+    }
+
+    with patch("features.subgroups._get_mentioned_jids", return_value=["bot@s.whatsapp.net"]):
+        members, error = _resolve_runtime_target_scope(
+            client,
+            message,
+            intent,
+            {"bot@s.whatsapp.net"},
+            visible_mentions=[],
+        )
+
+    assert members == []
+    assert error == "The bot cannot be assigned work. Mention a group member instead."
+
+
 def test_legacy_mutating_command_is_rejected_before_dispatch():
     client = MagicMock()
     client.get_me.return_value = SimpleNamespace(
