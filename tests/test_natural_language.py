@@ -18,6 +18,7 @@ from features.natural_language import (
     _needs_target_repair,
     _inherit_plan_context,
     _target_arguments,
+    _typed_target_parts,
     _intent_compile_error,
     _plan_completeness_issue,
 )
@@ -208,6 +209,21 @@ def test_intent_compilation_reports_the_missing_semantic_field():
     assert _intent_compile_error(
         {"capability": "card.design", "arguments": {"name": "A"}}
     ) == "card.design requires argument body"
+
+
+def test_target_word_order_is_normalized_at_the_shared_boundary():
+    assert _typed_target_parts("event abc") == ("event", "abc")
+    assert _typed_target_parts("abc event") == ("event", "abc")
+    assert _target_arguments({"target": "event abc"}) == {
+        "target": "event abc",
+        "target_type": "event",
+        "target_name": "abc",
+    }
+    assert _target_arguments({"target": "abc event"}) == {
+        "target": "abc event",
+        "target_type": "event",
+        "target_name": "abc",
+    }
 
 
 def test_legacy_mutating_command_is_rejected_before_dispatch():
@@ -705,6 +721,33 @@ def test_scoped_capability_is_reviewed_when_model_drops_named_entity():
     dispatch.assert_not_called()
     execute.assert_called_once()
     assert execute.call_args.args[2] == repaired
+
+
+def test_local_entity_match_survives_failed_model_scope_repair():
+    client = MagicMock()
+    client.get_me.return_value = SimpleNamespace(
+        JID="bot@s.whatsapp.net", LID="999999@lid"
+    )
+    message = make_message("@me show status for abc event")
+    dispatch = MagicMock()
+    candidate = {
+        "type": "event", "id": 7, "name": "abc", "category": "other",
+    }
+    intent = {"capability": "work.status", "arguments": {}}
+
+    with patch("features.natural_language._get_mentioned_jids", return_value=[]), \
+         patch("features.natural_language._named_entity_candidates", return_value=[candidate]), \
+         patch.object(MistralCommandTranslator, "translate", return_value=(intent, "")), \
+         patch.object(MistralCommandTranslator, "repair_intent", return_value=None), \
+         patch("features.natural_language._resolve_target_reference", return_value="event 7"):
+        handler = register(
+            client,
+            {"mistral_api_key": "secret", "db_session_factory": MagicMock()},
+        )
+        assert handler(client, message, dispatch) is True
+
+    translated = dispatch.call_args.args[0]
+    assert translated.Message.conversation == "!work status event 7"
 
 
 def test_task_step_inherits_unique_event_created_by_same_plan():

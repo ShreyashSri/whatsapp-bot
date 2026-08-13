@@ -585,6 +585,24 @@ def _parse_compound_target(raw: object) -> tuple[str, object] | None:
     return None
 
 
+def _typed_target_parts(raw: object) -> tuple[str, str] | None:
+    """Split either ``event name`` or ``name event`` target wording."""
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    prefix = re.fullmatch(
+        r"(event|task)(?=\s|[:#])\s*[:#]?\s*(.+)",
+        value,
+        re.IGNORECASE,
+    )
+    if prefix:
+        return prefix.group(1).casefold(), prefix.group(2).strip()
+    suffix = re.fullmatch(r"(.+?)\s+(event|task)", value, re.IGNORECASE)
+    if suffix:
+        return suffix.group(2).casefold(), suffix.group(1).strip()
+    return None
+
+
 def _target_arguments(arguments: dict, text: str = "") -> dict:
     """Prefer an explicit task/event reference in the user's wording."""
     result = dict(arguments)
@@ -594,6 +612,13 @@ def _target_arguments(arguments: dict, text: str = "") -> dict:
         t_type, t_id = compound
         result.setdefault("target_type", t_type)
         result.setdefault("target_id", t_id)
+    elif (typed := _typed_target_parts(raw_target)):
+        t_type, value = typed
+        result.setdefault("target_type", t_type)
+        if value.isdigit():
+            result.setdefault("target_id", value)
+        else:
+            result.setdefault("target_name", value)
     elif isinstance(raw_target, str) and raw_target.casefold() in {"event", "task"}:
         result.setdefault("target_type", raw_target.casefold())
     elif isinstance(raw_target, str) and raw_target.strip() and raw_target.casefold() not in {"event", "task"} and not raw_target.strip().isdigit():
@@ -654,13 +679,23 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
         if isinstance(c_id, str) and c_id.strip().isdigit():
             return f"{c_type} {int(c_id.strip())}"
 
-    raw_type = arguments.get("target_type") or (raw_target if isinstance(raw_target, str) and raw_target.casefold() in {"event", "task"} else None)
+    typed_target = _typed_target_parts(raw_target)
+    raw_type = arguments.get("target_type") or (
+        typed_target[0]
+        if typed_target
+        else raw_target
+        if isinstance(raw_target, str) and raw_target.casefold() in {"event", "task"}
+        else None
+    )
     target_type = str(raw_type).casefold() if isinstance(raw_type, str) else ""
     target_id = arguments.get("target_id") or arguments.get("task_id") or arguments.get("event_id")
     if not target_id and isinstance(raw_target, (int, float)):
         target_id = raw_target
     if not target_id and isinstance(raw_target, str) and raw_target.strip().isdigit():
         target_id = raw_target
+    if not target_id and not arguments.get("target_name") and typed_target:
+        if typed_target[1].isdigit():
+            target_id = typed_target[1]
 
     if target_type in {"event", "task"}:
         if isinstance(target_id, int) and target_id >= 0:
@@ -670,6 +705,7 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
 
     requested = (
         arguments.get("target_name")
+        or (typed_target[1] if typed_target and not typed_target[1].isdigit() else None)
         or (raw_target if isinstance(raw_target, str) and raw_target.casefold() not in {"event", "task"} and not raw_target.strip().isdigit() else None)
         or (str(target_id) if target_id and not str(target_id).isdigit() else None)
     )
@@ -1689,8 +1725,17 @@ def _canonicalize_entity_scope(intent: dict, candidates: list[dict]) -> dict:
     entity_name = candidate.get("name")
     if entity_type not in {"event", "task"} or entity_id is None:
         return intent
+    capability = intent.get("capability")
+    event_only = {
+        "work.list_event_tasks", "work.update_event", "work.delete_event",
+        "reports.progress", "schema.show", "schema.set", "schema.add", "schema.delete",
+    }
+    if capability in event_only and entity_type != "event":
+        return intent
+    if capability == "work.delete_task" and entity_type != "task":
+        return intent
     arguments.update(target_type=entity_type, target_id=entity_id, target_name=entity_name)
-    if intent.get("capability") == "work.list_event_tasks" and entity_type == "event":
+    if capability == "work.list_event_tasks" and entity_type == "event":
         arguments["event_id"] = entity_id
     return {**intent, "arguments": arguments}
 
@@ -2421,15 +2466,29 @@ def register(client, config: dict) -> Callable:
                             }
                             log.info("repaired semantic scope capability=%s", step.get("capability"))
                         else:
-                            log.warning(
-                                "semantic intent remained unresolved capability=%s",
+                            # The local entity list is already built from the
+                            # live database and sorted by nearest match. Do
+                            # not make a second model call a hard dependency
+                            # for an otherwise deterministic target.
+                            fallback_step = _canonicalize_entity_scope(
+                                step, entity_candidates
+                            )
+                            from features.nl_runtime import entity_scope_is_missing
+                            if entity_scope_is_missing(fallback_step, entity_candidates):
+                                log.warning(
+                                    "semantic intent remained unresolved capability=%s",
+                                    step.get("capability"),
+                                )
+                                client.send_message(
+                                    chat,
+                                    "⚠️ I couldn't identify every work item in that request.",
+                                )
+                                return abort_plan()
+                            step = fallback_step
+                            log.info(
+                                "used deterministic entity fallback capability=%s",
                                 step.get("capability"),
                             )
-                            client.send_message(
-                                chat,
-                                "⚠️ I couldn't identify every work item in that request.",
-                            )
-                            return abort_plan()
                     step = _canonicalize_entity_scope(step, entity_candidates)
                     step = _fix_everyone_audience(step, body, visible_mentions)
                     if _needs_target_repair(step, body, visible_mentions):
