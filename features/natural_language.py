@@ -1478,6 +1478,7 @@ Security rules:
 - For requests to create or add members to a subgroup/collection (e.g., "make subgroup X", "create subgroup X"), use capability "collections.add" with argument collection="X".
 - For requests to delete a subgroup or all subgroups (e.g., "delete subgroup X", "delete all subgroups"), use capability "collections.delete". For deleting all subgroups, omit the collection argument.
 - For requests to list subgroups (e.g., "list all subgroups", "show subgroups"), use capability "collections.list".
+- For requests to tag, ping, or notify members of an existing subgroup (e.g., "tag everyone in subgroup X", "ping @X"), use capability "collections.tag" with collection="X" and audience={{"resolver":"collection_members","value":"X"}}. This does not add, remove, or delete subgroup members.
 - When a request mentions "@everyone", "@all", or "everyone in this group" to populate a subgroup or label, set audience={{"resolver": "current_chat_members"}}.
 - When one request creates a NEW event and then creates tasks for it, emit one
   work.create_event step followed by one work.create_task step per task. Give
@@ -1624,7 +1625,7 @@ def validate_intent(intent: object) -> dict | None:
             return None
     target_declared = audience is not None or isinstance(target, dict) or target_scope is not None
     if target_declared and capability not in {
-        "labels.add", "labels.remove", "collections.add", "collections.remove",
+        "labels.add", "labels.remove", "collections.add", "collections.remove", "collections.tag",
         "work.assign", "work.unassign", "whatsapp.user_info",
         "whatsapp.add_group_members", "whatsapp.remove_group_members",
         "whatsapp.profile_pictures",
@@ -1795,6 +1796,46 @@ def _fix_everyone_audience(step: dict, text: str, visible_mentions: list[str]) -
             arguments["audience"] = {"resolver": "current_chat_members"}
             return {**step, "arguments": arguments}
     return step
+
+
+def _repair_collection_tag_intent(step: dict, text: str, factory) -> dict:
+    """Keep subgroup tagging separate from membership removal/info actions."""
+    if step.get("capability") not in {
+        "collections.add", "collections.remove", "collections.info"
+    }:
+        return step
+    explicit_tag = re.search(r"\b(?:tag|ping|mention|notify)\b", text, re.IGNORECASE)
+    subgroup_only = re.fullmatch(
+        r"(?:@[A-Za-z0-9][A-Za-z0-9_-]*\s*)+", text.strip()
+    )
+    if not explicit_tag and not subgroup_only:
+        return step
+    if not re.search(
+        r"\b(?:subgroup|collection|group)\b|@[A-Za-z0-9][A-Za-z0-9_-]*",
+        text,
+        re.IGNORECASE,
+    ):
+        return step
+
+    arguments = dict(step.get("arguments", {}))
+    collection = arguments.get("collection")
+    if not collection and subgroup_only:
+        collection = subgroup_only.group(0).split()[0].lstrip("@")
+    if not collection and factory:
+        candidates = _named_collection_candidates(factory, text)
+        if candidates and (
+            len(candidates) == 1
+            or candidates[0]["score"] - candidates[1]["score"] >= 0.1
+        ):
+            collection = candidates[0]["name"]
+    if not collection:
+        return step
+    arguments["collection"] = collection
+    arguments["audience"] = {
+        "resolver": "collection_members",
+        "value": collection,
+    }
+    return {**step, "capability": "collections.tag", "arguments": arguments}
 
 
 def _semantic_entity_candidates(factory, text: str) -> list[dict]:
@@ -2668,6 +2709,7 @@ def register(client, config: dict) -> Callable:
                                 step.get("capability"),
                             )
                     step = _canonicalize_entity_scope(step, entity_candidates)
+                    step = _repair_collection_tag_intent(step, body, execution_factory)
                     step = _fix_everyone_audience(step, body, visible_mentions)
                     if _needs_target_repair(step, body, visible_mentions):
                         try:

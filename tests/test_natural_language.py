@@ -21,6 +21,7 @@ from features.natural_language import (
     _typed_target_parts,
     _intent_compile_error,
     _plan_completeness_issue,
+    _repair_collection_tag_intent,
 )
 from features.subgroups import _get_mentioned_jids, normalize_collection_name
 
@@ -284,6 +285,42 @@ def test_target_word_order_is_normalized_at_the_shared_boundary():
         "target_type": "event",
         "target_name": "abc",
     }
+
+
+def test_subgroup_tag_wording_cannot_be_compiled_as_removal_or_info():
+    repaired = _repair_collection_tag_intent(
+        {
+            "capability": "collections.remove",
+            "arguments": {"collection": "abc"},
+        },
+        "tag everyone in subgroup abc",
+        object(),
+    )
+
+    assert repaired == {
+        "capability": "collections.tag",
+        "arguments": {
+            "collection": "abc",
+            "audience": {
+                "resolver": "collection_members",
+                "value": "abc",
+            },
+        },
+    }
+
+
+def test_bare_subgroup_mention_keeps_legacy_tag_semantics():
+    repaired = _repair_collection_tag_intent(
+        {
+            "capability": "collections.info",
+            "arguments": {},
+        },
+        "@abc",
+        object(),
+    )
+
+    assert repaired["capability"] == "collections.tag"
+    assert repaired["arguments"]["collection"] == "abc"
 
 
 def test_explicit_work_target_text_repairs_misplaced_model_fields():

@@ -256,7 +256,7 @@ DIRECT_CAPABILITIES = frozenset(
 # Keeping this audit next to the domain dispatcher makes a newly registered
 # direct tool fail verification instead of silently returning no result.
 _DIRECT_SPECIAL_CAPABILITIES = frozenset({
-    "collections.add", "collections.remove", "collections.delete", "collections.list", "collections.info",
+    "collections.add", "collections.remove", "collections.delete", "collections.list", "collections.info", "collections.tag",
     "labels.add", "labels.remove",
     "work.assign", "work.unassign", "work.create_event", "work.create_task",
     "work.my", "work.overview", "work.list_event_tasks",
@@ -1183,6 +1183,10 @@ def execute_direct_tool(
                 return resolve_or_create_collection(requested)
             return resolve_collection(requested) if resolve_collection is not None else None
 
+        if capability == "collections.tag":
+            return execute_collection_tag(
+                client, message, intent, members, factory, resolve_collection_name
+            )
         if capability.startswith("collections."):
             return execute_collection_mutation(
                 client, message, intent, members, factory, resolve_collection_name
@@ -1789,6 +1793,47 @@ def execute_collection_mutation(
     except ValueError as exc:
         return _failed_operation(public_error(exc, "I couldn't update that subgroup."))
     return {"collection": collection, "action": action, "members": members}
+
+
+def execute_collection_tag(
+    client,
+    message,
+    intent: dict,
+    members: list[str],
+    factory,
+    resolve_collection: Callable[[object, object], str | None],
+) -> dict | None:
+    """Mention every member of one stored subgroup without changing it."""
+    source = message.Info.MessageSource
+    chat = source.Chat
+    actor = _authorize_tool(factory, source.Sender, client, chat, "collections.tag")
+    if not actor:
+        return None
+
+    collection = resolve_collection(factory, intent.get("arguments", {}).get("collection"))
+    if not collection:
+        client.send_message(chat, "⚠️ I couldn't resolve the subgroup name.")
+        return None
+    if not members:
+        client.send_message(chat, f"📭 Subgroup @{public_text(collection, limit=80)} has no members.")
+        return None
+
+    from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
+        ContextInfo,
+        ExtendedTextMessage,
+        Message,
+    )
+
+    client.send_message(
+        chat,
+        Message(
+            extendedTextMessage=ExtendedTextMessage(
+                text=f"📢 Tagging: @{public_text(collection, limit=80)}",
+                contextInfo=ContextInfo(mentionedJID=list(members)),
+            ),
+        ),
+    )
+    return {"collection": collection, "members": list(members), "member_count": len(members)}
 
 
 def execute_label_mutation(

@@ -53,6 +53,7 @@ CAPABILITY_CONTRACTS: dict[str, CapabilityContract] = {
     "collections.delete": CapabilityContract("optional"),
     "collections.list": CapabilityContract("optional"),
     "collections.info": CapabilityContract("optional"),
+    "collections.tag": CapabilityContract("required"),
     "labels.remove": CapabilityContract("required"),
     "admin.add_user": CapabilityContract("required"),
     "admin.remove_user": CapabilityContract("required"),

@@ -477,6 +477,32 @@ def test_subgroup_domain_operation_persists_resolved_members_directly():
     })
 
 
+def test_subgroup_tag_sends_real_mentions_without_mutating_membership():
+    from features.nl_operations import execute_collection_tag
+
+    client = MagicMock()
+    message = make_group_message()
+    actor = SimpleNamespace(role="member")
+
+    with patch("db.auth.gate", return_value=actor):
+        result = execute_collection_tag(
+            client,
+            message,
+            {"capability": "collections.tag", "arguments": {"collection": "abc"}},
+            ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+            MagicMock(),
+            lambda _factory, name: name,
+        )
+
+    assert result["member_count"] == 2
+    sent = client.send_message.call_args.args[1]
+    assert sent.extendedTextMessage.text == "📢 Tagging: @abc"
+    assert list(sent.extendedTextMessage.contextInfo.mentionedJID) == [
+        "111@s.whatsapp.net",
+        "222@s.whatsapp.net",
+    ]
+
+
 def test_label_domain_operations_accept_resolved_members_directly():
     store = MagicMock()
     store.read.return_value = {}
