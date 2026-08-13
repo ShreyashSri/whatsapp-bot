@@ -106,10 +106,11 @@ def test_reminder_run_and_idempotency(db_session_factory, reminder_store, admin_
     assert res1["failed"] == 0
     mock_client.send_message.assert_called_once()
     reminder_text = mock_client.send_message.call_args[0][1]
-    assert f"`!work start event {evt['id']}`" in reminder_text
-    assert f"`!work complete event {evt['id']}`" in reminder_text
-    assert f"`!work update event {evt['id']} note <value>`" in reminder_text
-    assert "attach a note" in reminder_text
+    assert "Please reply with your current status and a short note." in reminder_text
+    assert f"I’ve started {evt['name']}" in reminder_text
+    assert f"I completed {evt['name']}" in reminder_text
+    assert "note:" in reminder_text
+    assert "!work" not in reminder_text
 
     # Verify assignment updated
     with db_session_factory() as session:
