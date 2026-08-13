@@ -132,6 +132,23 @@ def test_task_compilation_preserves_explicit_event_link():
     assert command.endswith("| event 4")
 
 
+def test_task_compilation_accepts_shared_event_target_shape():
+    command = compile_intent(
+        {
+            "capability": "work.create_task",
+            "arguments": {
+                "title": "Prepare slides",
+                "target_type": "event",
+                "target_id": 4,
+            },
+        },
+        "create task Prepare slides for event 4",
+        object(),
+        [],
+    )
+    assert command.endswith("| event 4")
+
+
 def test_on_demand_reminder_compiles_named_event_or_task_target():
     intent = {
         "capability": "reminders.send",

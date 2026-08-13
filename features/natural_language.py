@@ -1039,6 +1039,22 @@ def compile_intent(
             event_ref = arguments.get("event_id")
             if event_ref is None:
                 event_ref = arguments.get("event_name") or arguments.get("event")
+            if event_ref is None:
+                task_target = _target_arguments(arguments, text)
+                if task_target.get("target_type") == "event":
+                    event_ref = (
+                        task_target.get("target_id")
+                        or task_target.get("target_name")
+                    )
+                    if event_ref is not None and not str(event_ref).isdigit():
+                        resolved = _resolve_target_reference(
+                            factory, task_target
+                        )
+                        event_ref = (
+                            resolved.split(" ", 1)[1]
+                            if resolved and resolved.startswith("event ")
+                            else None
+                        )
             if event_ref is not None:
                 event_ref = _arg_text({"value": event_ref}, "value")
                 if not event_ref.isdigit():

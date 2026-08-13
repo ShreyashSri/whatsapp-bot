@@ -18,7 +18,7 @@ from db.event_store import EventStore
 from db.models import Assignment, Base, ProgressRevision, Task
 from db.task_store import TaskStore
 from db.work_store import WorkStore
-from features.work import register as register_work
+from features.work import _get_display_name_map, register as register_work
 
 
 @pytest.fixture
@@ -59,6 +59,26 @@ def last_reply(mock_client) -> str:
     reply = mock_client.send_message.call_args[0][1]
     text = getattr(getattr(reply, "extendedTextMessage", None), "text", None)
     return text or reply
+
+
+def test_work_name_lookup_uses_neonize_jid_objects():
+    from types import SimpleNamespace
+
+    seen = []
+
+    class Client:
+        def get_group_info(self, _chat):
+            return SimpleNamespace(Participants=[])
+
+        def get_user_info(self, *jids):
+            seen.extend(jids)
+            return []
+
+    _get_display_name_map(Client(), "120@g.us", ["919606214389@s.whatsapp.net"])
+
+    assert len(seen) == 1
+    assert getattr(seen[0], "User", "") == "919606214389"
+    assert getattr(seen[0], "Server", "") == "s.whatsapp.net"
 
 
 def test_full_work_lifecycle(db_session_factory, handler, admin_user, member_user):

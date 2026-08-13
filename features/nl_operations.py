@@ -12,7 +12,7 @@ import logging
 import re
 
 from db.auth import jid_user, normalize_group_jid, normalize_jid
-from features.work import _send
+from features.work import _neonize_jid, _send
 from features.text import public_text, public_url
 
 # Mutating capabilities use this module as their single semantic execution
@@ -127,7 +127,7 @@ def _get_display_name_map(client, chat, jids):
                 candidates.append(phone)
             for candidate in candidates:
                 try:
-                    name = _object_name(method(candidate))
+                    name = _object_name(method(_neonize_jid(candidate)))
                     if name:
                         names[jid] = name
                         break
@@ -146,7 +146,7 @@ def _get_display_name_map(client, chat, jids):
             if phone and phone not in query:
                 query.append(phone)
         try:
-            for obj in list(get_user_info(*query) or []):
+            for obj in list(get_user_info(*[_neonize_jid(jid) for jid in query]) or []):
                 returned = normalize_jid(_jid_text(getattr(obj, "JID", None)))
                 name = _object_name(obj)
                 if not name:
@@ -1597,7 +1597,22 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
                 "Optional extras: description, due date (YYYY-MM-DD), priority (low/medium/high), event name.",
             )
             return None
-        raw_event = arguments.get("event_id") if arguments.get("event_id") is not None else (arguments.get("event_name") or arguments.get("event"))
+        raw_event = (
+            arguments.get("event_id")
+            if arguments.get("event_id") is not None
+            else (arguments.get("event_name") or arguments.get("event"))
+        )
+        if raw_event is None:
+            # Models sometimes use the shared work-target shape for a task's
+            # parent. Normalize it here so the relation cannot be dropped at
+            # the creation boundary.
+            from features.natural_language import _target_arguments
+            target_arguments = _target_arguments(arguments)
+            if target_arguments.get("target_type") == "event":
+                raw_event = (
+                    target_arguments.get("target_id")
+                    or target_arguments.get("target_name")
+                )
         resolved_event_id = None
         has_event_reference = raw_event is not None and str(raw_event).strip() != ""
         if has_event_reference:

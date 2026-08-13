@@ -106,12 +106,25 @@ def _phone_for_jid(client, jid: str) -> str:
         return normalized
     if normalized.endswith("@lid"):
         try:
-            phone = normalize_jid(client.get_pn_from_lid(normalized))
+            phone = normalize_jid(client.get_pn_from_lid(_neonize_jid(normalized)))
             if phone.endswith("@s.whatsapp.net"):
                 return phone
         except Exception:
             pass
     return ""
+
+
+def _neonize_jid(jid: str):
+    """Convert a canonical string JID to the protobuf type Neonize expects."""
+    normalized = normalize_jid(jid)
+    if "@" not in normalized:
+        return normalized
+    user, server = normalized.split("@", 1)
+    try:
+        from neonize.utils import build_jid
+        return build_jid(user, server)
+    except Exception:
+        return normalized
 
 
 def _get_display_name_map(client, chat, jids) -> dict[str, str]:
@@ -170,7 +183,7 @@ def _get_display_name_map(client, chat, jids) -> dict[str, str]:
                         phone_by_jid[wanted_jid] = phone_jid
                     elif wanted_jid.endswith("@lid"):
                         try:
-                            if normalize_jid(client.get_pn_from_lid(wanted_jid)) == phone_jid:
+                            if normalize_jid(client.get_pn_from_lid(_neonize_jid(wanted_jid))) == phone_jid:
                                 phone_by_jid[wanted_jid] = phone_jid
                         except Exception:
                             pass
@@ -193,7 +206,7 @@ def _get_display_name_map(client, chat, jids) -> dict[str, str]:
                 candidates.append(phone)
             for candidate in candidates:
                 try:
-                    obj = method(candidate)
+                    obj = method(_neonize_jid(candidate))
                     name = _object_name(obj)
                     if name:
                         names[jid] = name
@@ -218,7 +231,7 @@ def _get_display_name_map(client, chat, jids) -> dict[str, str]:
             if phone and phone not in query_jids:
                 query_jids.append(phone)
         try:
-            results = get_user_info(*query_jids)
+            results = get_user_info(*[_neonize_jid(jid) for jid in query_jids])
             for obj in list(results or []):
                 returned = normalize_jid(getattr(obj, "JID", None))
                 name = _object_name(obj)
