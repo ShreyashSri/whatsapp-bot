@@ -323,6 +323,12 @@ def test_bare_subgroup_mention_keeps_legacy_tag_semantics():
     assert repaired["arguments"]["collection"] == "abc"
 
 
+def test_subgroup_tag_is_allowed_in_compound_plans():
+    from features.transaction import TRANSACTIONAL_PLAN_CAPABILITIES
+
+    assert "collections.tag" in TRANSACTIONAL_PLAN_CAPABILITIES
+
+
 def test_explicit_work_target_text_repairs_misplaced_model_fields():
     assert _target_arguments(
         {"target_type": "task", "target_name": "8"},
