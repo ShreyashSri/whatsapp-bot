@@ -32,6 +32,26 @@ def claim_message(session_factory: Callable[[], Session], message_id: str, actor
         return False
 
 
+def release_message(session_factory: Callable[[], Session], message_id: str, chat_jid: str) -> None:
+    """Release a claimed message ID so it can be retried.
+
+    ``claim_message`` marks a message processed before dispatch runs, so an
+    unhandled exception during dispatch (a transient DB/API failure, not a
+    user-facing error the handler already reported) would otherwise leave the
+    message permanently marked done and it would never be retried even if
+    WhatsApp redelivers the same message ID.
+    """
+    message_id = str(message_id or "").strip()
+    chat_jid = normalize_jid(chat_jid)
+    if not message_id or not chat_jid:
+        return
+    with session_factory.begin() as session:
+        session.query(ProcessedMessage).filter(
+            ProcessedMessage.message_id == message_id,
+            ProcessedMessage.chat_jid == chat_jid,
+        ).delete()
+
+
 def record_undo(session_factory: Callable[[], Session], actor_jid: str, operation: str, payload: dict) -> None:
     """Append one reversible action; undo always selects the latest one."""
     with session_factory.begin() as session:

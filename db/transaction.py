@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import copy_context
 
 
 class TransactionDeliveryError(RuntimeError):
@@ -64,7 +65,7 @@ class TransactionClient:
 
     def __init__(self, client):
         self._client = client
-        self._messages: list[tuple[tuple, dict]] = []
+        self._messages: list[tuple[tuple, dict, object]] = []
 
     def __getattr__(self, name):
         if name != "send_message":
@@ -72,16 +73,16 @@ class TransactionClient:
         return self.send_message
 
     def send_message(self, *args, **kwargs):
-        self._messages.append((args, kwargs))
+        self._messages.append((args, kwargs, copy_context()))
         return None
 
     def flush_messages(self) -> None:
         pending = self._messages
         self._messages = []
         failures: list[BaseException] = []
-        for args, kwargs in pending:
+        for args, kwargs, context in pending:
             try:
-                self._client.send_message(*args, **kwargs)
+                context.run(self._client.send_message, *args, **kwargs)
             except Exception as exc:
                 failures.append(exc)
         if failures:

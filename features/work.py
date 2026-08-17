@@ -35,6 +35,31 @@ def _mark_transaction_failed(session_factory) -> None:
         marker()
 
 
+def _sync_task_lifecycle_or_revert(
+    factory, store: WorkStore, reference: str, result: dict, task_id: int, task_status: str
+) -> None:
+    """Propagate an assignment status change to task lifecycle atomically.
+
+    ``WorkStore.set_status`` and ``TaskStore.update`` commit in separate
+    transactions against separate tables, so a failure in the second call
+    (e.g. a bad status transition, a transient DB error) previously left the
+    assignment reporting the new status while the task lifecycle silently
+    stayed on the old one. Revert the assignment write on failure so the two
+    stay consistent and the caller's error message reflects reality.
+    """
+    try:
+        TaskStore(factory).update(task_id, status=task_status, force_status=True)
+    except Exception:
+        try:
+            store.set_status(reference, result["previous_status"], "system@s.whatsapp.net", admin=True)
+        except Exception:
+            log.exception(
+                "failed to revert assignment status for task %s after task lifecycle sync failed",
+                task_id,
+            )
+        raise
+
+
 def _format(row: dict, display_names: dict[str, str] | None = None) -> str:
     typ = row["target_type"]
     ident = row.get("event_id") if typ == "event" else row.get("task_id")
@@ -363,7 +388,13 @@ def _assign_targets(client, chat, message, remainder: str, inline_jid: str | Non
     candidates = []
     if inline_jid:
         candidates.append(inline_jid)
-    candidates.extend(_get_mentioned_jids(message))
+    message_attrs = vars(message) if hasattr(message, "__dict__") else {}
+    runtime_mentions = message_attrs.get("_pbbot_runtime_mentions")
+    candidates.extend(
+        runtime_mentions
+        if runtime_mentions is not None
+        else _get_mentioned_jids(message)
+    )
     subgroups = SubgroupStore(factory).read()
     for name in re.findall(r"@([A-Za-z0-9_-]{2,32})", remainder or ""):
         candidates.extend(subgroups.get(name.lower(), []))
@@ -384,16 +415,32 @@ def _reference(typ: str, ident: int, jid: str | None, sender: str, *, use_sender
     return f"{typ} {ident}" + (f" @{target_jid}" if target_jid else "")
 
 
-def _resolve_admin_target(store: WorkStore, typ: str, ident: int, jid: str | None) -> str | None:
-    """Resolve an admin's target without silently choosing a user."""
+def _resolve_admin_target(
+    store: WorkStore, typ: str, ident: int, jid: str | None, sender: str | None = None
+) -> str | None:
+    """Resolve an admin's target without silently choosing a user.
+
+    An admin who is themselves one of several assignees and named no
+    explicit target is not actually ambiguous -- "update task 5" from an
+    admin who is one of task 5's assignees means their own assignment,
+    the same as it would for a non-admin. Only fall back to asking for an
+    explicit mention when the sender isn't among the assignees at all.
+    """
     if jid:
         return jid
     rows = store.overview(admin=True, target_type=typ, target_id=ident)
     if not rows:
         return None
-    if len(rows) > 1:
-        raise ValueError(f"mention the target user for {typ} {ident}; multiple users are assigned")
-    return rows[0]["user_jid"]
+    if len(rows) == 1:
+        return rows[0]["user_jid"]
+    if sender:
+        sender_user = jid_user(normalize_jid(sender))
+        own_row = next(
+            (row for row in rows if jid_user(row["user_jid"]) == sender_user), None
+        )
+        if own_row:
+            return own_row["user_jid"]
+    raise ValueError(f"mention the target user for {typ} {ident}; multiple users are assigned")
 
 
 def _send(client, chat, text: str, mention_jids: list[str] | None = None) -> None:
@@ -891,7 +938,19 @@ def _handle_work_subcommand(
 
         if action == "history":
             if is_admin:
-                target_jid = _resolve_admin_target(store, typ, ident, target_jid)
+                target_jid = _resolve_admin_target(store, typ, ident, target_jid, sender)
+                if target_jid is None and typ == "event":
+                    # Assignments live on an event's tasks, never on the event
+                    # itself, so an event never has its own history row to
+                    # resolve -- point at the cohort-wide view instead of
+                    # falling through to a confusing "not found" error.
+                    _send(
+                        client, chat,
+                        f"ℹ️ An event doesn't have its own history — assignments live on its tasks. "
+                        f"Try `!reports progress event {ident}` to see everyone's status, "
+                        f"or `!work history task <id>` for one task.",
+                    )
+                    return True
             history = store.history(
                 _reference(typ, ident, target_jid, sender, use_sender=not is_admin),
                 sender,
@@ -911,7 +970,7 @@ def _handle_work_subcommand(
 
         if action == "update":
             if is_admin:
-                target_jid = _resolve_admin_target(store, typ, ident, target_jid)
+                target_jid = _resolve_admin_target(store, typ, ident, target_jid, sender)
             if next_index >= len(tokens) or not tokens[next_index].strip():
                 raise ValueError("usage: !work update event <id> <field> <value>")
             field = tokens[next_index]
@@ -938,7 +997,7 @@ def _handle_work_subcommand(
             status = tokens[next_index].lower() if action == "set-status" else status
             if action == "status":
                 if is_admin:
-                    target_jid = _resolve_admin_target(store, typ, ident, target_jid)
+                    target_jid = _resolve_admin_target(store, typ, ident, target_jid, sender)
                 rows = store.overview(user_jid=None if is_admin else sender, admin=is_admin,
                                       target_type=typ, target_id=ident, assignee_jid=target_jid)
                 if not rows and is_admin:
@@ -959,44 +1018,34 @@ def _handle_work_subcommand(
                 return True
         if action in ("complete", "start") and status:
             if is_admin and action in ("complete", "start"):
-                target_jid = _resolve_admin_target(store, typ, ident, target_jid)
+                target_jid = _resolve_admin_target(store, typ, ident, target_jid, sender)
             if is_admin and typ == "task" and target_jid is None:
                 return _set_unassigned_task_lifecycle(ident, status)
-            result = store.set_status(
-                _reference(typ, ident, target_jid, sender, use_sender=not is_admin),
-                status,
-                sender,
-                admin=is_admin,
-            )
+            reference = _reference(typ, ident, target_jid, sender, use_sender=not is_admin)
+            result = store.set_status(reference, status, sender, admin=is_admin)
+            if action == "complete" and typ == "task":
+                _sync_task_lifecycle_or_revert(factory, store, reference, result, ident, "done")
+            elif action == "start" and typ == "task":
+                _sync_task_lifecycle_or_revert(factory, store, reference, result, ident, "in_progress")
             audit(factory, actor, f"{typ}.status", "whatsapp", {"target_id": ident, "status": result["status"]})
             from db.nl_state import record_undo
             record_undo(factory, sender, "barrier", {})
-            if action == "complete" and typ == "task":
-                TaskStore(factory).update(ident, status="done", force_status=True)
-            elif action == "start" and typ == "task":
-                TaskStore(factory).update(ident, status="in_progress", force_status=True)
             _send(client, chat, f"✅ `{typ} {ident}` marked `{result['status']}`.")
             return True
         if action == "set-status" and status:
             if is_admin:
-                target_jid = _resolve_admin_target(store, typ, ident, target_jid)
+                target_jid = _resolve_admin_target(store, typ, ident, target_jid, sender)
             if is_admin and typ == "task" and target_jid is None:
                 return _set_unassigned_task_lifecycle(ident, status)
-            result = store.set_status(
-                _reference(typ, ident, target_jid, sender, use_sender=not is_admin),
-                status,
-                sender,
-                admin=is_admin,
-            )
+            reference = _reference(typ, ident, target_jid, sender, use_sender=not is_admin)
+            result = store.set_status(reference, status, sender, admin=is_admin)
+            if typ == "task":
+                _sync_task_lifecycle_or_revert(
+                    factory, store, reference, result, ident, normalize_task_status(status),
+                )
             audit(factory, actor, f"{typ}.status", "whatsapp", {"target_id": ident, "status": result["status"]})
             from db.nl_state import record_undo
             record_undo(factory, sender, "barrier", {})
-            if typ == "task":
-                TaskStore(factory).update(
-                    ident,
-                    status=normalize_task_status(status),
-                    force_status=True,
-                )
             _send(client, chat, f"✅ `{typ} {ident}` set to `{result['status']}`.")
             return True
     except Exception as exc:

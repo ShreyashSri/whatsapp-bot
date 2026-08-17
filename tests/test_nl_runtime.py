@@ -11,6 +11,7 @@ from db.models import Base, Event, Task
 from features.natural_language import MistralCommandTranslator, register
 from features.nl_runtime import (
     TargetResolution,
+    mention_indices_expression,
     resolve_target,
     target_is_required_and_missing,
     validate_mutation_policy,
@@ -146,6 +147,86 @@ def test_explicit_mention_indices_select_only_the_requested_people():
         ["111@s.whatsapp.net", "222@s.whatsapp.net"],
     )
     assert result.members == ("222@s.whatsapp.net",)
+
+
+def test_mention_indices_expression_prefers_nested_over_top_level():
+    assert mention_indices_expression(
+        {"audience": {"resolver": "explicit_mentions", "mention_indices": [1]}, "mention_indices": [0]}
+    ) == [1]
+    assert mention_indices_expression(
+        {"audience": {"resolver": "explicit_mentions"}, "mention_indices": [0]}
+    ) == [0]
+    assert mention_indices_expression({"audience": {"resolver": "explicit_mentions"}}) is None
+    assert mention_indices_expression({}) is None
+
+
+def test_mention_indices_nested_in_audience_select_only_the_requested_people():
+    """Real Mistral responses nest mention_indices inside audience, not as a
+    top-level sibling. The runtime must honor that placement instead of
+    silently falling back to "every visible mention" because it only looked
+    at the top level."""
+    message = make_group_message()
+    result = resolve_target(
+        MagicMock(),
+        message,
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "audience": {"resolver": "explicit_mentions", "mention_indices": [1]},
+            },
+        },
+        set(),
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+    )
+    assert result.members == ("222@s.whatsapp.net",)
+
+
+def test_nested_audience_mention_indices_take_precedence_over_top_level():
+    """When both locations are somehow present, the nested (canonical) one wins."""
+    message = make_group_message()
+    result = resolve_target(
+        MagicMock(),
+        message,
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "audience": {"resolver": "explicit_mentions", "mention_indices": [1]},
+                "mention_indices": [0],
+            },
+        },
+        set(),
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+    )
+    assert result.members == ("222@s.whatsapp.net",)
+
+
+def test_target_dict_with_resolver_key_is_never_read_as_audience():
+    """``target`` is reserved for work-item identity (task/event); a
+    resolver-shaped object nested under that key must not be treated as an
+    audience source -- that dual meaning was itself a source of drift."""
+    result = resolve_target(
+        MagicMock(),
+        make_group_message(),
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "target": {"resolver": "explicit_mentions"},
+            },
+        },
+        set(),
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net"],
+    )
+    assert result.members == ()
+    assert result.error == ""
 
 
 def test_unavailable_explicit_mention_index_fails_closed():
@@ -475,6 +556,66 @@ def test_subgroup_domain_operation_persists_resolved_members_directly():
     store.write.assert_called_once_with({
         "everyone": ["111@s.whatsapp.net", "222@s.whatsapp.net"],
     })
+
+
+def test_create_task_assigns_mentioned_people_atomically_at_creation():
+    """"create a task to write the blog post, assign it to @Alice" must
+    actually assign Alice, not silently create an unassigned task -- the
+    audience the model attaches to a work.create_task intent has to flow
+    through to TaskStore.create, not be dropped for lack of wiring."""
+    from features.nl_operations import execute_work_creation
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+    bob = upsert_user(factory, "bob@s.whatsapp.net", role="member")
+    carol = upsert_user(factory, "carol@s.whatsapp.net", role="member")
+
+    client = MagicMock()
+    message = make_group_message(admin.jid)
+    intent = {
+        "capability": "work.create_task",
+        "arguments": {
+            "title": "Review the design",
+            "audience": {"resolver": "explicit_mentions", "mention_indices": [0, 1]},
+        },
+    }
+
+    result = execute_work_creation(
+        client, message, intent, factory, [bob.jid, carol.jid]
+    )
+
+    assert result is not None
+    task_id = result["task_id"]
+    from db.work_store import WorkStore
+    rows = WorkStore(factory).overview(target_type="task", target_id=task_id, admin=True)
+    assert {row["user_jid"] for row in rows} == {bob.jid, carol.jid}
+
+
+def test_create_task_without_a_named_assignee_stays_unassigned():
+    from features.nl_operations import execute_work_creation
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+
+    client = MagicMock()
+    message = make_group_message(admin.jid)
+    intent = {
+        "capability": "work.create_task",
+        "arguments": {"title": "Fix login bug", "priority": "high"},
+    }
+
+    result = execute_work_creation(client, message, intent, factory, [])
+
+    assert result is not None
+    from db.work_store import WorkStore
+    rows = WorkStore(factory).overview(
+        target_type="task", target_id=result["task_id"], admin=True
+    )
+    assert rows == []
 
 
 def test_subgroup_tag_sends_real_mentions_without_mutating_membership():

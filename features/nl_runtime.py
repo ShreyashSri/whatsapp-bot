@@ -241,7 +241,7 @@ def validate_mutation_policy(intent: dict, text: str, members: list[str] | None 
             return "work.unassign requires argument target"
         audience_declared = any(
             arguments.get(key) is not None
-            for key in ("audience", "target_scope", "target_collection", "mention_indices", "collections")
+            for key in ("audience", "mention_indices")
         )
         if audience_declared and not members:
             return "work.unassign requires argument audience"
@@ -268,32 +268,45 @@ def _normalize_collection_value(value: object) -> object:
 
 
 def target_expression(arguments: dict) -> tuple[str, object]:
-    """Return the canonical (resolver, value) target expression."""
+    """Return the canonical (resolver, value) target expression.
+
+    ``arguments["audience"]`` is the only shape a request's "who" is ever
+    read from. ``arguments["target"]`` is reserved exclusively for work-item
+    identity (task/event) -- see validate_intent's typed work-target
+    handling -- and is never read as an audience source here, even if it
+    happens to contain a resolver-shaped key. There is intentionally no
+    fallback to any other shape: intents are generated fresh per message
+    and never stored or replayed, nothing in the codebase constructs an
+    alternate shape, and the prompt does not instruct the model to either --
+    keeping one "for compatibility" would only leave a second, untested way
+    to say the same thing.
+    """
     audience = arguments.get("audience")
-    if isinstance(audience, dict):
-        resolver = audience.get("resolver") or audience.get("kind") or ""
-        value = audience.get("value") or audience.get("name") or audience.get("collection") or ""
-        return str(resolver), _normalize_collection_value(value)
+    if not isinstance(audience, dict):
+        return "", ""
+    resolver = audience.get("resolver") or audience.get("kind") or ""
+    if not resolver:
+        return "", ""
+    value = audience.get("value") or audience.get("name") or audience.get("collection") or ""
+    return str(resolver), _normalize_collection_value(value)
 
-    # Transitional compatibility for early structured responses. Do not
-    # interpret a work item string in arguments["target"] as an audience.
-    target = arguments.get("target")
-    if isinstance(target, dict):
-        resolver = target.get("resolver") or target.get("kind") or ""
-        value = target.get("value") or target.get("name") or target.get("collection") or ""
-        return str(resolver), _normalize_collection_value(value)
 
-    resolver = arguments.get("target_scope") or ""
-    value = arguments.get("target_collection") or ""
-    if resolver:
-        return str(resolver), _normalize_collection_value(value)
+def mention_indices_expression(arguments: dict) -> object:
+    """Return ``mention_indices`` from wherever the model placed it.
 
-    for key in ("collections", "labels"):
-        val = arguments.get(key)
-        if val:
-            return "collection_members", _normalize_collection_value(val)
-
-    return "", ""
+    ``mention_indices`` only makes sense paired with an ``explicit_mentions``
+    audience, so its natural position is nested inside ``arguments["audience"]``
+    -- and real model responses do nest it there. Earlier plans placed it as
+    a sibling of ``audience`` at the top level instead. Checking only one of
+    the two locations silently drops the model's requested subset and falls
+    back to "every visible mention" whenever it chose the other -- this is
+    the single place that decides between them, so every caller sees the
+    same answer regardless of which shape the model produced.
+    """
+    audience = arguments.get("audience")
+    if isinstance(audience, dict) and audience.get("mention_indices") is not None:
+        return audience.get("mention_indices")
+    return arguments.get("mention_indices")
 
 
 def target_is_declared(arguments: dict, visible_mentions: list[str]) -> bool:
@@ -302,7 +315,7 @@ def target_is_declared(arguments: dict, visible_mentions: list[str]) -> bool:
         return bool(visible_mentions)
     if resolver:
         return True
-    return bool(arguments.get("mention_indices") and visible_mentions)
+    return bool(mention_indices_expression(arguments) and visible_mentions)
 
 
 def target_is_required_and_missing(
@@ -354,8 +367,9 @@ def resolve_target(
     """Resolve a declared semantic audience to concrete JIDs."""
     arguments = intent.get("arguments", {})
     resolver, value = target_expression(arguments)
+    mention_indices = mention_indices_expression(arguments)
 
-    if not resolver and arguments.get("mention_indices") and visible_mentions:
+    if not resolver and mention_indices and visible_mentions:
         resolver = "explicit_mentions"
     if not resolver:
         return TargetResolution()
@@ -364,7 +378,6 @@ def resolve_target(
 
     try:
         if resolver == "explicit_mentions":
-            mention_indices = arguments.get("mention_indices")
             if mention_indices is None:
                 members = visible_mentions or []
             else:
@@ -383,18 +396,17 @@ def resolve_target(
         elif resolver == "collection_members":
             if factory is None or not value:
                 return TargetResolution(error="The referenced member collection is missing.")
-            # Guard: if value is still a list after target_expression normalization
-            # (e.g. multi-element list from model), unwrap or join into a single string.
+            # Keep a list as a list. Joining two collection names into one
+            # fuzzy query can select an unrelated subgroup or fail with an
+            # opaque error; the resolver callback can resolve each name and
+            # fail closed if any one is ambiguous.
             lookup_value: object = value
-            if isinstance(lookup_value, list):
-                lookup_value = " ".join(
-                    str(v).strip().lstrip("@") for v in lookup_value if v
-                ) or value
             resolved_names = resolve_collection(lookup_value)
             if isinstance(resolved_names, str):
                 resolved_names = [resolved_names]
             if not resolved_names:
-                return TargetResolution(error=f"Subgroup '{lookup_value}' not found. Use `!list-subgroups` to see available subgroups.")
+                label = ", ".join(str(item) for item in lookup_value) if isinstance(lookup_value, list) else str(lookup_value)
+                return TargetResolution(error=f"Subgroup '{label}' not found or is ambiguous. Use `!list-subgroups` to see available subgroups.")
             collections = SubgroupStore(factory).read()
             members = [
                 member
@@ -426,7 +438,14 @@ def resolve_target(
     except Exception:
         return TargetResolution(error="I couldn't resolve that audience from runtime data.")
 
-    active_self_jids = self_jids
+    # A bot can be an explicit assignee, but it must never re-enter broad
+    # audience resolvers such as current_chat_members or collection_members.
+    active_self_jids = (
+        set()
+        if intent.get("capability") in {"work.assign", "work.unassign"}
+        and resolver == "explicit_mentions"
+        else self_jids
+    )
     deduped = _dedupe_members(members, active_self_jids)
     if not deduped:
         return TargetResolution(

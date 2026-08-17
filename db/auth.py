@@ -44,6 +44,76 @@ def jid_user(value) -> str:
     return normalize_jid(value).split("@", 1)[0]
 
 
+def canonical_jid(value) -> str:
+    """Resolve *value* to its canonical phone JID when a LID alias is known.
+
+    ``db.work_store._JID_ALIASES`` is the single registry mapping a WhatsApp
+    LID to the phone JID it was bridged to. Every place in the codebase that
+    needs to know "which JID is this person's real identity" should go
+    through here instead of re-deriving its own view of the alias table --
+    that duplication (four independent readers of the same cache, each with
+    a slightly different fallback) is what let LID and phone rows drift
+    apart. Values with no known alias, including plain phone JIDs, pass
+    through unchanged.
+    """
+    normalized = normalize_jid(value)
+    if not normalized:
+        return normalized
+    from .work_store import _JID_ALIASES
+
+    wanted = jid_user(normalized)
+    canonical = _JID_ALIASES.get(wanted)
+    if canonical and canonical != wanted:
+        return normalize_jid(canonical)
+    return normalized
+
+
+def known_lid_for(value) -> str:
+    """Return a known LID for *value*'s phone JID, if the alias table has one.
+
+    The reverse of :func:`canonical_jid`: used where WhatsApp needs the LID
+    form (e.g. native @mentions) rather than the canonical phone identity.
+    """
+    normalized = normalize_jid(value)
+    if not normalized:
+        return normalized
+    from .work_store import _JID_ALIASES
+
+    wanted = jid_user(normalized)
+    # Snapshot before iterating: _JID_ALIASES is a plain dict mutated from
+    # several background threads (LID reconciliation, per-message alias
+    # discovery). Iterating it directly races with those writers and can
+    # raise "dictionary changed size during iteration".
+    for lid_user, phone_user in list(_JID_ALIASES.items()):
+        if phone_user == wanted:
+            return normalize_jid(f"{lid_user}@lid")
+    return normalized
+
+
+def alias_user_parts(value) -> set[str]:
+    """Return every jid_user() form known to refer to the same identity.
+
+    Includes *value*'s own user-part, its canonical phone counterpart (if
+    *value* is a LID with a known alias), and any LID known to alias to it
+    (if *value* is a phone JID). This is the one place that expands a JID
+    across the alias table in both directions -- callers that need to match
+    assignment/user rows regardless of which JID form they were stored under
+    should use this instead of re-deriving their own forward/reverse walk of
+    ``_JID_ALIASES``.
+    """
+    normalized = normalize_jid(value)
+    if not normalized:
+        return set()
+    parts = {jid_user(normalized)}
+    canonical = canonical_jid(normalized)
+    if canonical != normalized:
+        parts.add(jid_user(canonical))
+    lid = known_lid_for(normalized)
+    if lid != normalized:
+        parts.add(jid_user(lid))
+    return parts
+
+
 def current_user(session_factory: Callable, jid) -> User | None:
     with session_factory() as session:
         normalized = normalize_jid(jid)
@@ -52,11 +122,9 @@ def current_user(session_factory: Callable, jid) -> User | None:
         # Prefer the canonical phone account when the inbound JID is a LID.
         # Otherwise a newly auto-created LID row can shadow the user's real
         # role and authorization state.
-        from .work_store import _JID_ALIASES
-
-        canonical = _JID_ALIASES.get(wanted)
-        if canonical:
-            user = session.get(User, normalize_jid(canonical))
+        canonical = canonical_jid(normalized)
+        if canonical != normalized:
+            user = session.get(User, canonical)
             if user is not None:
                 return user
 

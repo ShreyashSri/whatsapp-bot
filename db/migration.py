@@ -133,6 +133,35 @@ def upgrade_unified_schema(database) -> None:
         for statement in statements:
             connection.execute(text(statement))
         if engine.dialect.name == "postgresql":
+            # Assignment deletion is a valid unassign operation.  Historical
+            # progress/reminder rows are append-only and must be detached,
+            # rather than blocking the delete or being silently discarded.
+            connection.execute(text(
+                "ALTER TABLE progress_revisions "
+                "ALTER COLUMN assignment_id DROP NOT NULL"
+            ))
+            connection.execute(text(
+                "ALTER TABLE progress_revisions "
+                "DROP CONSTRAINT IF EXISTS progress_revisions_assignment_id_fkey"
+            ))
+            connection.execute(text(
+                "ALTER TABLE progress_revisions ADD CONSTRAINT "
+                "progress_revisions_assignment_id_fkey FOREIGN KEY (assignment_id) "
+                "REFERENCES assignments(id) ON DELETE SET NULL"
+            ))
+            connection.execute(text(
+                "ALTER TABLE reminder_logs "
+                "ALTER COLUMN assignment_id DROP NOT NULL"
+            ))
+            connection.execute(text(
+                "ALTER TABLE reminder_logs "
+                "DROP CONSTRAINT IF EXISTS reminder_logs_assignment_id_fkey"
+            ))
+            connection.execute(text(
+                "ALTER TABLE reminder_logs ADD CONSTRAINT "
+                "reminder_logs_assignment_id_fkey FOREIGN KEY (assignment_id) "
+                "REFERENCES assignments(id) ON DELETE SET NULL"
+            ))
             connection.execute(text("ALTER TABLE assignments ALTER COLUMN event_id DROP NOT NULL"))
             connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_task_user ON assignments(task_id, user_jid) WHERE task_id IS NOT NULL"))
             connection.execute(text("ALTER TABLE assignments DROP CONSTRAINT IF EXISTS ck_assignment_one_target"))

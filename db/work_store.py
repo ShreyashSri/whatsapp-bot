@@ -11,7 +11,7 @@ from typing import Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .auth import jid_user, normalize_jid
+from .auth import alias_user_parts, canonical_jid, jid_user, normalize_jid
 from .models import Assignment, Event, ProgressRevision, Task, User
 from .schema_store import validate_submission
 
@@ -97,11 +97,7 @@ class WorkStore:
 
     @staticmethod
     def _same_identity(left: str, right: str) -> bool:
-        left_user = jid_user(left)
-        right_user = jid_user(right)
-        if left_user == right_user:
-            return True
-        return _JID_ALIASES.get(left_user) == right_user or _JID_ALIASES.get(right_user) == left_user
+        return jid_user(canonical_jid(left)) == jid_user(canonical_jid(right))
 
     @staticmethod
     def _require_assignment_access(
@@ -117,7 +113,9 @@ class WorkStore:
 
     @staticmethod
     def _ensure_user(session: Session, jid: str) -> str:
-        wanted = normalize_jid(jid)
+        # Route a LID with a known phone alias to the canonical user instead
+        # of silently minting a second, phantom User row for the same person.
+        wanted = canonical_jid(jid)
         if not wanted:
             raise ValueError("assignee must be a valid user")
         user = session.get(User, wanted)
@@ -350,13 +348,20 @@ class WorkStore:
             now = self._now()
             old = session.scalar(select(ProgressRevision).where(ProgressRevision.assignment_id == row.id,
                                                                   ProgressRevision.field == "status").order_by(ProgressRevision.id.desc()))
+            previous_status = row.status
             row.status, row.last_update_at = status, now
             row.missed_count = 0
             row.reminder_state = None
             session.add(ProgressRevision(assignment_id=row.id, field="status", value=status,
                                          author_jid=normalize_jid(author_jid), timestamp=now,
                                          superseded_revision_id=old.id if old else None))
-            return self._row(row)
+            result = self._row(row)
+            # Exposed so callers that must also update a second, non-transactional
+            # store (e.g. task lifecycle) can revert this write if that second
+            # step fails, instead of leaving assignment progress and task
+            # lifecycle permanently disagreeing.
+            result["previous_status"] = previous_status
+            return result
 
     @staticmethod
     def _resolve_in(session: Session, reference: str) -> Assignment:
@@ -368,8 +373,16 @@ class WorkStore:
             if not match:
                 raise ValueError(f"Assignment '{reference}' not found.")
             typ, ident, jid = match.groups()
-            rows = WorkStore._assignment(session, typ.lower(), int(ident), jid)
-            row = rows if jid else (rows or [None])[0]
+            if jid:
+                row = WorkStore._assignment(session, typ.lower(), int(ident), jid)
+            else:
+                rows = WorkStore._assignment(session, typ.lower(), int(ident))
+                if len(rows) > 1:
+                    raise ValueError(
+                        f"{typ.lower()} {ident} has multiple assignees; mention the specific "
+                        f"user (e.g. '{typ.lower()}:{ident}@<jid>') instead of the bare reference."
+                    )
+                row = rows[0] if rows else None
         if row is None:
             raise ValueError(f"Assignment '{reference}' not found.")
         return row
@@ -476,17 +489,7 @@ class WorkStore:
         # Build the full set of jid_user() values we'll accept.
         wanted_users: set[str] = set()
         for raw in filter(None, [user_jid, assignee_jid, *(also_jids or [])]):
-            u = jid_user(normalize_jid(raw))
-            if not u:
-                continue
-            wanted_users.add(u)
-            # Expand via the alias registry: LID user-part -> phone user-part.
-            if u in _JID_ALIASES:
-                wanted_users.add(_JID_ALIASES[u])
-            # Reverse lookup: phone user-part -> LID user-part.
-            for lid_u, pn_u in _JID_ALIASES.items():
-                if pn_u == u:
-                    wanted_users.add(lid_u)
+            wanted_users.update(alias_user_parts(raw))
 
         with self.session_factory() as session:
             rows = session.scalars(select(Assignment).order_by(Assignment.id)).all()

@@ -156,35 +156,75 @@ def _reply(client: "NewClient", chat_jid, text: str) -> None:
 # JID Resolution Helpers
 # ---------------------------------------------------------------------------
 
+def _jid_text(value) -> str:
+    """Serialize a Neonize JID without leaking protobuf reprs downstream."""
+    if value is None:
+        return ""
+    user = getattr(value, "User", None)
+    server = getattr(value, "Server", None)
+    if isinstance(user, str) and isinstance(server, str) and user and server:
+        return f"{user}@{server}"
+    raw = str(value or "")
+    return raw if "@" in raw else ""
+
 def _resolve_lid_to_pn(client: "NewClient", jid: str) -> str:
-    """Convert a WhatsApp LID to a Phone JID."""
+    """Convert a WhatsApp LID to a phone JID using the canonical alias cache, then Neonize."""
     normalized = normalize_jid(jid)
     if not normalized or not normalized.endswith("@lid"):
         return normalized
     try:
-        from db.work_store import _JID_ALIASES
-        from db.auth import jid_user
-        user_part = jid_user(normalized)
-        if user_part in _JID_ALIASES:
-            return f"{_JID_ALIASES[user_part]}@s.whatsapp.net"
+        from db.auth import canonical_jid
+        cached = canonical_jid(normalized)
+        if cached != normalized and cached.endswith("@s.whatsapp.net"):
+            return cached
     except Exception:
         pass
+    resolver = getattr(client, "get_pn_from_lid", None)
+    if callable(resolver):
+        try:
+            user_part, server = normalized.split("@", 1)
+            from neonize.utils import build_jid
+
+            phone = normalize_jid(_jid_text(resolver(build_jid(user_part, server))))
+            if phone.endswith("@s.whatsapp.net"):
+                try:
+                    from db.work_store import _JID_ALIASES
+                    _JID_ALIASES[user_part] = jid_user(phone)
+                except Exception:
+                    pass
+                return phone
+        except Exception:
+            log.debug("Could not resolve LID %s through Neonize", normalized, exc_info=True)
     return normalized
 
 def _resolve_pn_to_lid(client: "NewClient", jid: str) -> str:
-    """Convert a WhatsApp Phone JID to an LID."""
+    """Convert a WhatsApp phone JID to a LID using the canonical alias cache, then Neonize."""
     normalized = normalize_jid(jid)
     if not normalized or not normalized.endswith("@s.whatsapp.net"):
         return normalized
     try:
-        from db.work_store import _JID_ALIASES
-        from db.auth import jid_user
-        user_part = jid_user(normalized)
-        for lid_u, phone_u in _JID_ALIASES.items():
-            if phone_u == user_part:
-                return f"{lid_u}@lid"
+        from db.auth import known_lid_for
+        cached = known_lid_for(normalized)
+        if cached != normalized and cached.endswith("@lid"):
+            return cached
     except Exception:
         pass
+    resolver = getattr(client, "get_lid_from_pn", None)
+    if callable(resolver):
+        try:
+            user_part, server = normalized.split("@", 1)
+            from neonize.utils import build_jid
+
+            lid = normalize_jid(_jid_text(resolver(build_jid(user_part, server))))
+            if lid.endswith("@lid"):
+                try:
+                    from db.work_store import _JID_ALIASES
+                    _JID_ALIASES[jid_user(lid)] = user_part
+                except Exception:
+                    pass
+                return lid
+        except Exception:
+            log.debug("Could not reverse-resolve phone %s through Neonize", normalized, exc_info=True)
     return normalized
 
 # ---------------------------------------------------------------------------
@@ -387,24 +427,16 @@ def _cmd_subgroup_info(client, chat_jid, name_raw: str, store: SubgroupStore) ->
         return
 
     members = subgroups[name]
-    # Build @mentions so members render as tagged contacts (with names)
-    mention_parts = [
-        f"@{('member' if normalize_jid(jid).endswith('@lid') else jid_user(jid))}"
-        for jid in members
-    ]
+    # Build @mentions so members render as tagged contacts (with names).
+    # Real display names/phone numbers are resolved at send time (below),
+    # since @lid JIDs have no safe fallback text of their own.
+    mention_parts = [f"@{jid_user(jid)}" for jid in members]
     text = f"*@{public_text(name, limit=80)}* — {len(members)} member(s)\n\n" + "\n".join(f"  • {m}" for m in mention_parts)
 
-    # Send as protobuf so mentionedJID makes WhatsApp resolve names
-    proto_msg = Message(
-        extendedTextMessage=ExtendedTextMessage(
-            text=text,
-            contextInfo=ContextInfo(
-                mentionedJID=list(members),
-            ),
-        ),
-    )
+    from features.work import _send
+
     try:
-        client.send_message(chat_jid, proto_msg)
+        _send(client, chat_jid, text, mention_jids=list(members))
     except Exception as exc:
         log.error("Failed to send subgroup info: %s", exc)
 

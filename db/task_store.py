@@ -90,8 +90,8 @@ class TaskStore:
     def create(
         self, title: str, created_by_jid: str, *,
         description: str | None = None, event_id: int | None = None,
-        assignee_jid: str | None = None, due_date: datetime | None = None,
-        priority: str = "medium",
+        assignee_jid: str | None = None, assignee_jids: list[str] | None = None,
+        due_date: datetime | None = None, priority: str = "medium",
     ) -> Task:
         if not title.strip():
             raise ValueError("title cannot be empty")
@@ -99,24 +99,33 @@ class TaskStore:
             raise ValueError(f"priority must be one of {VALID_PRIORITIES}")
         now = self._now()
         created_by_jid = normalize_jid(created_by_jid)
-        assignee_jid = normalize_jid(assignee_jid) if assignee_jid else None
-        if event_id is not None:
-            with self._sf() as session:
-                event = session.get(Event, event_id)
-                if event is None or event.deleted_at is not None:
-                    raise ValueError(f"event #{event_id} not found")
+        # assignee_jid is the legacy single-person shape; assignee_jids
+        # supports creating a task already assigned to several people in one
+        # atomic step (e.g. "create task X, assign it to @Alice and @Bob").
+        assignees = list(dict.fromkeys(
+            normalize_jid(jid)
+            for jid in ([assignee_jid] if assignee_jid else []) + list(assignee_jids or [])
+            if jid
+        ))
         task = Task(
             title=title.strip(), description=description, event_id=event_id,
             assignee_jid=None, status="todo", priority=priority,
             due_date=due_date, created_by_jid=created_by_jid,
             created_at=now, updated_at=now,
         )
-        with self._sf() as session:
+        # Create the task and its initial assignment(s) in one transaction so
+        # a failure partway through can never leave an orphaned, unassigned
+        # task or a task assigned to only some of the requested people.
+        with self._sf.begin() as session:
+            if event_id is not None:
+                event = session.get(Event, event_id)
+                if event is None or event.deleted_at is not None:
+                    raise ValueError(f"event #{event_id} not found")
             session.add(task)
-            session.commit()
-            session.refresh(task)
-        if assignee_jid:
-            WorkStore(self._sf).assign("task", task.id, assignee_jid)
+            session.flush()
+            work_store = WorkStore(self._sf)
+            for jid in assignees:
+                work_store._assign_in(session, "task", task.id, jid)
         return task
 
     # --- Read ---
@@ -273,14 +282,15 @@ class TaskStore:
 
     # --- Complete ---
 
-    def complete(self, task_id: int, actor_jid: str) -> Task:
+    def complete(self, task_id: int, actor_jid: str, *, admin: bool = False) -> Task:
         with self._sf() as session:
             task = self._get(session, task_id)
             if task is None:
                 raise ValueError(f"task #{task_id} not found")
-            assignments = WorkStore(self._sf).overview(user_jid=actor_jid, target_type="task", target_id=task_id)
-            if not assignments:
-                raise ValueError("only the assignee or an admin can complete this task")
+            if not admin:
+                assignments = WorkStore(self._sf).overview(user_jid=actor_jid, target_type="task", target_id=task_id)
+                if not assignments:
+                    raise ValueError("only the assignee or an admin can complete this task")
             if task.status == "done":
                 raise ValueError("task is already completed")
             if "done" not in _TRANSITIONS.get(task.status, set()):

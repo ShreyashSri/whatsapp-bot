@@ -470,6 +470,53 @@ def test_three_assignees_on_task_use_configured_group(db_session_factory, remind
     assert all(item["channel"] == "whatsapp-group" for item in reminder_store.get_history(limit=10))
 
 
+def test_reminder_batch_bookkeeping_is_atomic_across_the_whole_batch(
+    db_session_factory, reminder_store, admin_user, member_user, monkeypatch
+):
+    """One WhatsApp message covers an entire batch, so a crash partway
+    through recording delivery for that batch must not leave some
+    assignments marked delivered and others not -- that would silently
+    re-remind people who already received the message and delay escalation
+    for the ones that were skipped."""
+    from db.task_store import TaskStore
+    from db.work_store import WorkStore
+    import features.text as text_module
+
+    other = upsert_user(db_session_factory, "other@s.whatsapp.net", role="member")
+    third = upsert_user(db_session_factory, "third@s.whatsapp.net", role="member")
+    task = TaskStore(db_session_factory).create("Batch task", admin_user.jid)
+    work = WorkStore(db_session_factory)
+    work.assign_many("task", task.id, [member_user.jid, other.jid, third.jid])
+
+    # 3 calls build the batched message text (one per item), then the
+    # bookkeeping loop calls it again per item before writing that item's
+    # ReminderLog/Assignment update -- the 5th call is the second item's
+    # bookkeeping write, i.e. mid-batch.
+    real_public_text = text_module.public_text
+    calls = {"n": 0}
+
+    def flaky_public_text(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 5:
+            raise RuntimeError("simulated mid-batch failure")
+        return real_public_text(*args, **kwargs)
+
+    monkeypatch.setattr(text_module, "public_text", flaky_public_text)
+    client = MagicMock()
+
+    with pytest.raises(RuntimeError, match="simulated mid-batch failure"):
+        reminder_store.run_reminders(
+            client, admin_user, force_ignore_window=True, group_jid="12345@g.us",
+        )
+
+    with db_session_factory() as session:
+        rows = session.query(Assignment).filter_by(task_id=task.id).all()
+        assert len(rows) == 3
+        assert all(row.missed_count == 0 for row in rows)
+        assert all(row.reminder_state is None for row in rows)
+    assert reminder_store.get_history(limit=10) == []
+
+
 def test_on_demand_reminder_bypasses_frequency_but_keeps_member_scope(
     db_session_factory, reminder_store, admin_user, member_user
 ):

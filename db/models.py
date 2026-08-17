@@ -231,7 +231,12 @@ class ProgressRevision(Base):
     __tablename__ = "progress_revisions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    assignment_id: Mapped[int] = mapped_column(ForeignKey("assignments.id"), nullable=False, index=True)
+    # Assignment rows may be removed while their append-only progress history
+    # remains available.  Keep the historical row and detach it from the live
+    # assignment instead of making unassign fail on a foreign-key violation.
+    assignment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assignments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     field: Mapped[str] = mapped_column(String(64), nullable=False)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     author_jid: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -261,8 +266,9 @@ class ReminderLog(Base):
     __tablename__ = "reminder_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    assignment_id: Mapped[int] = mapped_column(
-        ForeignKey("assignments.id"), nullable=False, index=True
+    # Reminder history must survive removal of the live assignment.
+    assignment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assignments.id", ondelete="SET NULL"), nullable=True, index=True
     )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True

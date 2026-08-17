@@ -806,7 +806,7 @@ def execute_whatsapp_join_group(client, message, intent: dict, factory) -> dict 
     if "chat.whatsapp.com/" in invite:
         invite = invite.split("chat.whatsapp.com/", 1)[1].split("?", 1)[0].strip("/")
     group_jid = client.join_group_with_link(invite)
-    value = _jid_text(group_jid) or (group_jid if "@" in group_jid else "")
+    value = _jid_text(group_jid)
     if not value:
         return _failed_operation("group join returned no group ID")
     client.send_message(chat, f"✅ Joined group {public_text(value, limit=120)}.")
@@ -1004,7 +1004,12 @@ def execute_whatsapp_resolve_contact(client, message, intent: dict, factory) -> 
     else:
         phone_jid = build_jid(compact, "s.whatsapp.net")
         lid_jid = client.get_lid_from_pn(phone_jid)
-    result = {"phone_jid": str(phone_jid), "lid_jid": str(lid_jid)}
+    result = {
+        "phone_jid": normalize_jid(_jid_text(phone_jid)),
+        "lid_jid": normalize_jid(_jid_text(lid_jid)),
+    }
+    if not result["phone_jid"] or not result["lid_jid"]:
+        return _failed_operation("the contact IDs could not be resolved")
     client.send_message(
         chat,
         "🔎 Contact IDs\n"
@@ -1210,7 +1215,7 @@ def execute_direct_tool(
             resolve_target or (lambda _arguments: None),
         )
     if capability in {"work.create_event", "work.create_task"}:
-        return execute_work_creation(client, message, intent, factory)
+        return execute_work_creation(client, message, intent, factory, members)
     if capability == "reminders.send":
         from db.reminder_store import ReminderStore
 
@@ -1339,6 +1344,10 @@ def execute_work_read(
 
     sender = source.Sender
     arguments = intent.get("arguments", {})
+    if capability == "work.list_event_tasks":
+        from features.natural_language import _target_arguments
+
+        arguments = _target_arguments(arguments)
     _raw_status = str(arguments.get("status") or "").strip().lower()
     from db.work_store import PROGRESS_STATUSES
     status = {
@@ -1377,23 +1386,16 @@ def execute_work_read(
     # Resolve LID/phone aliases for the target user using the persistent cache.
     def _alias_jids(jid: str) -> list[str]:
         """Return [jid] plus its LID or phone counterpart if known."""
-        from db.auth import normalize_jid as _nj, jid_user as _ju
+        from db.auth import normalize_jid as _nj, canonical_jid, known_lid_for
         jid = _nj(jid)
         aliases = [jid]
         try:
-            from db.work_store import _JID_ALIASES
-            user_part = _ju(jid)
-            
-            # Forward: LID -> Phone
-            if jid.endswith("@lid"):
-                if user_part in _JID_ALIASES:
-                    aliases.append(f"{_JID_ALIASES[user_part]}@s.whatsapp.net")
-            
-            # Reverse: Phone -> LID
-            elif jid.endswith("@s.whatsapp.net"):
-                for lid_u, phone_u in _JID_ALIASES.items():
-                    if phone_u == user_part:
-                        aliases.append(f"{lid_u}@lid")
+            canonical = canonical_jid(jid)
+            if canonical != jid:
+                aliases.append(canonical)
+            lid = known_lid_for(jid)
+            if lid != jid:
+                aliases.append(lid)
         except Exception:
             pass
         return aliases
@@ -1401,6 +1403,7 @@ def execute_work_read(
     try:
         if capability == "work.list_event_tasks":
             from db.task_store import normalize_task_status
+            from db.event_store import EventStore
             task_status = normalize_task_status(_raw_status) if _raw_status else None
             if task_status not in {None, "todo", "in_progress", "done", "cancelled"}:
                 task_status = None
@@ -1410,22 +1413,20 @@ def execute_work_read(
                 if ref and ref.startswith("event "):
                     event_id = ref.split(" ", 1)[1]
             if not str(event_id or "").isdigit() and factory:
-                from db.event_store import EventStore
                 name_query = arguments.get("event_name") or arguments.get("target_name") or arguments.get("name") or arguments.get("event")
                 if name_query:
-                    events = EventStore(factory).list_events(status="active")
-                    from features.natural_language import _entity_match_score
-                    ranked = sorted(
-                        (
-                            (e, _entity_match_score(str(name_query), e["name"], e.get("category", "")))
-                            for e in events
-                        ),
-                        key=lambda item: (-item[1], item[0]["id"]),
+                    from features.natural_language import _resolve_target_reference
+
+                    reference = _resolve_target_reference(
+                        factory,
+                        {"target_type": "event", "target_name": str(name_query)},
                     )
-                    if ranked and ranked[0][1] >= 0.4:
-                        event_id = ranked[0][0]["id"]
+                    if reference and reference.startswith("event "):
+                        event_id = reference.split(" ", 1)[1]
             if not str(event_id or "").isdigit():
                 raise ValueError("work.list_event_tasks requires an event target")
+            if EventStore(factory).get_event(int(event_id)) is None:
+                raise ValueError(f"could not find event {event_id}")
             tasks = TaskStore(factory).list_for_event(int(event_id), status=task_status)
             rows = []
             for task in tasks:
@@ -1547,7 +1548,9 @@ def _parse_date(value):
         raise ValueError("dates must use YYYY-MM-DD") from exc
 
 
-def execute_work_creation(client, message, intent: dict, factory) -> dict | None:
+def execute_work_creation(
+    client, message, intent: dict, factory, members: list[str] | None = None
+) -> dict | None:
     """Create an event/task and return its durable identifiers to the plan."""
     source = message.Info.MessageSource
     chat = source.Chat
@@ -1569,17 +1572,13 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
             if not name:
                 client.send_message(
                     chat,
-                    "⚠️ To create an event I need a name, event type, and category.\n"
+                    "⚠️ To create an event I need a name.\n"
                     "Example: `@me create a hackathon event called PBCTF 5.0`\n"
-                    "Use type `participation` or `organization`; optional extras are description and start/end dates.",
+                    "If you omit type/category, I use `organization` / `other`; optional extras are description and start/end dates.",
                 )
                 return None
-            event_type = str(arguments.get("type") or "").strip()
-            if not event_type:
-                return _failed_operation("work.create_event requires argument type")
-            category = str(arguments.get("category") or "").strip()
-            if not category:
-                return _failed_operation("work.create_event requires argument category")
+            event_type = str(arguments.get("type") or "organization").strip()
+            category = str(arguments.get("category") or "other").strip()
             event = EventStore(factory).create_event(
                 name=name,
                 type=event_type,
@@ -1632,19 +1631,14 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
                 resolved_event_id = int(str(raw_event).strip())
             elif isinstance(raw_event, str) and raw_event.strip() and factory:
                 try:
-                    from db.event_store import EventStore
-                    from features.natural_language import _entity_match_score
-                    events = EventStore(factory).list_events(status="active")
-                    match = next((e for e in events if e["name"].casefold() == raw_event.strip().casefold()), None)
-                    if not match:
-                        ranked = sorted(
-                            ((e, _entity_match_score(raw_event, e["name"], e.get("category", ""))) for e in events),
-                            key=lambda item: (-item[1], item[0]["id"]),
-                        )
-                        if ranked and ranked[0][1] >= 0.4:
-                            match = ranked[0][0]
-                    if match:
-                        resolved_event_id = match["id"]
+                    from features.natural_language import _resolve_target_reference
+
+                    reference = _resolve_target_reference(
+                        factory,
+                        {"target_type": "event", "target_name": raw_event.strip()},
+                    )
+                    if reference and reference.startswith("event "):
+                        resolved_event_id = int(reference.split(" ", 1)[1])
                 except Exception:
                     pass
             if resolved_event_id is None or not EventStore(factory).get_event(resolved_event_id):
@@ -1655,6 +1649,7 @@ def execute_work_creation(client, message, intent: dict, factory) -> dict | None
             created_by_jid=source.Sender,
             description=arguments.get("description"),
             event_id=resolved_event_id,
+            assignee_jids=members or None,
             due_date=_parse_date(arguments.get("due")),
             priority=str(arguments.get("priority") or "medium").lower(),
         )
@@ -1932,8 +1927,26 @@ def execute_work_assignment(
     if not actor:
         return None
     action = intent["capability"].split(".", 1)[1]
-    reference = resolve_work_target(intent.get("arguments", {}))
+    intent_arguments = intent.get("arguments", {})
+    reference = resolve_work_target(intent_arguments)
     if not reference:
+        # A target field was present but failed to resolve (ambiguous name,
+        # bare numeric ID that matches nothing, etc.) -- that must fail
+        # closed with a clear error, never fall through to "no target = act
+        # on everything". Silently escalating an unresolvable single-item
+        # reference into a blanket unassign previously wiped every
+        # assignment in the workspace instead of just the one named task.
+        had_target_field = any(
+            intent_arguments.get(key) is not None and intent_arguments.get(key) != ""
+            for key in ("target", "target_id", "target_name", "event_id", "task_id")
+        )
+        if action == "unassign" and had_target_field:
+            client.send_message(
+                chat,
+                "⚠️ I couldn't uniquely resolve that work item. "
+                "Use `!work` to see current work and its IDs, then try again.",
+            )
+            return None
         if action == "unassign":
             # No specific target — unassign from ALL currently assigned work items.
             store = WorkStore(factory)
@@ -2002,9 +2015,9 @@ def execute_work_assignment(
             )
             client.send_message(
                 chat,
-                f"⚠️ I couldn't find {label}.\n"
-                "Use `!work` to see current events and their IDs, then try again with the exact ID.\n"
-                "Example: `@me assign event 1 to subgroup abc`",
+                f"⚠️ I couldn't uniquely identify {label}.\n"
+                "If the name is reused, mention its parent event or use the exact ID.\n"
+                "Example: `@me assign website task under pb work event to subgroup abc`",
             )
         else:
             client.send_message(chat, "⚠️ Please specify which event or task to assign. Example: `@me assign event LFX to subgroup abc`")

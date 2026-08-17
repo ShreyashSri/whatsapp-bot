@@ -13,7 +13,12 @@ import time
 from typing import Any
 
 
-_REFERENCE_RE = re.compile(r"\$([A-Za-z][A-Za-z0-9_-]*)\.[A-Za-z][A-Za-z0-9_.-]*")
+_REFERENCE_RE = re.compile(
+    r"^\$([A-Za-z][A-Za-z0-9_-]*)\.([A-Za-z][A-Za-z0-9_.-]*)$"
+)
+_REFERENCE_TOKEN_RE = re.compile(
+    r"\$[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_.-]*"
+)
 MAX_PLAN_STEPS = 16
 
 
@@ -248,10 +253,10 @@ _TOOL_ARGUMENTS = {
     "work.update_event": ("target", "fields"),
     "work.delete_event": ("target",),
     "work.delete_task": ("target",),
-    "work.assign": ("target", "audience?", "collections?"),
-    "work.unassign": ("target", "audience?", "collections?"),
-    "work.create_event": ("type", "category", "name", "description?", "start?", "end?", "labels?"),
-    "work.create_task": ("title", "description?", "due?", "priority?", "event_id?"),
+    "work.assign": ("target", "audience?", "collections?", "event?"),
+    "work.unassign": ("target", "audience?", "collections?", "event?"),
+    "work.create_event": ("type?", "category?", "name?", "description?", "start?", "end?", "labels?"),
+    "work.create_task": ("title?", "description?", "due?", "priority?", "event_id?"),
     "work.list_event_tasks": ("event", "status?"),
     "reports.progress": ("target",),
     "reports.status": ("status",),
@@ -344,8 +349,6 @@ _TOOL_REQUIRED = {
     "work.delete_task": ("target",),
     "work.assign": ("target",),
     "work.unassign": ("target",),
-    "work.create_event": ("type", "category", "name"),
-    "work.create_task": ("title",),
     "work.list_event_tasks": ("event",),
     "reminders.send": ("target",),
     "reports.progress": ("target",),
@@ -443,7 +446,6 @@ _DESCRIPTIONS = {
     "work.list_event_tasks": "list structured tasks linked to an event",
     "work.create_event": "create an event and return its durable event ID",
     "work.create_task": "create a task, optionally linked to an event",
-    "work.list_event_tasks": "list tasks linked to an event",
     "work.assign": "assign an event or task to users or member collections",
     "work.unassign": "remove assignments from an event or task",
     "reminders.send": "send an immediate reminder for an event or task in the requester's scope",
@@ -498,6 +500,16 @@ _DESCRIPTIONS = {
     "whatsapp.send": "send explicitly requested text to the current group",
     "whatsapp.reply": "reply to the triggering message with explicit text",
     "whatsapp.react": "react to the triggering message with an emoji or symbol",
+    "media.add": "add an item to the media/social-post team's to-do list -- NOT a project task (use work.create_task for that)",
+    "media.remove": "remove an item from the media to-do or posted list",
+    "media.todo": "list the media team's pending, not-yet-posted to-do items",
+    "media.posted": "mark one platform/stage of a media to-do item as posted",
+    "media.unposted": "un-mark one platform/stage of a media to-do item as posted",
+    "media.posted_list": "list media items that have been fully posted",
+    "card.create": "render a visual PNG/PDF card image from a fixed template type, name, and text -- for a graphic, not a text post",
+    "card.create_pdf": "render a visual PNG+PDF card image from a fixed template type, name, and text -- for a graphic, not a text post",
+    "card.design": "freely design a visual card image's copy, tone, and template from an open-ended request -- for a graphic, not a text post",
+    "card.design_pdf": "freely design a visual card image (PNG+PDF) from an open-ended request -- for a graphic, not a text post",
 }
 for _capability, _spec in list(TOOL_SPECS.items()):
     TOOL_SPECS[_capability] = ToolSpec(
@@ -636,17 +648,20 @@ def validate_plan_preflight(plan: list[dict]) -> str | None:
             return f"plan step {step_id}: {argument_error}"
         for value in _walk_values(arguments):
             if isinstance(value, str):
-                for reference in _REFERENCE_RE.findall(value):
+                match = _REFERENCE_RE.fullmatch(value)
+                if match:
+                    reference, path = match.groups()
                     if reference not in seen:
                         return f"plan step {step_id} references a later or unknown step: {reference}"
-                    field = (
-                        value[1:].split(".", 1)[1].split(".", 1)[0]
-                        if value.startswith("$") and "." in value
-                        else ""
-                    )
+                    field = path.split(".", 1)[0]
                     producer_fields = produced_by.get(reference, frozenset({"task_id", "event_id"}))
-                    if field and reference in produced_by and field not in producer_fields:
+                    if field not in producer_fields:
                         return f"plan step {step_id} references unavailable output {value}"
+                elif _REFERENCE_TOKEN_RE.search(value):
+                    return (
+                        f"plan step {step_id} must use an exact plan reference value "
+                        "like $step.field"
+                    )
         produced_by[step_id] = tool_spec(capability).produces
     return None
 

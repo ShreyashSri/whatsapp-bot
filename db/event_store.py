@@ -198,12 +198,27 @@ class EventStore:
             return _event_to_dict(session, event)
 
     def delete_event(self, event_id: int) -> bool:
-        """Soft-delete an event so dependent history and schemas remain valid."""
+        """Soft-delete an event and all of its active child tasks.
+
+        Work items use soft deletion so assignments, progress revisions, and
+        reminder history remain auditable.  A task linked to a deleted event
+        must not remain visible as standalone work, though, so both sides of
+        the parent/child relationship are retired in the same transaction.
+        """
         with self.session_factory.begin() as session:
             event = session.get(Event, event_id)
             if event is None or event.deleted_at is not None:
                 return False
-            event.deleted_at = datetime.now(timezone.utc)
+            deleted_at = datetime.now(timezone.utc)
+            event.deleted_at = deleted_at
+            for task in session.scalars(
+                select(Task).where(
+                    Task.event_id == event_id,
+                    Task.deleted_at.is_(None),
+                )
+            ).all():
+                task.deleted_at = deleted_at
+                task.updated_at = deleted_at
             return True
 
     def assign(self, event_id: int, user_id: str) -> dict:

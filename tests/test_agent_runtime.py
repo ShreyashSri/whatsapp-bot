@@ -3,11 +3,32 @@ from unittest.mock import MagicMock, patch
 
 from features.agent_runtime import (
     MAX_PLAN_STEPS,
+    render_tool_catalog,
     tool_spec,
     validate_plan_preflight,
     validate_registry,
     validate_tool_arguments,
 )
+
+
+def test_media_and_card_capabilities_have_distinguishing_descriptions():
+    """media.* and card.* previously had no description at all in the
+    planner's tool catalog -- the model had nothing to tell "add a to-do"
+    (media.add), "create a task" (work.create_task), and "create a post"
+    (card.design) apart beyond guessing from argument names. Every one of
+    these must now carry real, distinct description text, and media's must
+    explicitly disclaim being a project task."""
+    catalog = render_tool_catalog()
+    for capability in (
+        "media.add", "media.remove", "media.todo", "media.posted",
+        "media.unposted", "media.posted_list",
+        "card.create", "card.create_pdf", "card.design", "card.design_pdf",
+    ):
+        line = next(line for line in catalog.splitlines() if line.startswith(f"- {capability}("))
+        assert "—" in line, f"{capability} has no description in the tool catalog"
+
+    assert "NOT a project task" in tool_spec("media.add").description
+    assert "graphic" in tool_spec("card.design").description
 
 
 def test_plan_preflight_accepts_dependencies_on_prior_steps():
@@ -21,8 +42,46 @@ def test_plan_preflight_accepts_dependencies_on_prior_steps():
     ]) is None
 
 
+def test_plan_preflight_rejects_embedded_references_that_runtime_cannot_resolve():
+    error = validate_plan_preflight([
+        {
+            "step_id": "event",
+            "capability": "work.create_event",
+            "arguments": {"name": "Event"},
+        },
+        {
+            "step_id": "task",
+            "capability": "work.create_task",
+            "arguments": {
+                "title": "Task",
+                "event_id": "prefix $event.event_id",
+            },
+        },
+    ])
+
+    assert "exact plan reference" in error
+
+
 def test_plan_budget_supports_real_compound_workflows():
     assert MAX_PLAN_STEPS >= 12
+
+
+def test_whatsapp_connection_retries_transient_startup_failures():
+    from bot import _connect_with_retry
+
+    client = MagicMock()
+    client.connect.side_effect = [RuntimeError("temporary"), "connected"]
+    sleeps = []
+
+    result = _connect_with_retry(
+        client,
+        retry_delay=0.1,
+        sleep=sleeps.append,
+    )
+
+    assert result == "connected"
+    assert client.connect.call_count == 2
+    assert sleeps == [0.1]
 
 
 def test_tool_registry_has_no_schema_or_policy_drift():
@@ -116,11 +175,13 @@ def test_plan_preflight_rejects_duplicate_step_ids():
     assert "duplicate" in error
 
 
-def test_plan_preflight_rejects_missing_required_tool_argument():
-    error = validate_plan_preflight([
+def test_creation_arguments_are_optional_until_execution():
+    assert validate_plan_preflight([
+        {"step_id": "event", "capability": "work.create_event", "arguments": {}},
         {"step_id": "task", "capability": "work.create_task", "arguments": {}},
-    ])
-    assert "requires argument title" in error
+    ]) is None
+    assert validate_tool_arguments("work.create_event", {}) is None
+    assert validate_tool_arguments("work.create_task", {}) is None
 
 
 def test_mutating_legacy_capabilities_have_exact_required_arguments():
@@ -139,6 +200,8 @@ def test_neonize_adapters_are_registered_as_narrow_tools():
     assert tool_spec("whatsapp.react").required == ("reaction",)
     assert tool_spec("whatsapp.group_info").mutating is False
     assert tool_spec("whatsapp.user_info").required == ("audience",)
+    assert tool_spec("work.create_event").required == ()
+    assert tool_spec("work.create_task").required == ()
     assert tool_spec("work.create_event").permission == "admin"
     assert tool_spec("work.delete_event").destructive is True
     assert tool_spec("whatsapp.group_members").permission == "member"

@@ -74,6 +74,8 @@ def _build_config() -> dict:
         "mistral_api_key": os.getenv("MISTRAL_API_KEY", "").strip(),
         "mistral_model": os.getenv("MISTRAL_MODEL", "mistral-small-latest").strip(),
         "mistral_card_model": os.getenv("MISTRAL_CARD_MODEL", "mistral-medium-3-5").strip(),
+        "gemini_api_key": os.getenv("GEMINI_API_KEY", "").strip(),
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemma-4-31b-it").strip(),
         "natural_language_knowledge_urls": os.getenv("NATURAL_LANGUAGE_KNOWLEDGE_URLS", "").strip(),
         "bot_jid": os.getenv("BOT_JID", "").strip(),
     }
@@ -109,18 +111,12 @@ def _allowed_inbound_groups(config: dict) -> set[str]:
     return _configured_groups(config, "pbbot_group_id", "media_group_id")
 
 
-def _allowed_inbound_chat(config: dict, chat) -> bool:
-    """Allow configured groups and authenticated one-to-one chats.
-
-    Group traffic remains explicitly allowlisted.  A direct chat is already
-    scoped to the sender's WhatsApp identity and is authorized by each
-    feature's normal role/assignment gate, so dropping it here prevents
-    members from using the bot privately at all.
-    """
+def _allowed_inbound_chat(config: dict, chat, *, reminder_reply: bool = False) -> bool:
+    """Allow configured groups and quoted replies to tracked reminders."""
     chat_id = normalize_jid(_jid_string(chat))
     if chat_id.endswith("@g.us"):
         return chat_id in _allowed_inbound_groups(config)
-    return chat_id.endswith(("@s.whatsapp.net", "@lid"))
+    return reminder_reply and chat_id.endswith(("@s.whatsapp.net", "@lid"))
 
 
 def _allowed_outbound_groups(config: dict) -> set[str]:
@@ -132,6 +128,36 @@ def _allowed_outbound_groups(config: dict) -> set[str]:
         "incident_group_id",
         "fellowship_alert_group_id",
     )
+
+
+def _connect_with_retry(
+    client,
+    *,
+    retry_delay: float = 5.0,
+    max_retry_delay: float = 60.0,
+    max_attempts: int | None = None,
+    sleep=time.sleep,
+):
+    """Keep transient WhatsApp connection failures from terminating the bot."""
+    delay = max(0.1, float(retry_delay))
+    max_delay = max(delay, float(max_retry_delay))
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return client.connect()
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            if max_attempts is not None and attempt >= max_attempts:
+                raise
+            log.exception(
+                "WhatsApp connection attempt %d failed; retrying in %.1fs",
+                attempt,
+                delay,
+            )
+            sleep(delay)
+            delay = min(max_delay, delay * 2)
 
 
 # Kept available for callers that import bot configuration, without creating a
@@ -175,7 +201,11 @@ def main() -> None:
 
     # Enforce destination policy at the live client boundary. This protects
     # replies, media, moderation, group settings, and webhook deliveries.
-    from features.neonize_policy import install_outbound_policy
+    from features.neonize_policy import (
+        allow_reminder_reply,
+        install_outbound_policy,
+        is_reminder_reply,
+    )
     install_outbound_policy(client, allowed_outbound_groups)
 
     # WhatsApp may replay pending/history messages immediately after a
@@ -183,6 +213,11 @@ def main() -> None:
     # before this process started, so old commands cannot run.
     startup_timestamp = int(time.time())
     accept_messages_after = time.monotonic() + 10
+    # TODO(remove-after-local-self-test): delete this temporary escape hatch
+    # once the paired account has finished its local WhatsApp verification.
+    allow_self_messages = os.getenv("PBBOT_ALLOW_SELF_MESSAGES", "").strip().casefold() in {
+        "1", "true", "yes",
+    }
 
     @client.event(PairStatusEv)
     def on_pair_status(_client: NewClient, event: PairStatusEv):
@@ -347,16 +382,36 @@ def main() -> None:
                 queued_source = getattr(queued_info, "MessageSource", None)
                 queued_chat = getattr(queued_source, "Chat", None)
                 queued_id = getattr(queued_info, "ID", "")
-                from db.nl_state import claim_message
+                queued_chat_jid = _jid_string(queued_chat)
+                from db.nl_state import claim_message, release_message
                 if not claim_message(
                     runtime_config["db_session_factory"],
                     queued_id,
                     getattr(queued_source, "Sender", ""),
-                    _jid_string(queued_chat),
+                    queued_chat_jid,
                 ):
                     continue
-                dispatch(queued_message)
-            except Exception:
+                try:
+                    with allow_reminder_reply(queued_message):
+                        dispatch(queued_message)
+                except BaseException:
+                    # dispatch() is expected to catch its own user-facing
+                    # errors (bad command, validation failure) and reply
+                    # instead of raising. Anything that still escapes here is
+                    # an unexpected failure (DB hiccup, bug) rather than a
+                    # message the bot legitimately handled -- release the
+                    # claim so the same message ID can be retried instead of
+                    # being silently dropped forever.
+                    release_message(runtime_config["db_session_factory"], queued_id, queued_chat_jid)
+                    raise
+            except BaseException:
+                # This is the only consumer of dispatch_queue. Catching only
+                # Exception would let a stray BaseException (e.g. surfaced
+                # from a C extension) kill this thread silently -- every
+                # message sent afterward would queue up and eventually be
+                # dropped once the bounded queue fills, with no supervisor
+                # to restart it. A daemon worker thread never receives
+                # KeyboardInterrupt directly, so catching broadly here is safe.
                 log.exception("message dispatch worker failed")
             finally:
                 dispatch_queue.task_done()
@@ -389,6 +444,16 @@ def main() -> None:
         source = getattr(info, "MessageSource", None)
         if source is None:
             return
+        if getattr(source, "IsFromMe", False) and not allow_self_messages:
+            return
+
+        chat = getattr(source, "Chat", None)
+        if not _allowed_inbound_chat(
+            runtime_config,
+            chat,
+            reminder_reply=is_reminder_reply(message),
+        ):
+            return
 
         sender_str = getattr(source, "Sender", None)
         if sender_str:
@@ -418,7 +483,6 @@ def main() -> None:
                     import threading
                     threading.Thread(target=resolve_in_bg, daemon=True).start()
 
-        chat = getattr(source, "Chat", None)
         if time.monotonic() < accept_messages_after:
             return
 
@@ -426,10 +490,15 @@ def main() -> None:
         if message_timestamp <= startup_timestamp:
             return
 
-        if not _allowed_inbound_chat(runtime_config, chat):
-            return
         try:
             dispatch_queue.put_nowait(message)
+            log.info(
+                "accepted inbound WhatsApp message id=%s sender=%s chat=%s from_me=%s",
+                getattr(info, "ID", ""),
+                _jid_string(sender_str),
+                _jid_string(chat),
+                bool(getattr(source, "IsFromMe", False)),
+            )
         except queue.Full:
             log.warning("message dispatch queue is full; dropping message %s", getattr(info, "ID", ""))
             try:
@@ -442,7 +511,11 @@ def main() -> None:
     log.info("Media group: %s", config["media_group_id"] or "(not set)")
     log.info("Incident group: %s", config["incident_group_id"] or "(not set)")
     log.info("Fellowship alert group: %s",config["fellowship_alert_group_id"] or "(not set)",)
-    client.connect()
+    try:
+        retry_delay = float(os.getenv("WHATSAPP_CONNECT_RETRY_SECONDS", "5"))
+    except ValueError:
+        retry_delay = 5.0
+    _connect_with_retry(client, retry_delay=retry_delay)
 
 
 if __name__ == "__main__":

@@ -68,6 +68,14 @@ def register(client: "NewClient", config: dict) -> None:
     if session_factory is None:
         raise RuntimeError("Incident feature requires db_session_factory")
     store = IncidentStore(session_factory)
+    # Flask runs this handler with threaded=True, so concurrent /alert
+    # requests (Alertmanager retries, overlapping poll intervals) can
+    # otherwise race on the read-modify-write of `active_incidents`, with
+    # whichever write lands last silently discarding the other request's
+    # detected changes. Serializing the whole read-compute-send-save
+    # sequence removes that race; incident volume is low enough that this
+    # never becomes a throughput concern.
+    lock = threading.Lock()
 
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024
@@ -103,47 +111,57 @@ def register(client: "NewClient", config: dict) -> None:
 
             log.info("🔍 Currently failing incident count: %s", len(current_failing))
 
-            active_incidents = _load_state(store)
-            current_failing_urls = {f["url"] for f in current_failing}
+            with lock:
+                active_incidents = _load_state(store)
+                current_failing_urls = {f["url"] for f in current_failing}
 
-            new_alerts = []
-            resolved_alerts = []
+                new_alerts = []
+                resolved_alerts = []
+                next_state = dict(active_incidents)
 
-            # Check for NEW incidents
-            for item in current_failing:
-                url, code = item["url"], item["code"]
-                if url not in active_incidents:
-                    active_incidents[url] = code
-                    new_alerts.append(item)
-
-            # Check for RESOLVED incidents
-            for url in list(active_incidents.keys()):
-                if url not in current_failing_urls:
-                    resolved_alerts.append(url)
-                    del active_incidents[url]
-
-            _save_state(store, active_incidents)
-
-            # Send WhatsApp message only if there are changes
-            if new_alerts or resolved_alerts:
-                parts = []
-
-                for item in new_alerts:
+                # Check for NEW incidents
+                for item in current_failing:
                     url, code = item["url"], item["code"]
-                    if code == 0:
-                        parts.append(f"{url} DNS/CONNECTION FAILURE 🌐💥\n\nError: {code}\nMessage : HemangBSDK")
-                    else:
-                        parts.append(f"{url} FAT GAYA 💥\n\nError: {code}\nMessage : HemangBSDK")
+                    if url not in next_state:
+                        next_state[url] = code
+                        new_alerts.append(item)
 
-                for url in resolved_alerts:
-                    parts.append(f"{url} bolne lagi 🚀✨")
+                # Check for RESOLVED incidents
+                for url in list(next_state.keys()):
+                    if url not in current_failing_urls:
+                        resolved_alerts.append(url)
+                        del next_state[url]
 
-                text = "\n".join(parts)
+                # Send WhatsApp message only if there are changes
+                if new_alerts or resolved_alerts:
+                    parts = []
 
-                client.send_message(_build_chat_jid(incident_group_id), text)
-                log.info("✅ Sent incident update to WhatsApp.")
-            else:
-                log.info("💤 No state changes. Suppressing WhatsApp spam.")
+                    for item in new_alerts:
+                        url, code = item["url"], item["code"]
+                        if code == 0:
+                            parts.append(f"{url} DNS/CONNECTION FAILURE 🌐💥\n\nError: {code}\nMessage : HemangBSDK")
+                        else:
+                            parts.append(f"{url} FAT GAYA 💥\n\nError: {code}\nMessage : HemangBSDK")
+
+                    for url in resolved_alerts:
+                        parts.append(f"{url} bolne lagi 🚀✨")
+
+                    text = "\n".join(parts)
+
+                    # Persist the new state only after the WhatsApp send
+                    # succeeds. Marking an alert "seen" before it was actually
+                    # delivered means a transient send failure would suppress
+                    # that incident forever -- the next poll would see it as
+                    # already-known and never retry it. A failed save after a
+                    # successful send can cause a duplicate re-send on the
+                    # next poll instead; for an incident pager, an occasional
+                    # duplicate is a far smaller risk than a silently dropped
+                    # outage.
+                    client.send_message(_build_chat_jid(incident_group_id), text)
+                    log.info("✅ Sent incident update to WhatsApp.")
+                    _save_state(store, next_state)
+                else:
+                    log.info("💤 No state changes. Suppressing WhatsApp spam.")
 
             return "", 200
 

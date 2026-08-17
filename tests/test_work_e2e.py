@@ -387,6 +387,63 @@ def test_admin_can_complete_unassigned_task_and_multi_assignee_completion_is_exp
         assert session.get(Task, shared.id).status == "todo"
 
 
+def test_admin_who_is_also_an_assignee_defaults_to_their_own_assignment(
+    db_session_factory, handler, admin_user, member_user
+):
+    """An admin who is themselves one of several assignees and gives no
+    explicit @mention is not actually in an ambiguous situation -- it means
+    their own assignment, same as it would for a non-admin. Only a sender
+    who ISN'T among the assignees should be asked to disambiguate."""
+    mock_client, run = handler
+    shared = TaskStore(db_session_factory).create("Shared task", admin_user.jid)
+    WorkStore(db_session_factory).assign("task", shared.id, admin_user.jid)
+    WorkStore(db_session_factory).assign("task", shared.id, member_user.jid)
+
+    run(
+        mock_client,
+        make_msg(f"!work update task {shared.id} note started my half", admin_user.jid),
+    )
+    reply = last_reply(mock_client)
+    assert "multiple users are assigned" not in reply
+    assert "recorded" in reply
+    with db_session_factory() as session:
+        admin_revisions = (
+            session.query(ProgressRevision)
+            .join(Assignment, ProgressRevision.assignment_id == Assignment.id)
+            .filter(Assignment.task_id == shared.id, Assignment.user_jid == admin_user.jid)
+            .count()
+        )
+        member_revisions = (
+            session.query(ProgressRevision)
+            .join(Assignment, ProgressRevision.assignment_id == Assignment.id)
+            .filter(Assignment.task_id == shared.id, Assignment.user_jid == member_user.jid)
+            .count()
+        )
+        assert admin_revisions == 1
+        # The co-assignee's own assignment must be untouched -- the admin's
+        # bare command updated only their own row, not everyone's.
+        assert member_revisions == 0
+
+    # An admin who is one of the assignees can still target someone else
+    # explicitly by mention.
+    mock_client.reset_mock()
+    run(
+        mock_client,
+        make_msg(
+            f"!work update task {shared.id} @{member_user.jid} note member's own note",
+            admin_user.jid,
+        ),
+    )
+    with db_session_factory() as session:
+        member_revisions = (
+            session.query(ProgressRevision)
+            .join(Assignment, ProgressRevision.assignment_id == Assignment.id)
+            .filter(Assignment.task_id == shared.id, Assignment.user_jid == member_user.jid)
+            .count()
+        )
+        assert member_revisions == 1
+
+
 def test_task_event_and_person_links_are_visible_through_legacy_readers(
     db_session_factory, admin_user, member_user
 ):
@@ -450,3 +507,27 @@ def test_legacy_task_owner_update_replaces_the_previous_person(
         target_type="task", target_id=task.id, admin=True
     )
     assert [row["user_jid"] for row in rows] == [other.jid]
+
+
+def test_admin_history_of_event_with_only_task_level_assignments_redirects_instead_of_crashing(
+    db_session_factory, handler, admin_user, member_user
+):
+    """Assignments live on tasks, never on the event itself, so an admin
+    asking for `!work history event <id>` when only its tasks are assigned
+    used to hit WorkStore._resolve_in's bare 'not found' error and surface
+    as a generic, unhelpful failure. It should redirect to the cohort-wide
+    report instead."""
+    mock_client, run = handler
+    event = EventStore(db_session_factory).create_event(
+        name="bbhh", type="organization", category="workshop", description="", status="active",
+    )
+    task = TaskStore(db_session_factory).create(
+        "hw", admin_user.jid, event_id=event["id"], assignee_jid=member_user.jid,
+    )
+
+    mock_client.reset_mock()
+    run(mock_client, make_msg(f"!work history event {event['id']}", admin_user.jid))
+    reply = last_reply(mock_client)
+    assert "reports progress event" in reply
+    assert "not found" not in reply.casefold()
+    assert "could not complete" not in reply.casefold()

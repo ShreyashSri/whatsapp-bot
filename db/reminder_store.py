@@ -350,7 +350,9 @@ class ReminderStore:
             try:
                 if not client or not hasattr(client, "send_message"):
                     raise RuntimeError("WhatsApp client is unavailable")
-                client.send_message(_make_neonize_jid(destination), msg)
+                from features.neonize_policy import allow_reminder_delivery
+                with allow_reminder_delivery(destination):
+                    client.send_message(_make_neonize_jid(destination), msg)
                 sent_ok = True
                 err_detail = None
             except Exception as exc:
@@ -358,11 +360,17 @@ class ReminderStore:
                 sent_ok = False
                 err_detail = "delivery unavailable"
 
-            for item in batch:
-                assignment_id = item["assignment_id"]
-                target_type = item.get("target_type", "event")
-                target_name = public_text(item["event_name"], limit=180)
-                with self.session_factory() as session:
+            # One message was sent for the whole batch, so its outcome must be
+            # recorded for every assignment in the batch as a single unit --
+            # a per-item commit here would let a mid-loop crash leave some
+            # assignments in this batch marked delivered and others not,
+            # causing the un-updated ones to be reminded again even though
+            # their recipient already received this batch's message.
+            with self.session_factory.begin() as session:
+                for item in batch:
+                    assignment_id = item["assignment_id"]
+                    target_type = item.get("target_type", "event")
+                    target_name = public_text(item["event_name"], limit=180)
                     assignment = session.get(Assignment, assignment_id)
                     if not assignment:
                         continue
@@ -373,11 +381,13 @@ class ReminderStore:
                         escalation_error = False
                         if is_escalated and cfg["escalation_channel"] and client and hasattr(client, "send_message"):
                             try:
-                                client.send_message(
-                                    _make_neonize_jid(cfg["escalation_channel"]),
-                                    f"🚨 *Escalation Alert*: A member has missed {new_missed_count} "
-                                    f"reminders for {target_type.capitalize()} *{target_name}* (Assignment #{assignment_id}).",
-                                )
+                                from features.neonize_policy import allow_reminder_delivery
+                                with allow_reminder_delivery(cfg["escalation_channel"]):
+                                    client.send_message(
+                                        _make_neonize_jid(cfg["escalation_channel"]),
+                                        f"🚨 *Escalation Alert*: A member has missed {new_missed_count} "
+                                        f"reminders for {target_type.capitalize()} *{target_name}* (Assignment #{assignment_id}).",
+                                    )
                                 escalation_sent = True
                             except Exception as esc_err:
                                 escalation_error = True
@@ -408,7 +418,6 @@ class ReminderStore:
                             details=f"Delivery failed: {err_detail or 'unavailable'}",
                         ))
                         results["failed"] += 1
-                    session.commit()
 
         audit(
             self.session_factory,

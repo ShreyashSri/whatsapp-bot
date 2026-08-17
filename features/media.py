@@ -89,6 +89,12 @@ def _write_posts(store: MediaStore, state: dict) -> None:
     store.write(state)
 
 
+def _mark_transaction_failed(store: MediaStore) -> None:
+    marker = getattr(getattr(store, "session_factory", None), "mark_failed", None)
+    if callable(marker):
+        marker()
+
+
 def _normalize_platform(raw: str | None) -> str | None:
     if not raw:
         return None
@@ -164,6 +170,7 @@ async def _handle_media_command(
         text = body[4:].strip()
         if not text:
             _reply(client, chat_jid, "⚠️ Usage: `!add <text>`")
+            _mark_transaction_failed(store)
             return
         state = _read_posts(store)
         entry = {
@@ -186,6 +193,7 @@ async def _handle_media_command(
             entry_id = int(id_str)
         except (ValueError, TypeError):
             _reply(client, chat_jid, "⚠️ Usage: `!remove <id>`")
+            _mark_transaction_failed(store)
             return
 
         state = _read_posts(store)
@@ -200,6 +208,7 @@ async def _handle_media_command(
             where = "posted"
         else:
             _reply(client, chat_jid, f"❌ No entry with id *#{entry_id}*.")
+            _mark_transaction_failed(store)
             return
 
         _write_posts(store, state)
@@ -211,12 +220,14 @@ async def _handle_media_command(
         args = body[7:].strip().split()
         if len(args) < 2:
             _reply(client, chat_jid, "⚠️ Usage: `!posted <id> <stage>` (stage: design / insta / linkedin / twitter)")
+            _mark_transaction_failed(store)
             return
 
         try:
             entry_id = int(args[0].lstrip("#"))
         except ValueError:
             _reply(client, chat_jid, "⚠️ Id must be a number. Usage: `!posted <id> <stage>`")
+            _mark_transaction_failed(store)
             return
 
         platform = _normalize_platform(args[1])
@@ -226,6 +237,7 @@ async def _handle_media_command(
                 f'⚠️ Unknown stage "{public_text(args[1], limit=40)}". Use one of: design (d), instagram (insta / ig), '
                 "linkedin (li), twitter (x / tw).",
             )
+            _mark_transaction_failed(store)
             return
 
         state = _read_posts(store)
@@ -235,6 +247,7 @@ async def _handle_media_command(
                 client, chat_jid,
                 f"❌ No to-do entry with id *#{entry_id}*. (If it's already fully posted, check `!posted-list`.)",
             )
+            _mark_transaction_failed(store)
             return
 
         was_already = entry["platforms"][platform]
@@ -262,12 +275,14 @@ async def _handle_media_command(
         args = body[9:].strip().split()
         if len(args) < 2:
             _reply(client, chat_jid, "⚠️ Usage: `!unposted <id> <stage>` (stage: design / insta / linkedin / twitter)")
+            _mark_transaction_failed(store)
             return
 
         try:
             entry_id = int(args[0].lstrip("#"))
         except ValueError:
             _reply(client, chat_jid, "⚠️ Id must be a number. Usage: `!unposted <id> <stage>`")
+            _mark_transaction_failed(store)
             return
 
         platform = _normalize_platform(args[1])
@@ -277,6 +292,7 @@ async def _handle_media_command(
                 f'⚠️ Unknown stage "{public_text(args[1], limit=40)}". Use one of: design (d), instagram (insta / ig), '
                 "linkedin (li), twitter (x / tw).",
             )
+            _mark_transaction_failed(store)
             return
 
         state = _read_posts(store)
@@ -293,6 +309,7 @@ async def _handle_media_command(
 
         if not entry:
             _reply(client, chat_jid, f"❌ No entry with id *#{entry_id}*.")
+            _mark_transaction_failed(store)
             return
 
         was_marked = entry["platforms"][platform]
@@ -316,26 +333,37 @@ async def _handle_media_command(
 
 def register(client: "NewClient", config: dict) -> callable:
     """Register the media task-manager feature on the neonize client."""
-    media_group_id = normalize_group_jid(config.get("media_group_id"))
+    command_groups = {
+        group_id
+        for group_id in (
+            normalize_group_jid(config.get("media_group_id")),
+            normalize_group_jid(config.get("pbbot_group_id")),
+        )
+        if group_id
+    }
 
-    if not media_group_id:
-        log.warning("MEDIA_GROUP_ID not set — skipping media task-manager feature.")
+    if not command_groups:
+        log.warning("No media command group configured — skipping media task-manager feature.")
         return None
 
     session_factory = config.get("db_session_factory")
     if session_factory is None:
         raise RuntimeError("Media feature requires db_session_factory")
-    store = MediaStore(session_factory)
 
     def on_message(client: "NewClient", message: MessageEv):
         chat_obj = message.Info.MessageSource.Chat
         chat = normalize_jid(chat_obj)
-        # Handle media-group commands
-        if chat == media_group_id:
+        if chat in command_groups:
+            active_factory = getattr(message, "_pbbot_session_factory", session_factory)
             try:
                 import asyncio
-                asyncio.run(_handle_media_command(client, message, store))
+                asyncio.run(
+                    _handle_media_command(client, message, MediaStore(active_factory))
+                )
             except Exception as exc:
+                marker = getattr(active_factory, "mark_failed", None)
+                if callable(marker):
+                    marker()
                 log.error("Media command error: %s", exc)
 
     log.info("✅ Media task-manager feature registered")

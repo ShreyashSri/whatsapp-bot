@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import date
 from html.parser import HTMLParser
 from types import SimpleNamespace
@@ -37,6 +38,8 @@ log = logging.getLogger(__name__)
 MISTRAL_CHAT_URL = "https://api.mistral.ai/v1/chat/completions"
 DEFAULT_MODEL = "mistral-small-latest"
 DEFAULT_CARD_MODEL = "mistral-medium-3-5"
+GEMINI_GENERATE_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+DEFAULT_GEMINI_MODEL = "gemma-4-31b-it"
 MAX_INPUT_LENGTH = 4000
 MAX_COMMAND_LENGTH = 1200
 MAX_KNOWLEDGE_LENGTH = 6000
@@ -198,8 +201,8 @@ Users, groups, and labels:
   !labels [of @user|add <name>|create <name> | @user|remove <name> | @user|delete <name>]
 
 Media, cards, help, reports, and schema:
-  !add <text> | !remove <id> | !to-do | !todo | !posted <id> <stage>
-  !unposted <id> <stage> | !posted-list
+  !add <text> | !remove <id|post title> | !to-do | !todo
+  !posted <id|post title> <stage> | !unposted <id|post title> <stage> | !posted-list
   !card <type> | <name> | <text> | !card-pdf <type> | <name> | <text>
   !help [module]
   !schema event <id> | !schema create|update|delete event <id> ...
@@ -212,10 +215,10 @@ Media, cards, help, reports, and schema:
 CAPABILITY_REFERENCE = "\n".join(
     [
         render_tool_catalog(),
-        "Arguments are JSON values. Use mention_indices for people, referring to the numbered WhatsApp mentions supplied in the user message.",
+        "Arguments are JSON values.",
         "Use target_name for named entities and target_id only for explicit or runtime-resolved IDs. Never invent IDs, JIDs, or permissions.",
         "For compound requests, represent every action/object/audience relationship explicitly in the ordered plan. Each step must be independently executable.",
-        "Use audience resolvers current_chat_members, collection_members, active_admins, sender, explicit_mentions, or plan_output; runtime resolves concrete members. For a prior read tool, use plan_output with a reference such as $group.member_jids. WhatsApp steps may set target_chat to a plan_output reference such as {\"resolver\":\"plan_output\",\"value\":\"$created.group_jid\"}; never invent a raw JID.",
+        "There is exactly one way to declare who an operation affects: the audience object. Set audience.resolver to one of current_chat_members, collection_members, active_admins, sender, explicit_mentions, or plan_output; runtime resolves concrete members. For collection_members set audience.value to the collection name. For a prior read tool, set audience.value to a plan_output reference such as $group.member_jids. For explicit_mentions, audience with no other field means every WhatsApp mention in this message; to select only some of them, add audience.mention_indices as a 0-based list indexing the numbered mentions supplied in the user message -- never place mention_indices anywhere outside the audience object, and never invent an index that was not supplied. WhatsApp steps may set target_chat to a plan_output reference such as {\"resolver\":\"plan_output\",\"value\":\"$created.group_jid\"}; never invent a raw JID.",
         "Assign stable step_id values and use exact local references such as $event.event_id for outputs from prior steps.",
     ]
 )
@@ -458,6 +461,8 @@ def _named_collection_candidates(factory, text: str) -> list[dict]:
     candidates = [item for item in ranked if item["score"] >= 0.5]
     if not candidates:
         return []
+    if len(candidates) > 1 and candidates[0]["score"] - candidates[1]["score"] < 0.1:
+        return []
     return candidates[:3]
 
 
@@ -516,15 +521,30 @@ def _resolve_collection_name(factory, requested: object) -> str | None:
     )
     if not ranked or ranked[0][1] < 0.5:
         return None
+    if len(ranked) > 1 and ranked[0][1] - ranked[1][1] < 0.1:
+        # A fuzzy subgroup name is a mutation target.  Never choose the first
+        # database row when two stored names are equally plausible.
+        return None
     return ranked[0][0]
 
 
 def _resolve_collection_names(factory, requested: object) -> list[str]:
     """Resolve one or more stored collection names from a natural reference."""
-    if not isinstance(requested, str) or not requested.strip() or not factory:
+    if not factory:
         return []
-    single = _resolve_collection_name(factory, requested)
-    return [single] if single else []
+    values = [requested] if isinstance(requested, str) else requested
+    if not isinstance(values, list):
+        return []
+    resolved: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            return []
+        name = _resolve_collection_name(factory, value)
+        if not name:
+            return []
+        if name not in resolved:
+            resolved.append(name)
+    return resolved
 
 
 def _resolve_or_create_collection_name(
@@ -544,7 +564,30 @@ def _resolve_or_create_collection_name(
         return None
     if NEW_COLLECTION_RE.search(text):
         return normalized
-    return _resolve_collection_name(factory, requested) or normalized
+    resolved = _resolve_collection_name(factory, requested)
+    if resolved:
+        return resolved
+    if factory:
+        try:
+            from db.subgroup_store import SubgroupStore
+
+            names = list(SubgroupStore(factory).read())
+            fuzzy_matches = [
+                name for name in names
+                if _entity_match_score(requested, name) >= 0.5
+            ]
+            if fuzzy_matches:
+                # The name was close to an existing collection but could not
+                # be selected unambiguously. Creating a new collection here
+                # would silently route the mutation to the wrong place.
+                return None
+        except Exception:
+            log.info("Could not inspect existing collections before creation", exc_info=True)
+            # Compilation can be used before a database is attached (for
+            # example by a command preview). The actual mutation still has
+            # to pass through the store and authorization boundary.
+            return normalized
+    return normalized
 
 
 def _collection_argument_values(arguments: dict) -> list[str]:
@@ -575,7 +618,14 @@ def _parse_compound_target(raw: object) -> tuple[str, object] | None:
             or raw.get("kind")
             or ""
         )
-        i = raw.get("id") or raw.get("target_id") or raw.get("task_id") or raw.get("event_id")
+        i = next(
+            (
+                raw[key]
+                for key in ("id", "target_id", "task_id", "event_id")
+                if raw.get(key) is not None
+            ),
+            None,
+        )
         if isinstance(t, str) and t.casefold() in {"event", "task"} and i is not None:
             return t.casefold(), i
         return None
@@ -604,15 +654,87 @@ def _typed_target_parts(raw: object) -> tuple[str, str] | None:
     return None
 
 
+def _typed_target_object_parts(raw: object) -> tuple[str, object, str | None] | None:
+    """Read a structured work target without treating audience objects as work."""
+    if not isinstance(raw, dict) or raw.get("resolver"):
+        return None
+    target_type = raw.get("type") or raw.get("target_type") or raw.get("kind")
+    if not isinstance(target_type, str) or target_type.casefold() not in {"event", "task"}:
+        return None
+    target_id = next(
+        (
+            raw[key]
+            for key in ("target_id", "id", "task_id", "event_id")
+            if raw.get(key) is not None
+        ),
+        None,
+    )
+    target_name = raw.get("target_name") or raw.get("name")
+    if target_name is not None and not isinstance(target_name, str):
+        target_name = None
+    return target_type.casefold(), target_id, target_name
+
+
+def _natural_work_target(text: str) -> tuple[str, str] | None:
+    """Extract a named ``event``/``task`` target from casual wording."""
+    action = r"\b(?:assign|delegate|give|unassign|remove)\s+(?:the\s+)?"
+    boundary = r"(?=\s+(?:under|within|inside|in|for|to|with|among)\b|\s+@|$)"
+    patterns = (
+        action
+        + r"(?P<name>[^|\n@]+?)\s+(?P<type>event|task)\b"
+        + boundary,
+        action
+        + r"(?P<type>event|task)\s+(?:named\s+)?(?P<name>[^|\n@]+?)"
+        + boundary,
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            name = match.group("name").strip(" ,:;-\t")
+            if name:
+                return match.group("type").casefold(), name
+    return None
+
+
+def _parent_event_name(text: str) -> str | None:
+    """Extract a parent event from forms such as ``under pb work event``."""
+    patterns = (
+        r"\b(?:under|within|inside|in|for)\s+(?:the\s+)?event\s+"
+        r"(?P<name>[^|\n@]+?)(?=\s+(?:to|for|with|among)\b|\s+@|$)",
+        r"\b(?:under|within|inside|in|for)\s+(?:the\s+)?"
+        r"(?P<name>[^|\n@]+?)\s+event\b"
+        r"(?=\s+(?:to|for|with|among)\b|\s+@|$)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            name = match.group("name").strip(" ,:;-\t")
+            if name:
+                return name
+    return None
+
+
 def _target_arguments(arguments: dict, text: str = "") -> dict:
     """Prefer an explicit task/event reference in the user's wording."""
     result = dict(arguments)
+    explicit_type = result.get("target_type")
+    if isinstance(explicit_type, str):
+        normalized_type = explicit_type.strip().casefold()
+        if normalized_type in {"event", "task"}:
+            result["target_type"] = normalized_type
     raw_target = result.get("target")
     compound = _parse_compound_target(raw_target)
     if compound:
         t_type, t_id = compound
         result.setdefault("target_type", t_type)
         result.setdefault("target_id", t_id)
+    elif (typed_object := _typed_target_object_parts(raw_target)):
+        t_type, t_id, t_name = typed_object
+        result.setdefault("target_type", t_type)
+        if t_id is not None:
+            result.setdefault("target_id", t_id)
+        elif t_name:
+            result.setdefault("target_name", t_name.strip())
     elif (typed := _typed_target_parts(raw_target)):
         t_type, value = typed
         result.setdefault("target_type", t_type)
@@ -708,6 +830,17 @@ def _target_arguments(arguments: dict, text: str = "") -> dict:
             if text_type and target_type not in {"event", "task"}:
                 result["target_type"] = text_type.casefold()
 
+    natural_target = _natural_work_target(text)
+    if natural_target and not has_explicit_id:
+        result["target_type"], result["target_name"] = natural_target
+    parent_event = _parent_event_name(text)
+    if parent_event and result.get("target_type") == "task":
+        result["parent_event_name"] = parent_event
+    elif result.get("target_type") == "task":
+        raw_parent = result.get("event") or result.get("event_name")
+        if isinstance(raw_parent, str) and raw_parent.strip().casefold() not in {"event", "task"}:
+            result["parent_event_name"] = raw_parent.strip()
+
     target_type = result.get("target_type")
     target_name = result.get("target_name")
     if target_type in {"event", "task"} and (
@@ -753,18 +886,44 @@ def _target_name_is_grounded_in_request(arguments: dict, text: str) -> bool:
 
 
 def _resolve_target_reference(factory, arguments: dict) -> str | None:
+    # Normalize every supported target shape at the shared resolver boundary.
+    # This matters for direct callers that do not pass through validate_intent.
+    original_arguments = dict(arguments)
+    arguments = _target_arguments(arguments)
     # First, try to decode a compound target value (e.g. "event 5" or {"type": "event", "id": 5})
     raw_target = arguments.get("target")
     compound = _parse_compound_target(raw_target)
-    if compound:
-        c_type, c_id = compound
-        if isinstance(c_id, (int, float)) and int(c_id) >= 0:
-            return f"{c_type} {int(c_id)}"
-        if isinstance(c_id, str) and c_id.strip().isdigit():
-            return f"{c_type} {int(c_id.strip())}"
+    typed_object = _typed_target_object_parts(raw_target)
+
+    if typed_object:
+        typed_object_type, typed_object_id, _ = typed_object
+        explicit_type = original_arguments.get("target_type")
+        if (
+            explicit_type is not None
+            and str(explicit_type).strip().casefold() != typed_object_type
+        ):
+            return None
+        if (
+            compound
+            and (
+                compound[0] != typed_object_type
+                or str(compound[1]) != str(typed_object_id)
+            )
+        ):
+            return None
+        explicit_id = original_arguments.get("target_id")
+        if (
+            typed_object_id is not None
+            and explicit_id is not None
+            and str(explicit_id) != str(typed_object_id)
+        ):
+            return None
 
     typed_target = _typed_target_parts(raw_target)
     raw_type = arguments.get("target_type") or (
+        compound[0]
+        if compound
+        else
         typed_target[0]
         if typed_target
         else raw_target
@@ -772,7 +931,37 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
         else None
     )
     target_type = str(raw_type).casefold() if isinstance(raw_type, str) else ""
-    target_id = arguments.get("target_id") or arguments.get("task_id") or arguments.get("event_id")
+    if target_type and target_type not in {"event", "task"}:
+        return None
+    if compound and arguments.get("target_type") and arguments["target_type"] != compound[0]:
+        return None
+
+    # Do not let a task ID masquerade as an event ID (or vice versa) when the
+    # model supplied conflicting fields. ``event_id`` is intentionally still
+    # valid as a task's parent-event scope below.
+    if target_type == "event" and original_arguments.get("task_id") is not None and not any(
+        original_arguments.get(key) is not None for key in ("target_id", "event_id")
+    ):
+        return None
+    if target_type == "task" and original_arguments.get("event_id") is not None and original_arguments.get("task_id") is not None and original_arguments.get("target_id") is None:
+        return None
+
+    target_id = arguments.get("target_id")
+    if target_id is None:
+        if target_type == "task":
+            target_id = arguments.get("task_id")
+        elif target_type == "event":
+            target_id = arguments.get("event_id")
+        else:
+            target_id = arguments.get("task_id")
+            if target_id is not None:
+                target_type = "task"
+            else:
+                target_id = arguments.get("event_id")
+                if target_id is not None:
+                    target_type = "event"
+    if target_id is None and compound:
+        target_id = compound[1]
     if not target_id and isinstance(raw_target, (int, float)):
         target_id = raw_target
     if not target_id and isinstance(raw_target, str) and raw_target.strip().isdigit():
@@ -781,10 +970,64 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
         if typed_target[1].isdigit():
             target_id = typed_target[1]
 
+    parent_event_id = None
+    if target_type == "task":
+        raw_parent_id = arguments.get("parent_event_id") or arguments.get("event_id")
+        if raw_parent_id is None and isinstance(arguments.get("event"), (int, float)):
+            raw_parent_id = arguments.get("event")
+        if raw_parent_id is None and isinstance(arguments.get("event"), str) and arguments["event"].strip().isdigit():
+            raw_parent_id = arguments["event"]
+        if isinstance(raw_parent_id, int) or (
+            isinstance(raw_parent_id, str) and raw_parent_id.strip().isdigit()
+        ):
+            parent_event_id = int(str(raw_parent_id).strip())
+        parent_name = arguments.get("parent_event_name")
+        if not parent_name:
+            raw_parent = arguments.get("event") or arguments.get("event_name")
+            if isinstance(raw_parent, str) and raw_parent.strip().casefold() not in {"event", "task"}:
+                parent_name = raw_parent.strip()
+        if parent_event_id is None and isinstance(parent_name, str) and parent_name.strip():
+            parent_reference = _resolve_target_reference(
+                factory,
+                {"target_type": "event", "target_name": parent_name},
+            )
+            if not parent_reference:
+                return None
+            parent_event_id = int(parent_reference.split()[1])
+
+    if not target_type and factory and (
+        (isinstance(target_id, int) and target_id >= 0)
+        or (isinstance(target_id, str) and target_id.strip().isdigit())
+    ):
+        # A bare numeric target with no declared type (e.g. the model emitted
+        # {"target": 18} instead of "task 18") is only safe to resolve when
+        # exactly one of event/task actually has that ID -- if both exist,
+        # or neither does, guessing the type would silently touch the wrong
+        # kind of row, so leave target_type empty and fail closed below.
+        from db.event_store import EventStore
+        from db.task_store import TaskStore
+        numeric_id = int(str(target_id).strip())
+        event_exists = EventStore(factory).get_event(numeric_id) is not None
+        task_exists = TaskStore(factory).get(numeric_id) is not None
+        if event_exists and not task_exists:
+            target_type = "event"
+        elif task_exists and not event_exists:
+            target_type = "task"
+
     if target_type in {"event", "task"}:
         if isinstance(target_id, int) and target_id >= 0:
+            if target_type == "task" and parent_event_id is not None:
+                from db.task_store import TaskStore
+                task = TaskStore(factory).get(int(target_id)) if factory else None
+                if task is None or task.event_id != parent_event_id:
+                    return None
             return f"{target_type} {target_id}"
         if isinstance(target_id, str) and target_id.strip().isdigit():
+            if target_type == "task" and parent_event_id is not None:
+                from db.task_store import TaskStore
+                task = TaskStore(factory).get(int(target_id.strip())) if factory else None
+                if task is None or task.event_id != parent_event_id:
+                    return None
             return f"{target_type} {int(target_id.strip())}"
 
     requested = (
@@ -809,6 +1052,8 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
                     candidates.append(("event", e["id"], e["name"], score))
         if target_type != "event":
             tasks = TaskStore(factory).list_all()
+            if parent_event_id is not None:
+                tasks = [task for task in tasks if task.event_id == parent_event_id]
             for t in tasks:
                 score = _entity_match_score(requested, t.title)
                 if score >= 0.4:
@@ -837,6 +1082,84 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
     except Exception:
         log.info("Could not resolve target reference", exc_info=True)
         return None
+
+
+def _resolve_media_post_reference(
+    factory, arguments: dict, capability: str
+) -> str | None:
+    """Resolve a media-post title while preserving the numeric command API."""
+    raw_id = arguments.get("id")
+    if isinstance(raw_id, int) and raw_id >= 0:
+        return str(raw_id)
+    if isinstance(raw_id, str):
+        normalized_id = raw_id.strip().lstrip("#")
+        if normalized_id.isdigit():
+            return str(int(normalized_id))
+
+    if not isinstance(raw_id, str) or not raw_id.strip() or not factory:
+        return None
+
+    try:
+        from db.media_store import MediaStore
+
+        states = (
+            ("todo", "posted")
+            if capability in {"media.remove", "media.unposted"}
+            else ("todo",)
+        )
+        state = MediaStore(factory).read()
+        candidates = []
+        for state_name in states:
+            for entry in state.get(state_name, []):
+                text = str(entry.get("text", "")).strip()
+                entry_id = str(entry.get("id", "")).strip().lstrip("#")
+                if not text or not entry_id.isdigit():
+                    continue
+                score = _entity_match_score(raw_id, text)
+                if score >= 0.4:
+                    candidates.append((int(entry_id), text, score))
+
+        if not candidates:
+            return None
+        requested_key = _compact_entity(raw_id)
+        exact = [
+            item
+            for item in candidates
+            if requested_key and _compact_entity(item[1]) == requested_key
+        ]
+        if len(exact) == 1:
+            return str(exact[0][0])
+        if len(exact) > 1:
+            return None
+
+        candidates.sort(key=lambda item: (-item[2], item[0]))
+        if len(candidates) > 1 and candidates[0][2] - candidates[1][2] < 0.1:
+            return None
+        return str(candidates[0][0])
+    except Exception:
+        log.info("Could not resolve media post reference", exc_info=True)
+        return None
+
+
+def _resolve_media_stage(stage: str, text: str) -> str:
+    """Resolve platform wording such as ``done for X`` to a media stage."""
+    from features.media import PLATFORM_ALIASES, _normalize_platform
+
+    normalized = _normalize_platform(stage)
+    if normalized:
+        return normalized
+
+    aliases = "|".join(
+        re.escape(alias)
+        for alias in sorted(PLATFORM_ALIASES, key=len, reverse=True)
+    )
+    matches = re.findall(
+        rf"\b(?:for|on|to|via|platform)\s+(?:the\s+)?({aliases})\b",
+        text,
+        re.IGNORECASE,
+    )
+    platforms = list(dict.fromkeys(_normalize_platform(match) for match in matches))
+    return platforms[0] if len(platforms) == 1 else stage
 
 
 def _arg_text(arguments: dict, key: str, default: str = "") -> str:
@@ -871,6 +1194,37 @@ def _canonical_work_status(value: str) -> str:
 def _mention_suffix(text: str, mentioned_jids: list[str]) -> str:
     """Return an explicit sender target, excluding a leading trigger alias."""
     return " | @me" if ME_ALIAS_RE.search(text) or EXPLICIT_SELF_TARGET_RE.search(text) else ""
+
+
+def _admin_target_suffix(arguments: dict, mentioned_jids: list[str]) -> str:
+    """Return the ' @<jid>' token naming whose assignment a status/history/
+    start/complete/update/set-status/set-lifecycle command targets, when the
+    model declared an explicit_mentions audience for a specific other person.
+
+    This must be a bare space-separated '@<jid>' -- the only shape
+    features/work.py's ``_target()`` parser recognizes as a target mention
+    (see ``_reference()`` in that module). ``_mention_suffix`` above emits
+    ' | @me' with a pipe, which ``_target()`` never parses as a mention at
+    all (the pipe becomes its own token); that suffix has therefore always
+    been a no-op for self-reference, silently falling through to whatever
+    the runtime's own ambiguity resolution defaults to. That's harmless for
+    self-reference (the runtime already defaults an unspecified target to
+    the sender), but it means there was never any way to compile a command
+    that names a *different* person as the target. This function is that
+    path -- used only when the audience is a real mention of someone else.
+    """
+    from features.nl_runtime import mention_indices_expression, target_expression
+
+    resolver, _ = target_expression(arguments)
+    if resolver != "explicit_mentions" or not mentioned_jids:
+        return ""
+    indices = mention_indices_expression(arguments)
+    try:
+        index = indices[0] if indices else 0
+        jid = mentioned_jids[index]
+    except (IndexError, TypeError):
+        return ""
+    return f" @{jid}" if jid else ""
 
 
 def _strip_trigger_alias(text: str) -> str:
@@ -1178,8 +1532,9 @@ def compile_intent(
             target = _resolve_target_reference(factory, target_arguments)
             if not target:
                 return None
+            admin_suffix = _admin_target_suffix(arguments, mentioned_jids)
             if action in {"history", "status", "start", "complete"}:
-                return f"!work {action} {target}{suffix}"
+                return f"!work {action} {target}{admin_suffix or suffix}"
             if action in {"assign", "unassign"}:
                 collection_tokens: list[str] = []
                 requested_collections = _collection_argument_values(arguments)
@@ -1207,12 +1562,15 @@ def compile_intent(
             if field.lower() in ("status", "state", "progress_status"):
                 norm_val = _canonical_work_status(value)
                 if norm_val in ("in_progress", "start"):
-                    return f"!work start {target}{suffix}"
+                    return f"!work start {target}{admin_suffix or suffix}"
                 elif norm_val in ("completed", "done", "complete"):
-                    return f"!work complete {target}{suffix}"
+                    return f"!work complete {target}{admin_suffix or suffix}"
                 elif norm_val:
-                    return f"!work set-status {target} {norm_val}"
-            return f"!work update {target} {field} {value}" if field and value else None
+                    return f"!work set-status {target}{admin_suffix} {norm_val}"
+            return (
+                f"!work update {target}{admin_suffix} {field} {value}"
+                if field and value else None
+            )
         if action == "edit":
             revision_id = _arg_text(arguments, "revision_id")
             value = _arg_text(arguments, "value")
@@ -1222,12 +1580,13 @@ def compile_intent(
             status = _canonical_work_status(_arg_text(arguments, "status"))
             if not target or not status:
                 return None
+            admin_suffix = _admin_target_suffix(arguments, mentioned_jids)
             if action == "set_lifecycle" and target.startswith("event "):
                 return f"!set-status {target.split(' ', 1)[1]} | {status}"
             if status in ("in_progress", "start"):
-                return f"!work start {target}{suffix}"
+                return f"!work start {target}{admin_suffix or suffix}"
             if status in ("completed", "done", "complete"):
-                return f"!work complete {target}{suffix}"
+                return f"!work complete {target}{admin_suffix or suffix}"
             if target.startswith("event "):
                 return f"!set-status {target.split(' ', 1)[1]} | {status}"
             return f"!work set-status {target} {status}"
@@ -1289,6 +1648,13 @@ def compile_intent(
     if capability in {"media.add", "media.remove", "media.posted", "media.unposted"}:
         action = capability.split(".", 1)[1].replace("_", "-")
         fields = [_arg_text(arguments, key) for key in ("text", "id", "stage")]
+        if action in {"remove", "posted", "unposted"}:
+            entry_id = _resolve_media_post_reference(factory, arguments, capability)
+            if entry_id is None:
+                return None
+            fields[1] = entry_id
+        if action in {"posted", "unposted"}:
+            fields[2] = _resolve_media_stage(fields[2], text)
         return "!" + action + " " + " ".join(field for field in fields if field)
 
     if _is_card_design_intent(intent):
@@ -1407,8 +1773,10 @@ Security rules:
   resolver: current_chat_members, collection_members, active_admins, sender,
   explicit_mentions, or plan_output. For collection_members, preserve its
   name in the audience value. For plan_output, use a prior structured result
-  such as $group.member_jids. These are semantic targets; do not invent
-  mention_indices or user identities.
+  such as $group.member_jids. These are semantic targets; never invent a
+  mention_indices value or a user identity. When a mention_indices subset is
+  genuinely warranted, it belongs inside the audience object alongside
+  resolver, never as a separate top-level argument.
 - For card.design and card.design_pdf, separate the requested copy from the
   visual family. Words such as "congratulations", "award", or "thank you"
   describe the card content, not a card type. Choose the closest existing
@@ -1475,6 +1843,56 @@ Security rules:
   specific event/task, use only the matching runtime candidate; if it does
   not identify a target and the registry has no bulk capability, leave the
   required target absent so the runtime reports the exact missing argument.
+- Wording such as "assign task X to @person" or "assign event X to @person"
+  is always work.assign, not collections.tag. Use target_type plus
+  target_id/target_name and resolve the recipient through the audience fields.
+  The same holds when the recipient is a named subgroup rather than a person:
+  "assign task X to subgroup Y" or "assign event X to the design subgroup" is
+  still work.assign, with audience set to
+  {{"resolver":"collection_members","value":"Y"}} -- assigning ownership of a
+  task/event is never collections.tag, even when the assignee is a subgroup.
+  Use collections.tag whenever the user wants a named subgroup's members
+  alerted or informed about something -- this is not limited to the literal
+  words "tag", "ping", or "notify". "let backend know", "loop in design",
+  "heads up frontend", "shout out to the on-call team", and "give ops a
+  heads up" all mean the same thing: notify that subgroup's members, not add
+  or remove anyone from it, and not a generic broadcast/media post. The
+  distinguishing question is "does this name a subgroup whose members should
+  see this," not which exact verb was used.
+- A "to-do" and a "task" are different things, not synonyms. "Add a to-do",
+  "add to the to-do list", or "queue this to-do item" mean media.add -- an
+  item on the media/social-post team's content pipeline, tracked through
+  posting stages, unrelated to assignees or due dates. "Create a task"
+  (optionally for/on an event, or assigned to someone) means
+  work.create_task -- the project tracker. When wording is ambiguous, an
+  explicit assignee, event link, due date, or priority is task-shaped; a
+  bare to-do-list item with none of those is media.add.
+- "Create a post", "make a post", or "post about" something -- announcing,
+  celebrating, congratulating, or promoting anything -- always means
+  rendering a visual card: use card.design (or card.create only when the
+  user names one of the fixed template types explicitly). Never media.add
+  for this wording; media.add only ever queues a to-do-list item, never an
+  actual post, and produces no image. If the request doesn't literally say
+  "to-do", prefer card.design over media.add whenever it describes content
+  meant to be posted/shared rather than a task-list entry.
+- For work.create_task: if the same request also names who the new task
+  should be assigned to (e.g. "create a task to write the blog post, assign
+  it to @Alice", "create a task for @Bob and @Carol to review the design"),
+  set audience to {{"resolver":"explicit_mentions","mention_indices":[...]}}
+  for those people in that same work.create_task step -- do not silently
+  drop the assignment because the task doesn't have an ID yet. Do not add an
+  audience when no assignee was named; the task is simply created
+  unassigned.
+- For work.history, work.status, work.start, work.complete, and work.update:
+  these default to the sender's own assignment and normally need no audience
+  at all. But if the request names a specific OTHER person as whose
+  assignment to affect (e.g. "mark task 5 done for @Bob", "update task 5
+  status to in progress for @Bob", "@Bob's task 5 is now in progress"), set
+  audience to {{"resolver":"explicit_mentions","mention_indices":[...]}}
+  identifying that person, exactly as for work.assign. Omitting the audience
+  here silently discards which person was named and the runtime is left to
+  guess -- never drop a named person's mention just because the capability
+  isn't work.assign.
 - For requests to create or add members to a subgroup/collection (e.g., "make subgroup X", "create subgroup X"), use capability "collections.add" with argument collection="X".
 - For requests to delete a subgroup or all subgroups (e.g., "delete subgroup X", "delete all subgroups"), use capability "collections.delete". For deleting all subgroups, omit the collection argument.
 - For requests to list subgroups (e.g., "list all subgroups", "show subgroups"), use capability "collections.list".
@@ -1484,11 +1902,10 @@ Security rules:
   work.create_event step followed by one work.create_task step per task. Give
   the event step_id "event" and set every task's event_id to "$event.event_id".
 - Do NOT emit work.create_event if the request refers to an existing event (e.g., "under event X", "for event X"); set event_id or event to "X" directly on the work.create_task step.
-- For a new event, type, category, and name are essential. Use a documented
-  program mapping only when the user's request names that program; otherwise
-  leave each missing value absent so the runtime reports it exactly. Split
-  bullet points or enumerated action items into separate work.create_task
-  steps.
+- For a new event, preserve a documented program mapping when the user's
+  request names that program. For a generic event with no type/category, use
+  type organization and category other. Split bullet points or enumerated
+  action items into separate work.create_task steps.
 - For work.unassign: if the user says "unassign everyone", "remove all members",
   "clear assignments", or similar without naming specific people, emit
   work.unassign with NO target or audience field. The runtime will remove all
@@ -1590,19 +2007,51 @@ def validate_intent(intent: object) -> dict | None:
             audience.get("value") or audience.get("name") or audience.get("collection")
         ):
             return None
-    # Transitional compatibility for early audience objects in target.
+    # Transitional compatibility for early audience objects in target. Some
+    # planner responses use a typed work target object instead of the flatter
+    # target_type/target_name fields required by the runtime, for example:
+    # {"target": {"type": "task", "target_name": "test1"}}.
+    # Accept that unambiguous shape and flatten it before the normal argument
+    # checks. A target object with an audience resolver remains an audience.
     target = arguments.get("target")
+    typed_work_target = False
     if isinstance(target, dict):
-        resolver = target.get("resolver") or target.get("kind")
-        if resolver not in TARGET_SCOPES:
-            return None
-        if resolver == "collection_members" and not (
-            target.get("value") or target.get("name") or target.get("collection")
-        ):
-            return None
-    target_scope = arguments.get("target_scope")
-    if target_scope is not None and target_scope not in TARGET_SCOPES:
-        return None
+        resolver = target.get("resolver")
+        if not resolver and target.get("kind") not in {"event", "task"}:
+            resolver = target.get("kind")
+        if resolver:
+            if resolver not in TARGET_SCOPES:
+                return None
+            if resolver == "collection_members" and not (
+                target.get("value") or target.get("name") or target.get("collection")
+            ):
+                return None
+        else:
+            target_type = target.get("type") or target.get("target_type") or target.get("kind")
+            target_id = next(
+                (
+                    target[key]
+                    for key in ("target_id", "id", "task_id", "event_id")
+                    if target.get(key) is not None
+                ),
+                None,
+            )
+            target_name = target.get("target_name") or target.get("name")
+            if (
+                capability not in _TYPED_TARGET_CAPABILITIES
+                or not isinstance(target_type, str)
+                or target_type.casefold() not in {"event", "task"}
+                or (target_id is None and not isinstance(target_name, str))
+                or (isinstance(target_name, str) and not target_name.strip())
+            ):
+                return None
+            typed_work_target = True
+            arguments = dict(arguments)
+            arguments.setdefault("target_type", target_type.casefold())
+            if target_id is not None:
+                arguments.setdefault("target_id", target_id)
+            else:
+                arguments.setdefault("target_name", target_name.strip())
     target_chat = arguments.get("target_chat")
     if target_chat is not None:
         if capability.split(".", 1)[0] != "whatsapp" or not isinstance(target_chat, dict):
@@ -1623,22 +2072,47 @@ def validate_intent(intent: object) -> dict | None:
             return None
         if resolver == "plan_output" and not value.get("value"):
             return None
-    target_declared = audience is not None or isinstance(target, dict) or target_scope is not None
-    if target_declared and capability not in {
+    target_declared = audience is not None or isinstance(target, dict)
+    allowed_target_capabilities = {
         "labels.add", "labels.remove", "collections.add", "collections.remove", "collections.tag",
         "work.assign", "work.unassign", "whatsapp.user_info",
         "whatsapp.add_group_members", "whatsapp.remove_group_members",
         "whatsapp.profile_pictures",
         "whatsapp.create_group", "whatsapp.block_contacts", "whatsapp.unblock_contacts",
         "whatsapp.contact_devices",
-    }:
+        # A task can be created already assigned to one or more people in
+        # the same request ("create task X, assign it to @Alice") -- without
+        # this, an audience the model correctly attached to a create_task
+        # intent would make validate_intent reject the whole intent instead
+        # of just carrying the assignee through.
+        "work.create_task",
+    }
+    if typed_work_target:
+        allowed_target_capabilities.update(_TYPED_TARGET_CAPABILITIES)
+    if target_declared and capability not in allowed_target_capabilities:
         return None
-    mention_indices = arguments.get("mention_indices", [])
+    from features.nl_runtime import mention_indices_expression
+
+    mention_indices = mention_indices_expression(arguments)
     if mention_indices is not None and (
         not isinstance(mention_indices, list)
         or any(not isinstance(index, int) or index < 0 for index in mention_indices)
     ):
         return None
+    if capability == "collections.tag":
+        collection = arguments.get("collection")
+        if isinstance(collection, str) and collection.strip():
+            # collections.tag always means "notify this subgroup's members" --
+            # its audience is fully determined by its own collection field.
+            # The model sometimes independently picks a different resolver
+            # (current_chat_members, an empty explicit_mentions) even after
+            # correctly choosing this capability; trusting that instead of
+            # deriving the audience from collection would silently notify
+            # the wrong people rather than the named subgroup.
+            arguments = dict(arguments)
+            arguments["audience"] = {
+                "resolver": "collection_members", "value": collection.strip()
+            }
     return {"capability": capability, "arguments": arguments}
 
 
@@ -1804,7 +2278,15 @@ def _repair_collection_tag_intent(step: dict, text: str, factory) -> dict:
         "collections.add", "collections.remove", "collections.info"
     }:
         return step
-    explicit_tag = re.search(r"\b(?:tag|ping|mention|notify)\b", text, re.IGNORECASE)
+    explicit_tag = re.search(
+        r"\b(?:tag|ping|mention|notify|inform|alert)\b"
+        r"|\blet\b.{0,20}\bknow\b"
+        r"|\bloop(?:ed|ing)?\s+in\b"
+        r"|\bheads?[\s-]up\b"
+        r"|\bshout[\s-]?out\b",
+        text,
+        re.IGNORECASE,
+    )
     subgroup_only = re.fullmatch(
         r"(?:@[A-Za-z0-9][A-Za-z0-9_-]*\s*)+", text.strip()
     )
@@ -1836,6 +2318,38 @@ def _repair_collection_tag_intent(step: dict, text: str, factory) -> dict:
         "value": collection,
     }
     return {**step, "capability": "collections.tag", "arguments": arguments}
+
+
+def _default_generic_event_fields(intent: dict, text: str) -> dict:
+    """Fill safe metadata for a generic event request."""
+    if intent.get("capability") != "work.create_event":
+        return intent
+    arguments = dict(intent.get("arguments", {}))
+    if not _arg_text(arguments, "name"):
+        return intent
+    from db.event_store import EVENT_CATEGORIES, EVENT_TYPES
+
+    lowered = text.casefold()
+    facts = next(
+        (
+            value
+            for phrase, value in sorted(
+                PROGRAM_KNOWLEDGE.items(), key=lambda item: len(item[0]), reverse=True
+            )
+            if phrase in lowered
+        ),
+        None,
+    )
+    default_type = facts["type"] if facts else "organization"
+    default_category = facts["category"] if facts else "other"
+    event_type = _arg_text(arguments, "type").casefold()
+    if event_type not in EVENT_TYPES:
+        event_type = default_type
+    category = _arg_text(arguments, "category").casefold()
+    if category not in EVENT_CATEGORIES[event_type]:
+        category = default_category
+    arguments.update(type=event_type, category=category)
+    return {**intent, "arguments": arguments}
 
 
 def _semantic_entity_candidates(factory, text: str) -> list[dict]:
@@ -1874,6 +2388,134 @@ def _plan_completeness_issue(plan: list[dict], text: str, factory) -> str | None
                 + ", ".join(matched)
                 + ". Each collection must be represented by its own executable step."
             )
+    return None
+
+
+# Capabilities that act on exactly one named task/event. A request naming
+# more than one distinct numeric target for one of these must become one
+# plan step per target -- collapsing them silently drops every target but
+# whichever one the model happened to keep.
+_SINGLE_TARGET_CAPABILITIES = frozenset({
+    "work.assign", "work.unassign", "work.history", "work.status", "work.start",
+    "work.complete", "work.update", "work.set_lifecycle", "work.set_status",
+    "work.delete_event", "work.delete_task", "work.update_event",
+})
+
+
+# Family labels, not capability names: work.delete_task and work.delete_event
+# share the same delete/cancel vocabulary and are one family, not two, or a
+# bare "delete task 5" would always look like two competing actions against
+# itself. "remove" is claimed only by unassign -- "remove X from Y" is a
+# common phrasing for unassigning a person, and treating it as delete
+# vocabulary too made "remove @Alice from task 5" a false positive.
+_ACTION_VERB_FAMILIES: dict[str, tuple[str, ...]] = {
+    "complete": ("complete", "completed", "finish", "finished"),
+    "start": ("start", "started", "begin", "began"),
+    "assign": ("assign", "reassign", "delegate"),
+    "unassign": ("unassign", "remove"),
+    "delete": ("delete", "cancel"),
+}
+_ACTION_FAMILY_CAPABILITIES: dict[str, frozenset[str]] = {
+    "complete": frozenset({"work.complete"}),
+    "start": frozenset({"work.start"}),
+    "assign": frozenset({"work.assign"}),
+    "unassign": frozenset({"work.unassign"}),
+    "delete": frozenset({"work.delete_task", "work.delete_event"}),
+}
+
+
+def _intent_completeness_issue(intent: dict, text: str) -> str | None:
+    """Detect a compound request collapsed into a single intent instead of a
+    plan.
+
+    Two shapes of this are checked:
+
+    1. Multiple distinct targets, one operation -- "assign task 5 to X and
+       task 6 to Y" or "mark 'Sprint Planning' done and 'Sprint Review' done"
+       names two targets (numeric IDs and/or quoted titles, possibly mixed)
+       for the same operation, but the model resolved only one of them.
+    2. One target, multiple operations -- "complete task 5 and reassign it
+       to @Bob" or "unassign everyone from task 5 then delete it" names two
+       distinct actions for what is likely the same target, but the model
+       kept only the first.
+
+    This mirrors ``_plan_completeness_issue`` but catches the case that never
+    reaches it: the model didn't even attempt a plan, so there is no plan for
+    that check to inspect.
+    """
+    capability = intent.get("capability")
+    if capability not in _SINGLE_TARGET_CAPABILITIES:
+        return None
+    target_arguments = _target_arguments(intent.get("arguments", {}), text)
+
+    mentioned_ids = {
+        match
+        for match in re.findall(r"\b(?:task|event)s?\s*#?\s*(\d+)\b", text, re.IGNORECASE)
+    }
+    quoted_names = set()
+    for single, double in re.findall(r"'([^']{2,60})'|\"([^\"]{2,60})\"", text):
+        name = (single or double).strip().casefold()
+        if name:
+            quoted_names.add(name)
+
+    # Multiple distinct targets (numeric IDs and/or quoted titles, possibly
+    # a mix of both) named for one operation, but the intent only resolved
+    # to one of them.
+    if len(mentioned_ids) + len(quoted_names) >= 2:
+        resolved_id = target_arguments.get("target_id")
+        try:
+            resolved_id = str(int(resolved_id)) if resolved_id is not None else None
+        except (TypeError, ValueError):
+            resolved_id = None
+        resolved_name = str(target_arguments.get("target_name") or "").strip().casefold()
+
+        uncovered_ids = mentioned_ids - ({resolved_id} if resolved_id else set())
+        uncovered_names = {
+            name for name in quoted_names
+            if not (resolved_name and (name in resolved_name or resolved_name in name))
+        }
+        if uncovered_ids or uncovered_names:
+            named = sorted(mentioned_ids) + sorted(quoted_names)
+            return (
+                "The request names multiple distinct targets ("
+                + ", ".join(named)
+                + ") for the same operation, but the candidate intent resolved only "
+                "one of them (or none). Each distinct target must be its own "
+                "independently executable plan step."
+            )
+
+    # Multiple distinct actions on what looks like the same target -- e.g.
+    # "complete task 5 and reassign it to @Bob" or "start task 5, then mark
+    # it high priority" -- where the model kept only the first action and
+    # silently dropped the rest. A single capability can never itself belong
+    # to more than one of these families, so two or more present families is
+    # always a sign something was dropped.
+    from features.nl_runtime import _positive_action_present
+
+    present_families = {
+        family for family, verbs in _ACTION_VERB_FAMILIES.items()
+        if _positive_action_present(text, verbs)
+    }
+    # work.update/history/status/etc. don't belong to ANY tracked family --
+    # they're a generic field tweak or a read, never themselves an assign,
+    # complete, start, unassign, or delete. So even ONE recognized family verb
+    # showing up in the text alongside one of these generic capabilities is
+    # suspicious on its own: "change task 5 priority to high and assign it to
+    # @Alice" resolving to a bare work.update can only mean the assignment
+    # was dropped, since work.update could never BE the assign action.
+    capability_family = next(
+        (family for family, caps in _ACTION_FAMILY_CAPABILITIES.items() if capability in caps),
+        None,
+    )
+    uncovered_families = present_families - ({capability_family} if capability_family else set())
+    if uncovered_families:
+        return (
+            "The request appears to combine multiple distinct actions ("
+            + ", ".join(sorted(present_families))
+            + ") on the same target, but the candidate intent only performs "
+            "one of them. Each distinct action must be its own independently "
+            "executable plan step."
+        )
     return None
 
 
@@ -1975,6 +2617,137 @@ def _content(response: httpx.Response) -> str:
     return content
 
 
+class _GeminiResponseShim:
+    """Wraps a Gemini generateContent response as an OpenAI-shaped one.
+
+    Gemma's thinking mode can emit reasoning-trace parts marked
+    ``"thought": true`` alongside the actual answer; those are dropped so
+    downstream parsing (_content/_parse_model_json) never has to know this
+    response came from a different provider's wire format.
+    """
+
+    def __init__(self, raw_response) -> None:
+        self._raw = raw_response
+        self.status_code = getattr(raw_response, "status_code", None)
+
+    def raise_for_status(self):
+        return self._raw.raise_for_status()
+
+    def json(self):
+        payload = self._raw.json()
+        candidates = payload.get("candidates") or []
+        text = ""
+        if candidates:
+            parts = ((candidates[0].get("content") or {}).get("parts")) or []
+            text = "".join(part.get("text", "") for part in parts if not part.get("thought"))
+        return {"choices": [{"message": {"content": text}}]}
+
+
+def _post_gemini(client, api_key: str, model: str, payload: dict):
+    """Translate an OpenAI-shaped chat payload into a Gemini generateContent call.
+
+    Newer Gemini API keys (the "AQ." prefix format) are only accepted on the
+    native generateContent endpoint with the x-goog-api-key header -- they are
+    rejected on OpenAI-compatible endpoints/Bearer auth, so this cannot reuse
+    _post_mistral's request shape.
+    """
+    messages = payload.get("messages") or []
+    system_content = next((m["content"] for m in messages if m.get("role") == "system"), "")
+    user_content = next((m["content"] for m in messages if m.get("role") == "user"), "")
+    generation_config = {
+        "temperature": payload.get("temperature", 0),
+        "maxOutputTokens": payload.get("max_tokens", 768),
+        # Gemma 4 only supports "high" or "minimal" (a 400 INVALID_ARGUMENT
+        # rejects "medium"/"low" -- those exist for other Gemini model
+        # families, not this one). "high" was measured at 23-39s per call
+        # and burned its whole max_tokens budget on the reasoning trace
+        # before emitting an answer roughly 2/3 of the time. "minimal" was
+        # consistently 2-4s and correctly kept multi-entity compound-assign
+        # bindings distinct across repeated trials.
+        "thinkingConfig": {"thinkingLevel": "minimal"},
+    }
+    if payload.get("response_format"):
+        generation_config["responseMimeType"] = "application/json"
+    gemini_payload = {
+        "systemInstruction": {"parts": [{"text": system_content}]},
+        "contents": [{"role": "user", "parts": [{"text": user_content}]}],
+        "generationConfig": generation_config,
+    }
+    headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+    url = GEMINI_GENERATE_URL_TEMPLATE.format(model=model)
+    transient_statuses = {408, 429, 500, 502, 503, 504}
+    for attempt in range(2):
+        try:
+            raw_response = client.post(url, headers=headers, json=gemini_payload)
+            status_code = getattr(raw_response, "status_code", None)
+            if status_code in transient_statuses and attempt == 0:
+                time.sleep(0.25)
+                continue
+            raw_response.raise_for_status()
+            return _GeminiResponseShim(raw_response)
+        except httpx.TransportError:
+            if attempt == 1:
+                raise
+            time.sleep(0.25)
+    raise RuntimeError("Gemini request did not return a response")
+
+
+def _post_mistral(client, api_key: str, model: str, payload: dict, *, provider: str = "mistral"):
+    """POST one bounded model request, retrying only transient failures."""
+    if provider == "gemini":
+        return _post_gemini(client, api_key, model, payload)
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    transient_statuses = {408, 429, 500, 502, 503, 504}
+    for attempt in range(2):
+        try:
+            response = client.post(
+                MISTRAL_CHAT_URL,
+                headers=headers,
+                json=payload,
+            )
+            status_code = getattr(response, "status_code", None)
+            if status_code in transient_statuses and attempt == 0:
+                time.sleep(0.25)
+                continue
+            response.raise_for_status()
+            return response
+        except httpx.TransportError:
+            if attempt == 1:
+                raise
+            time.sleep(0.25)
+    raise RuntimeError("Mistral request did not return a response")
+
+
+def _parse_model_json(response: httpx.Response, error: str) -> dict:
+    """Parse JSON responses, including the markdown fence some models add."""
+    content = _content(response).strip()
+    candidates = [content]
+    if content.startswith("```") and content.endswith("```"):
+        fenced = content.splitlines()
+        candidates.append("\n".join(fenced[1:-1]).strip())
+    if "{" in content and "}" in content:
+        candidates.append(content[content.find("{"):content.rfind("}") + 1])
+    if "[" in content and "]" in content:
+        candidates.append(content[content.find("["):content.rfind("]") + 1])
+    for candidate in dict.fromkeys(candidates):
+        try:
+            value = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(value, dict):
+            return value
+        # Some models return a bare step array for a plan instead of the
+        # documented {"plan": [...], "clarification": ""} envelope. A bare
+        # array is never meaningful as anything else here, so normalize it
+        # to the envelope shape callers already expect.
+        if isinstance(value, list) and value:
+            return {"plan": value}
+    raise ValueError(error)
+
+
 class MistralCommandTranslator:
     """Small synchronous Mistral client kept injectable for tests."""
 
@@ -1985,10 +2758,12 @@ class MistralCommandTranslator:
         *,
         client: httpx.Client | None = None,
         timeout: float = 20.0,
+        provider: str = "mistral",
     ) -> None:
         self.api_key = api_key.strip()
         self.model = model.strip() or DEFAULT_MODEL
         self.client = client or httpx.Client(timeout=timeout)
+        self.provider = provider
 
     def translate(
         self,
@@ -2018,13 +2793,12 @@ class MistralCommandTranslator:
             f"{attachment_context or '(none)'}\n\n"
             f"User message: {text}"
         )
-        response = self.client.post(
-            MISTRAL_CHAT_URL,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
+        response = _post_mistral(
+            self.client,
+            self.api_key,
+            self.model,
+            provider=self.provider,
+            payload={
                 "model": self.model,
                 "temperature": 0,
                 "max_tokens": 768,
@@ -2036,12 +2810,15 @@ class MistralCommandTranslator:
                 ],
             },
         )
-        response.raise_for_status()
-        try:
-            result = json.loads(_content(response))
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise ValueError("Mistral returned invalid JSON") from exc
-        intent = validate_intent(result.get("intent")) if isinstance(result, dict) else None
+        result = _parse_model_json(response, "Mistral returned invalid JSON")
+        intent_payload = (
+            result.get("intent")
+            if isinstance(result.get("intent"), dict)
+            else result
+            if "capability" in result
+            else None
+        )
+        intent = validate_intent(intent_payload)
         if intent:
             argument_error = _intent_argument_error(intent, mentioned_jids, text)
             if argument_error:
@@ -2091,13 +2868,12 @@ class MistralCommandTranslator:
             f"{chr(10).join(f'{i}: an explicitly mentioned participant' for i, _ in enumerate(mentioned_jids)) or '(none)'}\n"
             f"Knowledge context:\n{knowledge_context or '(none)'}"
         )
-        response = self.client.post(
-            MISTRAL_CHAT_URL,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
+        response = _post_mistral(
+            self.client,
+            self.api_key,
+            self.model,
+            provider=self.provider,
+            payload={
                 "model": self.model,
                 "temperature": 0,
                 "max_tokens": 256,
@@ -2109,10 +2885,9 @@ class MistralCommandTranslator:
                 ],
             },
         )
-        response.raise_for_status()
         try:
-            result = json.loads(_content(response))
-        except (json.JSONDecodeError, TypeError):
+            result = _parse_model_json(response, "Mistral returned invalid JSON")
+        except ValueError:
             return None
         intent = validate_intent(result.get("intent")) if isinstance(result, dict) else None
         if intent and _intent_argument_error(intent, mentioned_jids, text):
@@ -2142,13 +2917,12 @@ class MistralCommandTranslator:
             f"{json.dumps(entity_candidates, ensure_ascii=False) if entity_candidates else '(none)'}\n"
             f"Knowledge context:\n{knowledge_context or '(none)'}"
         )
-        response = self.client.post(
-            MISTRAL_CHAT_URL,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
+        response = _post_mistral(
+            self.client,
+            self.api_key,
+            self.model,
+            provider=self.provider,
+            payload={
                 "model": self.model,
                 "temperature": 0,
                 "max_tokens": 256,
@@ -2160,10 +2934,9 @@ class MistralCommandTranslator:
                 ],
             },
         )
-        response.raise_for_status()
         try:
-            result = json.loads(_content(response))
-        except (json.JSONDecodeError, TypeError):
+            result = _parse_model_json(response, "Mistral returned invalid JSON")
+        except ValueError:
             return None
         return validate_intent(result.get("intent")) if isinstance(result, dict) else None
 
@@ -2186,13 +2959,12 @@ class MistralCommandTranslator:
             f"Candidate plan: {json.dumps(plan, ensure_ascii=False)}\n"
             f"Knowledge context:\n{knowledge_context or '(none)'}"
         )
-        response = self.client.post(
-            MISTRAL_CHAT_URL,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
+        response = _post_mistral(
+            self.client,
+            self.api_key,
+            self.model,
+            provider=self.provider,
+            payload={
                 "model": self.model,
                 "temperature": 0,
                 "max_tokens": 768,
@@ -2204,10 +2976,9 @@ class MistralCommandTranslator:
                 ],
             },
         )
-        response.raise_for_status()
         try:
-            result = json.loads(_content(response))
-        except (json.JSONDecodeError, TypeError):
+            result = _parse_model_json(response, "Mistral returned invalid JSON")
+        except ValueError:
             return None
         repaired = validate_plan(result.get("plan")) if isinstance(result, dict) else None
         if not repaired:
@@ -2272,13 +3043,11 @@ class MistralCardDesigner:
         attachment_context: str = "",
         capability: str = "card.design",
     ) -> dict:
-        response = self.client.post(
-            MISTRAL_CHAT_URL,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
+        response = _post_mistral(
+            self.client,
+            self.api_key,
+            self.model,
+            {
                 "model": self.model,
                 "temperature": 0.2,
                 "max_tokens": 384,
@@ -2300,11 +3069,10 @@ class MistralCardDesigner:
                 ],
             },
         )
-        response.raise_for_status()
-        try:
-            result = json.loads(_content(response))
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise ValueError("Mistral card designer returned invalid JSON") from exc
+        result = _parse_model_json(
+            response,
+            "Mistral card designer returned invalid JSON",
+        )
         if isinstance(result, dict) and isinstance(result.get("design"), dict):
             result = result["design"]
         if not isinstance(result, dict):
@@ -2327,8 +3095,13 @@ def _self_jids(client, config: dict) -> set[str]:
 
 
 def is_bot_mentioned(message, client, config: dict) -> bool:
+    # ``@me`` is an explicit local alias. Resolve it before touching the live
+    # Neonize identity API; paired-account self messages can otherwise block
+    # the only dispatch worker while ``get_me()`` waits on transport state.
+    if ME_ALIAS_RE.search(_get_text(message)):
+        return True
     mentioned = {normalize_jid(jid) for jid in _get_mentioned_jids(message)}
-    return bool(mentioned & _self_jids(client, config)) or bool(ME_ALIAS_RE.search(_get_text(message)))
+    return bool(mentioned & _self_jids(client, config))
 
 
 def _without_self_mentions(message, self_jids: set[str]):
@@ -2427,26 +3200,32 @@ def _resolve_runtime_target_scope(
         list(visible_mentions or []),
     )
     error = validate_execution_ready(intent, resolution, list(visible_mentions or []))
-    if error and intent.get("capability") == "work.assign":
-        # Self mentions are intentionally removed from executable audiences so
-        # the bot cannot assign work to itself.  Preserve that safety rule, but
-        # explain the actual cause instead of reporting a missing audience.
-        from features.subgroups import _get_mentioned_jids, _resolve_lid_to_pn
-
-        raw_mentions = [normalize_jid(jid) for jid in _get_mentioned_jids(message)]
-        raw_mentions = [jid for jid in raw_mentions if jid]
-        self_mentions = []
-        for jid in raw_mentions:
-            candidates = {jid}
-            try:
-                candidates.add(normalize_jid(_resolve_lid_to_pn(client, jid)))
-            except Exception:
-                pass
-            if candidates & self_jids:
-                self_mentions.append(jid)
-        if raw_mentions and len(self_mentions) == len(raw_mentions):
-            error = "The bot cannot be assigned work. Mention a group member instead."
     return list(resolution.members), error
+
+
+def _plan_target_collision_error(
+    plan_target_resolutions: dict[str, tuple[str, str]],
+    resolved_ref: str,
+    target_name: str,
+) -> str | None:
+    """Guard against a compound plan collapsing two distinct fuzzy-matched
+    names onto the same task/event.
+
+    Returns a user-facing error and leaves the tracker untouched when two
+    different names in the same request resolved to the same target; records
+    the resolution and returns None otherwise (including a repeat reference
+    by the same name, which is a legitimate intentional reuse).
+    """
+    name_key = target_name.strip().casefold()
+    prior = plan_target_resolutions.get(resolved_ref)
+    if prior is not None and prior[0] != name_key:
+        return (
+            f"'{public_text(prior[1], limit=60)}' and '{public_text(target_name, limit=60)}' "
+            f"both matched `{resolved_ref}` — please use the exact task/event name or ID for "
+            f"each so I don't apply them to the same one."
+        )
+    plan_target_resolutions[resolved_ref] = (name_key, target_name.strip())
+    return None
 
 
 def _execute_direct_operation(
@@ -2486,19 +3265,28 @@ def register(client, config: dict) -> Callable:
     direct_errors = validate_direct_registry()
     if any(direct_errors.values()):
         raise RuntimeError("Invalid direct-tool routing registry: " + repr(direct_errors))
-    api_key = (config.get("mistral_api_key") or os.getenv("MISTRAL_API_KEY", "")).strip()
-    translator = (
-        MistralCommandTranslator(api_key, config.get("mistral_model", DEFAULT_MODEL))
-        if api_key
-        else None
-    )
+    mistral_api_key = (config.get("mistral_api_key") or os.getenv("MISTRAL_API_KEY", "")).strip()
+    gemini_api_key = (config.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")).strip()
+    # Gemini/Gemma takes priority for the command planner when configured;
+    # card design stays on Mistral regardless, since MistralCardDesigner only
+    # speaks Mistral's wire format.
+    if gemini_api_key:
+        translator = MistralCommandTranslator(
+            gemini_api_key,
+            config.get("gemini_model") or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+            provider="gemini",
+        )
+    elif mistral_api_key:
+        translator = MistralCommandTranslator(mistral_api_key, config.get("mistral_model", DEFAULT_MODEL))
+    else:
+        translator = None
     card_designer = (
         MistralCardDesigner(
-            api_key,
+            mistral_api_key,
             config.get("mistral_card_model")
             or os.getenv("MISTRAL_CARD_MODEL", DEFAULT_CARD_MODEL),
         )
-        if api_key
+        if mistral_api_key
         else None
     )
     from features.reminders import configured_reminder_group
@@ -2515,7 +3303,14 @@ def register(client, config: dict) -> Callable:
         }:
             return False
         if chat_server == "g.us" and not is_bot_mentioned(message, client, config):
-            return False
+            from features.neonize_policy import is_reminder_reply
+
+            # A reply that quotes a tracked group reminder is as much an
+            # explicit address to the bot as an @mention -- requiring
+            # "@bot" in addition to quoting the reminder is not how anyone
+            # actually replies to a reminder.
+            if not is_reminder_reply(message):
+                return False
         try:
             message._pbbot_reminder_group_jid = reminder_group_jid
         except (AttributeError, TypeError):
@@ -2534,8 +3329,21 @@ def register(client, config: dict) -> Callable:
             client.send_message(chat, "⚠️ Natural-language commands are not configured yet.")
             return True
 
-        self_jids = _self_jids(client, config)
         sender_jid = normalize_jid(message.Info.MessageSource.Sender)
+        if (
+            ME_ALIAS_RE.search(body)
+            and bool(getattr(message.Info.MessageSource, "IsFromMe", False))
+        ):
+            # The source is the paired bot account itself. We already know
+            # its sender identity, so avoid a blocking get_me() call here.
+            self_jids = {
+                jid for jid in (
+                    sender_jid,
+                    normalize_jid(config.get("bot_jid", "")),
+                ) if jid
+            }
+        else:
+            self_jids = _self_jids(client, config)
         push_name = str(getattr(message.Info, "Pushname", "") or "")
         if push_name and config.get("db_session_factory"):
             try:
@@ -2549,7 +3357,8 @@ def register(client, config: dict) -> Callable:
         from features.subgroups import _resolve_lid_to_pn
         def _resolve_lid(jid: str) -> str:
             jid = normalize_jid(jid)
-            if not jid: return ""
+            if not jid:
+                return ""
             pn = _resolve_lid_to_pn(client, jid)
             if pn != jid and pn.endswith("@s.whatsapp.net"):
                 if config.get("db_session_factory"):
@@ -2557,19 +3366,34 @@ def register(client, config: dict) -> Callable:
                         from db.work_store import WorkStore
                         store = WorkStore(config["db_session_factory"])
                         store.reconcile_user_identity(jid, pn)
-                    except Exception as exc:
+                    except Exception:
                         log.warning("Failed to reconcile one WhatsApp identity alias")
             return pn
 
-        visible_mentions = []
+        resolved_mentions = []
+        self_mention_count = 0
         for jid in _get_mentioned_jids(message):
             resolved = _resolve_lid(jid)
-            if resolved and resolved not in self_jids and resolved not in visible_mentions:
-                visible_mentions.append(resolved)
+            if not resolved:
+                continue
+            if resolved in self_jids:
+                self_mention_count += 1
+            if resolved not in resolved_mentions:
+                resolved_mentions.append(resolved)
+        explicit_bot_target = bool(
+            self_mention_count
+            and (ME_ALIAS_RE.search(raw_body) or self_mention_count > 1)
+        )
+        visible_mentions = [
+            resolved
+            for resolved in resolved_mentions
+            if resolved not in self_jids or explicit_bot_target
+        ]
         knowledge_context = build_knowledge_context(config, body)
         structured_translation = False
         compiled_steps: list[tuple[str | None, list[str], dict | None, dict | None]] = []
         plan_outputs: dict[str, dict] = {}
+        plan_target_resolutions: dict[str, tuple[str, str]] = {}
         plan_transaction = None
 
         def abort_plan() -> bool:
@@ -2624,6 +3448,32 @@ def register(client, config: dict) -> Callable:
                             client.send_message(
                                 chat,
                                 "⚠️ I couldn't split that workflow into safe, independent actions.",
+                            )
+                            return abort_plan()
+                        translation = {"plan": repaired_plan}
+                else:
+                    completeness_issue = _intent_completeness_issue(translation, body)
+                    if completeness_issue:
+                        try:
+                            repaired_plan = translator.repair_plan(
+                                body,
+                                [translation],
+                                completeness_issue,
+                                knowledge_context,
+                            )
+                        except Exception:
+                            log.exception("Intent completeness repair failed")
+                            repaired_plan = None
+                        if not repaired_plan or len(repaired_plan) < 2:
+                            # Never silently execute only one of several
+                            # explicitly named targets -- that discards part
+                            # of the request without telling the sender.
+                            log.warning("Compound request could not be split into a plan")
+                            client.send_message(
+                                chat,
+                                "⚠️ That looks like it names more than one target for the "
+                                "same action, but I could only safely understand one of "
+                                "them. Please send them as separate messages.",
                             )
                             return abort_plan()
                         translation = {"plan": repaired_plan}
@@ -2709,6 +3559,7 @@ def register(client, config: dict) -> Callable:
                                 step.get("capability"),
                             )
                     step = _canonicalize_entity_scope(step, entity_candidates)
+                    step = _default_generic_event_fields(step, body)
                     step = _repair_collection_tag_intent(step, body, execution_factory)
                     step = _fix_everyone_audience(step, body, visible_mentions)
                     if _needs_target_repair(step, body, visible_mentions):
@@ -2755,6 +3606,28 @@ def register(client, config: dict) -> Callable:
                         if is_direct_capability(step.get("capability", ""))
                         else None
                     )
+                    if direct_operation is not None and step.get("capability") in (
+                        "work.assign", "work.unassign",
+                    ):
+                        log.info(
+                            "natural-language plan step capability=%s step_id=%s declared_target=%r",
+                            step.get("capability"), current_step_name,
+                            step.get("arguments", {}).get("target"),
+                        )
+                        step_target_name = _target_arguments(
+                            step.get("arguments", {}), body
+                        ).get("target_name")
+                        if isinstance(step_target_name, str) and step_target_name.strip():
+                            resolved_ref = _resolve_target_reference(
+                                execution_factory, step.get("arguments", {})
+                            )
+                            if resolved_ref:
+                                collision_error = _plan_target_collision_error(
+                                    plan_target_resolutions, resolved_ref, step_target_name,
+                                )
+                                if collision_error:
+                                    client.send_message(chat, f"⚠️ {collision_error}")
+                                    return abort_plan()
                     if direct_operation is not None:
                         command = f"<direct {step.get('capability')}>"
                         result = _execute_direct_operation(
@@ -2801,7 +3674,11 @@ def register(client, config: dict) -> Callable:
                                 plan_outputs.setdefault("event", result)
                             if "task_id" in result:
                                 plan_outputs.setdefault("task", result)
-                        log.info("natural-language plan step capability=%s target_resolver=direct", capability)
+                        resolved_target = result.get("target") if isinstance(result, dict) else None
+                        log.info(
+                            "natural-language plan step capability=%s target_resolver=direct resolved_target=%s",
+                            capability, resolved_target,
+                        )
                         continue
                     elif _is_card_design_intent(step):
                         design_translation = step
@@ -2859,11 +3736,7 @@ def register(client, config: dict) -> Callable:
                         (
                             step.get("arguments", {}).get("audience", {}).get("resolver")
                             if isinstance(step.get("arguments", {}).get("audience"), dict)
-                            else (
-                                step.get("arguments", {}).get("target", {}).get("resolver")
-                                if isinstance(step.get("arguments", {}).get("target"), dict)
-                                else step.get("arguments", {}).get("target_scope")
-                            )
+                            else None
                         ),
                     )
                     if plan_transaction:
@@ -2898,12 +3771,17 @@ def register(client, config: dict) -> Callable:
             )
             return abort_plan()
         if translation is None:
+            log.warning("natural-language translation returned no result for body=%r", body)
             client.send_message(
                 chat,
                 "⚠️ I couldn't safely resolve that request for execution.",
             )
             return abort_plan()
         if not structured_translation:
+            log.warning(
+                "natural-language translation was unstructured, checking legacy read-only fallback: %r",
+                translation,
+            )
             # Compatibility for older model responses while all current
             # responses migrate to the structured compiler.
             command = resolve_named_entity_command(
