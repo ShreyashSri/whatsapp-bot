@@ -589,6 +589,23 @@ def test_task_first_assignment_wording_extracts_named_target():
     }
 
 
+def test_second_step_target_survives_the_full_plan_text_fallback():
+    """_natural_work_target(text) only ever finds the FIRST "task X to" clause
+    in raw text -- for a compound plan's second (or later) step, the caller
+    passes the *whole* request's text, not just that step's own clause. It
+    must never clobber a target_name the model's own JSON already gave that
+    step, or "assign task website to X and task qawsed to Y" silently
+    reassigns Y to the website task instead of qawsed (observed live in
+    production: both mentions landed on the first task)."""
+    full_text = "assign task website to @Ananya Gupta Dsce and task qawsed to @Bibisha"
+
+    step1 = _target_arguments({"target": "website"}, full_text)
+    step2 = _target_arguments({"target": "qawsed"}, full_text)
+
+    assert step1["target_name"] == "website"
+    assert step2["target_name"] == "qawsed"
+
+
 def test_duplicate_task_title_resolves_when_parent_event_is_named():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker

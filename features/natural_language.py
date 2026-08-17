@@ -831,7 +831,18 @@ def _target_arguments(arguments: dict, text: str = "") -> dict:
                 result["target_type"] = text_type.casefold()
 
     natural_target = _natural_work_target(text)
-    if natural_target and not has_explicit_id:
+    # This regex fallback only knows how to find the FIRST "task X to/for/.."
+    # clause in the raw text, with no notion of which step it belongs to. It
+    # exists to recover a target when the model's own JSON gave none -- it
+    # must never clobber an already-valid target_name the model already
+    # parsed correctly, or every step after the first in a compound plan
+    # ("assign task A to X and task B to Y") gets silently overwritten with
+    # step one's target, because callers pass the plan's full raw text here.
+    if natural_target and not has_explicit_id and (
+        not isinstance(result.get("target_name"), str)
+        or result.get("target_name", "").strip().isdigit()
+        or result.get("target_name", "").strip().casefold() in {"task", "event"}
+    ):
         result["target_type"], result["target_name"] = natural_target
     parent_event = _parent_event_name(text)
     if parent_event and result.get("target_type") == "task":
