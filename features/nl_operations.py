@@ -1518,7 +1518,10 @@ def execute_work_read(
             )
             if actor.role == "admin":
                 rows += store.unassigned(target_type=target_type)
-            heading = "📋 *Work Overview*"
+            heading = {
+                "event": "📋 *Events Overview*",
+                "task": "📋 *Tasks Overview*",
+            }.get(target_type, "📋 *Work Overview*") if not target_id else "📋 *Work Overview*"
         _add_child_task_assignees(rows)
         all_work_jids = [
             jid

@@ -77,6 +77,22 @@ def public_text(value: object, *, limit: int | None = None) -> str:
     return text[:limit] if limit is not None else text
 
 
+def public_diagnostic(value: object, *, limit: int | None = None) -> str:
+    """Format a code-authored diagnostic string (capability names, enum
+    values) for display without public_text's markup neutralization.
+
+    That neutralization exists to stop *user-controlled* text from
+    triggering WhatsApp's markup -- it turns every literal "_" into a
+    full-width look-alike, which renders as a garbled double underscore
+    for things like "work.delete_task" or "in_progress" that a reader
+    needs to see and retype exactly. Callers must only pass text they
+    built themselves (capability names, fixed enum lists), never text
+    that embeds a user-supplied name or title.
+    """
+    text = " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())
+    return text[:limit] if limit is not None else text
+
+
 def public_url(value: object, *, limit: int | None = None) -> str:
     """Keep a displayable URL copyable without markup rewriting."""
     text = " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())

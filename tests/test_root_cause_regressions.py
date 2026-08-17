@@ -696,6 +696,64 @@ def test_bare_numeric_target_stays_ambiguous_when_both_types_share_the_id(factor
     assert _resolve_target_reference(factory, {"target": event["id"]}) is None
 
 
+def test_task_named_entirely_with_generic_words_is_still_resolvable_by_name(factory):
+    from features.natural_language import _entity_match_score
+
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+    task = TaskStore(factory).create("the", admin.jid)
+
+    # GENERIC_ENTITY_WORDS ("the", "task", "show", "add", ...) strips filler
+    # out of a REQUEST so the fuzzy matcher can isolate the entity name --
+    # e.g. "delete task named the" -> "delete ... named ...". Applying that
+    # same filter to a candidate's own stored name used to erase it down to
+    # zero tokens whenever the name itself was one of those words, and
+    # _entity_match_score short-circuits to 0.0 for any empty name, making
+    # the task permanently unmatchable by name regardless of phrasing.
+    assert _entity_match_score("delete task named the", "the") > 0
+    assert (
+        _resolve_target_reference(factory, {"target_type": "task", "target_name": "the"})
+        == f"task {task.id}"
+    )
+
+
+def test_work_overview_target_type_alone_filters_to_only_that_kind(factory):
+    from unittest.mock import MagicMock
+    from features.nl_operations import execute_work_read
+
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+    EventStore(factory).create_event(name="conf", type="organization", status="active")
+    TaskStore(factory).create("standalone task", admin.jid)
+
+    client = MagicMock()
+    message = MagicMock()
+    message.Info.MessageSource.Chat.Server = "g.us"
+    message.Info.MessageSource.Sender = admin.jid
+    message.Message.conversation = "@me show all events"
+    message.Message.extendedTextMessage = None
+    message.Message.imageMessage = None
+    # "show all events" / "show all tasks" has no single event/task id to
+    # scope to -- target_type alone (no target_id) is the only way to ask
+    # for "just events" or "just tasks" instead of the full mixed overview.
+    # The DB layer (WorkStore.overview/unassigned) already filters on a bare
+    # target_type; this only confirms execute_work_read actually reads and
+    # forwards it instead of silently defaulting to the unfiltered overview.
+    events_only = execute_work_read(
+        client, message,
+        {"capability": "work.overview", "arguments": {"target_type": "event"}},
+        factory,
+    )
+    assert events_only["row_count"] >= 1
+    assert all(row["target_type"] == "event" for row in events_only["rows"])
+
+    tasks_only = execute_work_read(
+        client, message,
+        {"capability": "work.overview", "arguments": {"target_type": "task"}},
+        factory,
+    )
+    assert tasks_only["row_count"] >= 1
+    assert all(row["target_type"] == "task" for row in tasks_only["rows"])
+
+
 def test_unassign_with_unresolvable_target_fails_closed_instead_of_wiping_everything(factory):
     from types import SimpleNamespace
     from unittest.mock import MagicMock

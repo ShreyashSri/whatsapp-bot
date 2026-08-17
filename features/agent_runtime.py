@@ -242,7 +242,7 @@ _TOOL_ARGUMENTS = {
     "collections.tag": ("collection", "audience"),
     "work.my": ("status?",),
     "work.undo": (),
-    "work.overview": ("status?", "target?"),
+    "work.overview": ("status?", "target?", "target_type?"),
     "work.history": ("target",),
     "work.status": ("target",),
     "work.start": ("target",),
@@ -442,7 +442,11 @@ _DESTRUCTIVE_CAPABILITIES = frozenset({
 _DESCRIPTIONS = {
     "work.my": "show the sender's assigned events and tasks",
     "work.undo": "undo the sender's latest reversible bot action",
-    "work.overview": "show overall work or a scoped event/task overview",
+    "work.overview": (
+        "show a work overview; pass target_type ('event' or 'task', with no "
+        "id) alone to list only events or only tasks, or a full target "
+        "(with an id/name) to scope to one specific event or task"
+    ),
     "work.list_event_tasks": "list structured tasks linked to an event",
     "work.create_event": "create an event and return its durable event ID",
     "work.create_task": "create a task, optionally linked to an event",

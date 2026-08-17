@@ -25,7 +25,7 @@ import httpx
 
 from db.auth import normalize_jid
 from features.agent_runtime import AgentTrace, CAPABILITIES, MAX_PLAN_STEPS, render_tool_catalog
-from features.text import public_text
+from features.text import public_diagnostic, public_text
 from features.subgroups import (
     _get_mentioned_jids,
     _get_text,
@@ -317,14 +317,43 @@ def _entity_tokens(value: str) -> list[str]:
     ]
 
 
+def _entity_tokens_or_raw(value: str) -> list[str]:
+    """Like `_entity_tokens`, but never strips a name down to nothing.
+
+    GENERIC_ENTITY_WORDS exists to isolate the entity a REQUEST is talking
+    about from its surrounding grammar ("show my *task*" -> drop "show",
+    "my", "task"). Applying that same filter to a candidate's own stored
+    name is wrong: an event or task literally titled "The" or "Show" would
+    tokenize to nothing, and `_entity_match_score` short-circuits to 0.0
+    for empty name_tokens -- making that entity permanently unmatchable by
+    name no matter how the request phrases it. Fall back to the raw
+    tokens only when stripping would erase the name entirely.
+    """
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    raw_tokens = re.findall(r"[a-z0-9]+", normalized)
+    stripped_tokens = [token for token in raw_tokens if token not in GENERIC_ENTITY_WORDS]
+    return stripped_tokens or raw_tokens
+
+
 def _compact_entity(value: str) -> str:
     """Normalize spacing/punctuation for exact human-entered entity names."""
     return "".join(_entity_tokens(value))
 
 
-def _entity_match_score(request: str, name: str, category: str = "") -> float:
-    request_tokens = _entity_tokens(request)
-    name_tokens = _entity_tokens(name)
+def _entity_match_score(
+    request: str, name: str, category: str = "", *, request_is_name: bool = False
+) -> float:
+    # `request` is usually a raw free-text sentence, where stripping filler
+    # words down to nothing correctly means "no entity was named" (e.g.
+    # "show my tasks" alone should not fuzzy-match anything). Some callers,
+    # though, pass an already-isolated identifier as `request` -- a
+    # target_name/collection name pulled out of the arguments, not prose --
+    # and that value deserves the same "never erase down to nothing"
+    # treatment as `name` below: pass request_is_name=True there.
+    request_tokens = (
+        _entity_tokens_or_raw(request) if request_is_name else _entity_tokens(request)
+    )
+    name_tokens = _entity_tokens_or_raw(name)
     if not request_tokens or not name_tokens:
         return 0.0
     matched_positions = []
@@ -516,7 +545,7 @@ def _resolve_collection_name(factory, requested: object) -> str | None:
         if normalized_exact:
             return normalized_exact
     ranked = sorted(
-        ((name, _entity_match_score(requested, name)) for name in names),
+        ((name, _entity_match_score(requested, name, request_is_name=True)) for name in names),
         key=lambda item: (-item[1], item[0]),
     )
     if not ranked or ranked[0][1] < 0.5:
@@ -574,7 +603,7 @@ def _resolve_or_create_collection_name(
             names = list(SubgroupStore(factory).read())
             fuzzy_matches = [
                 name for name in names
-                if _entity_match_score(requested, name) >= 0.5
+                if _entity_match_score(requested, name, request_is_name=True) >= 0.5
             ]
             if fuzzy_matches:
                 # The name was close to an existing collection but could not
@@ -1058,7 +1087,7 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
         if target_type != "task":
             events = EventStore(factory).list_events(status="active")
             for e in events:
-                score = _entity_match_score(requested, e["name"], e.get("category", ""))
+                score = _entity_match_score(requested, e["name"], e.get("category", ""), request_is_name=True)
                 if score >= 0.4:
                     candidates.append(("event", e["id"], e["name"], score))
         if target_type != "event":
@@ -1066,7 +1095,7 @@ def _resolve_target_reference(factory, arguments: dict) -> str | None:
             if parent_event_id is not None:
                 tasks = [task for task in tasks if task.event_id == parent_event_id]
             for t in tasks:
-                score = _entity_match_score(requested, t.title)
+                score = _entity_match_score(requested, t.title, request_is_name=True)
                 if score >= 0.4:
                     candidates.append(("task", t.id, t.title, score))
 
@@ -1126,7 +1155,7 @@ def _resolve_media_post_reference(
                 entry_id = str(entry.get("id", "")).strip().lstrip("#")
                 if not text or not entry_id.isdigit():
                     continue
-                score = _entity_match_score(raw_id, text)
+                score = _entity_match_score(raw_id, text, request_is_name=True)
                 if score >= 0.4:
                     candidates.append((int(entry_id), text, score))
 
@@ -3589,7 +3618,7 @@ def register(client, config: dict) -> Callable:
                             step = repaired
                     argument_error = _intent_argument_error(step, visible_mentions, body)
                     if argument_error:
-                        client.send_message(chat, f"⚠️ {public_text(argument_error, limit=240)}")
+                        client.send_message(chat, f"⚠️ {public_diagnostic(argument_error, limit=240)}")
                         return abort_plan()
                     runtime_target_mentions, target_error = _resolve_runtime_target_scope(
                         client,
@@ -3600,14 +3629,14 @@ def register(client, config: dict) -> Callable:
                         visible_mentions,
                     )
                     if target_error:
-                        client.send_message(chat, f"⚠️ {public_text(target_error, limit=240)}")
+                        client.send_message(chat, f"⚠️ {public_diagnostic(target_error, limit=240)}")
                         return abort_plan()
                     from features.nl_runtime import validate_mutation_policy
                     mutation_error = validate_mutation_policy(
                         step, body, runtime_target_mentions
                     )
                     if mutation_error:
-                        client.send_message(chat, f"⚠️ {public_text(mutation_error, limit=240)}")
+                        client.send_message(chat, f"⚠️ {public_diagnostic(mutation_error, limit=240)}")
                         return abort_plan()
                     card_design = None
                     from features.nl_operations import is_direct_capability
@@ -3682,7 +3711,7 @@ def register(client, config: dict) -> Callable:
                                 step.get("capability"),
                                 postcondition_error,
                             )
-                            client.send_message(chat, f"⚠️ {public_text(postcondition_error, limit=240)}.")
+                            client.send_message(chat, f"⚠️ {public_diagnostic(postcondition_error, limit=240)}.")
                             return abort_plan()
                         capability = step.get("capability", "")
                         record_output(plan_outputs, current_step_name, result)
@@ -3723,7 +3752,7 @@ def register(client, config: dict) -> Callable:
                         if compiled_design is None:
                             client.send_message(
                                 chat,
-                                f"⚠️ {public_text(_intent_compile_error(design_translation, body), limit=240)}",
+                                f"⚠️ {public_diagnostic(_intent_compile_error(design_translation, body), limit=240)}",
                             )
                             return abort_plan()
                         command, card_design = compiled_design
@@ -3738,7 +3767,7 @@ def register(client, config: dict) -> Callable:
                         if command is None:
                             client.send_message(
                                 chat,
-                                f"⚠️ {public_text(_intent_compile_error(step, body), limit=240)}",
+                                f"⚠️ {public_diagnostic(_intent_compile_error(step, body), limit=240)}",
                             )
                             return abort_plan()
                     compiled_steps.append((
