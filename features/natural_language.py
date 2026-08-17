@@ -3641,15 +3641,27 @@ def register(client, config: dict) -> Callable:
                         from features.nl_runtime import verify_operation_result
 
                         if result is None:
+                            # The step's own handler often already sent a
+                            # specific reason (e.g. an ambiguous task name)
+                            # through execution_client -- when that client
+                            # defers delivery until commit, abort_plan()'s
+                            # rollback would otherwise discard it and leave
+                            # the user with only this generic fallback.
+                            specific_reason = (
+                                execution_client.last_message_text()
+                                if plan_transaction
+                                else None
+                            )
                             trace.record(
                                 "step_failed",
                                 step_id=current_step_name,
                                 capability=step.get("capability"),
-                                reason="direct tool returned no successful result",
+                                reason=specific_reason or "direct tool returned no successful result",
                             )
                             client.send_message(
                                 chat,
-                                f"⚠️ I couldn't complete `{step.get('capability', 'that action')}`. No further steps were run.",
+                                specific_reason
+                                or f"⚠️ I couldn't complete `{step.get('capability', 'that action')}`. No further steps were run.",
                             )
                             return abort_plan()
                         postcondition_error = verify_operation_result(step, result)

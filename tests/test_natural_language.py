@@ -1223,6 +1223,83 @@ def test_compound_two_target_request_warns_when_repair_fails_instead_of_running_
     )
 
 
+def test_ambiguous_named_target_in_a_multistep_plan_reports_its_specific_reason():
+    """A step inside a >1-step plan runs through the deferred TransactionClient,
+    which the caller discards on abort. When work.assign's own handler already
+    wrote a specific reason (e.g. two different events both have a task named
+    "how"), that reason must survive to the user instead of being swallowed by
+    the rollback and replaced with the generic "No further steps were run."."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from db.auth import upsert_user
+    from db.event_store import EventStore
+    from db.models import Base
+    from db.task_store import TaskStore
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+    ananya = upsert_user(factory, "ananya@s.whatsapp.net", display_name="Ananya")
+    bibisha = upsert_user(factory, "bibisha@s.whatsapp.net", display_name="Bibisha")
+    events = EventStore(factory)
+    event_a = events.create_event(name="event a", type="organization", status="active")
+    event_b = events.create_event(name="event b", type="organization", status="active")
+    tasks = TaskStore(factory)
+    # The same task name reused across two different events -- genuinely
+    # ambiguous without specifying which event, unlike the earlier "hw"/"how"
+    # bug where only one candidate actually existed.
+    tasks.create("how", admin.jid, event_id=event_a["id"])
+    tasks.create("how", admin.jid, event_id=event_b["id"])
+    qawsed = tasks.create("qawsed", admin.jid, event_id=event_b["id"])
+
+    client = MagicMock()
+    client.get_me.return_value = SimpleNamespace(JID="bot@s.whatsapp.net", LID="999999@lid")
+    message = make_message(
+        "@me assign task how to @Ananya Gupta Dsce and task qawsed to @Bibisha",
+        sender=admin.jid,
+    )
+    dispatch = MagicMock()
+    plan = {
+        "plan": [
+            {
+                "step_id": "step1",
+                "capability": "work.assign",
+                "arguments": {
+                    "target": "how to",
+                    "audience": {"resolver": "explicit_mentions", "mention_indices": [0]},
+                },
+            },
+            {
+                "step_id": "step2",
+                "capability": "work.assign",
+                "arguments": {
+                    "target": "qawsed",
+                    "audience": {"resolver": "explicit_mentions", "mention_indices": [1]},
+                },
+            },
+        ]
+    }
+
+    with patch(
+        "features.natural_language._get_mentioned_jids",
+        return_value=[ananya.jid, bibisha.jid],
+    ), patch.object(MistralCommandTranslator, "translate", return_value=(plan, "")):
+        handler = register(client, {"mistral_api_key": "secret", "db_session_factory": factory})
+        assert handler(client, message, dispatch) is True
+
+    replies = [str(call) for call in client.send_message.call_args_list]
+    assert any("uniquely identify" in reply for reply in replies)
+    assert not any("No further steps were run" in reply for reply in replies)
+
+    # And the plan must have rolled back entirely -- step2's qawsed
+    # assignment never got committed once step1 failed.
+    from db.work_store import WorkStore
+    rows = WorkStore(factory).overview(target_type="task", target_id=qawsed.id, admin=True)
+    assert rows == []
+
+
 def test_same_target_two_actions_becomes_a_two_step_plan_not_one():
     """"complete task 5 and reassign it to @Bob" must never silently run
     only the completion and drop the reassignment."""

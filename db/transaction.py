@@ -91,6 +91,19 @@ class TransactionClient:
     def discard_messages(self) -> None:
         self._messages.clear()
 
+    def last_message_text(self) -> str | None:
+        """Peek the most recently deferred message without clearing it.
+
+        Lets a caller that is about to abort (and discard every deferred
+        reply) surface the specific reason a step's own handler already
+        wrote -- e.g. "that task name is ambiguous" -- instead of falling
+        back to a generic failure message once the reply is gone.
+        """
+        if not self._messages:
+            return None
+        args, _kwargs, _context = self._messages[-1]
+        return args[1] if len(args) > 1 else None
+
 
 class PlanTransaction:
     def __init__(self, session_factory, client):
