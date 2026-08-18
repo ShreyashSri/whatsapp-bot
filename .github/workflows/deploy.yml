@@ -5,8 +5,8 @@ on:
     branches: [main]
 
 jobs:
-  docker:
-    name: Build & Push Docker Image
+  deploy:
+    name: Build, Push & Update Infra
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,45 +21,36 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Generate image metadata
+        id: meta
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "env=prod" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
-            shreyashsri/whatsapp-bot:latest
-            shreyashsri/whatsapp-bot:${{ github.sha }}
+            shreyashsri/whatsapp-bot:${{ steps.meta.outputs.env }}
+            shreyashsri/whatsapp-bot:${{ steps.meta.outputs.env }}-${{ steps.meta.outputs.sha_short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy:
-    name: Deploy to Server
-    runs-on: ubuntu-latest
-    needs: docker
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Copy files to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          timeout: 30s
-          source: "bot.py,requirements.txt,features,cards,db,updates,migrations"
-          target: ~/whatsapp-bot
-
-      - name: Install deps and restart bot
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          command_timeout: 10m
-          script: |
-            cd ~/whatsapp-bot
-            venv/bin/pip install -r requirements.txt
-            npx pm2 restart whatsapp-bot
+      - name: Update manifest in infra repo
+        env:
+          PAT: ${{ secrets.INFRA_PAT }}
+        run: |
+          ENV="${{ steps.meta.outputs.env }}"
+          IMAGE_TAG="${ENV}-${{ steps.meta.outputs.sha_short }}"
+          git clone https://${PAT}@github.com/pointblank-club/infra.git infra
+          cd infra
+          sed -i "s|image: shreyashsri/whatsapp-bot:.*|image: shreyashsri/whatsapp-bot:${IMAGE_TAG}|" \
+            argocd/whatsapp-bot/statefulset.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add argocd/whatsapp-bot/statefulset.yaml
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "chore(${ENV}): update whatsapp-bot image to ${IMAGE_TAG}"
+          git push
