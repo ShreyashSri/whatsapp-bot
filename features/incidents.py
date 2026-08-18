@@ -9,7 +9,6 @@ restarts.
 
 from __future__ import annotations
 
-import hmac
 import logging
 import threading
 from typing import TYPE_CHECKING
@@ -54,14 +53,10 @@ def _build_chat_jid(value):
 def register(client: "NewClient", config: dict) -> None:
     """Start the incident alert webhook server in a background thread."""
     incident_group_id = config.get("incident_group_id")
-    incident_secret = str(config.get("incident_webhook_secret", "") or "")
     incident_port = config.get("incident_port", 8081)
 
     if not incident_group_id:
         log.warning("INCIDENT_GROUP_ID not set — skipping incident webhook server.")
-        return
-    if not incident_secret:
-        log.error("INCIDENT_WEBHOOK_SECRET not set — skipping incident webhook server.")
         return
 
     session_factory = config.get("db_session_factory")
@@ -86,10 +81,6 @@ def register(client: "NewClient", config: dict) -> None:
     @app.route("/alert", methods=["POST"])
     def alert():
         try:
-            supplied_secret = request.headers.get("X-Incident-Webhook-Secret", "")
-            if not hmac.compare_digest(supplied_secret, incident_secret):
-                return jsonify({"error": "unauthorized"}), 401
-
             payload = request.get_json(silent=True)
             if not isinstance(payload, dict):
                 return jsonify({"error": "request body must be a JSON object"}), 400

@@ -331,6 +331,12 @@ def _cmd_add_subgroup(
         everyone_jids = get_group_member_jids(client, chat_jid)
         mentioned_jids = list(dict.fromkeys(mentioned_jids + everyone_jids))
 
+    from features.community_tag import get_client_self_jids
+    self_jids = get_client_self_jids(client)
+    mentioned_jids = [
+        jid for jid in mentioned_jids if normalize_jid(jid) not in self_jids
+    ]
+
     try:
         added_count, total = add_subgroup_members(store, name, mentioned_jids)
     except ValueError as exc:
@@ -409,7 +415,13 @@ def _cmd_list_subgroups(client, chat_jid, store: SubgroupStore) -> None:
         _reply(client, chat_jid, "📭 No subgroups defined yet.")
         return
 
-    lines = [f"• *@{public_text(name, limit=80)}* — {len(members)} member(s)" for name, members in sorted(subgroups.items())]
+    from features.community_tag import get_client_self_jids
+    self_jids = get_client_self_jids(client)
+    lines = [
+        f"• *@{public_text(name, limit=80)}* — "
+        f"{len([jid for jid in members if normalize_jid(jid) not in self_jids])} member(s)"
+        for name, members in sorted(subgroups.items())
+    ]
     _reply(client, chat_jid, f"*📋 Subgroups ({len(subgroups)})*\n\n" + "\n".join(lines))
 
 
@@ -426,7 +438,9 @@ def _cmd_subgroup_info(client, chat_jid, name_raw: str, store: SubgroupStore) ->
         _reply(client, chat_jid, f"⚠️ Subgroup *@{public_text(name, limit=80)}* does not exist.")
         return
 
-    members = subgroups[name]
+    from features.community_tag import get_client_self_jids
+    self_jids = get_client_self_jids(client)
+    members = [jid for jid in subgroups[name] if normalize_jid(jid) not in self_jids]
     # Build @mentions so members render as tagged contacts (with names).
     # Real display names/phone numbers are resolved at send time (below),
     # since @lid JIDs have no safe fallback text of their own.
@@ -455,26 +469,6 @@ def _detect_subgroup_mentions(text: str, subgroups: dict[str, list[str]]) -> lis
     names = sorted(subgroups.keys(), key=len, reverse=True)
     pattern = r"@(" + "|".join(re.escape(n) for n in names) + r")(?:\b|$)"
     return [m.group(1) for m in re.finditer(pattern, text, re.IGNORECASE)]
-
-
-def _is_subgroup_command(text: str) -> bool:
-    """Return whether text is an explicit subgroup command.
-
-    TEST-ONLY FEATURE: own-account command handling exists only for testing.
-    Own-account commands are allowed for testing, but own-account replies and
-    generated mention messages must not be fed back into the feature.
-    """
-    lower = text.lower()
-    return any(
-        lower == command or lower.startswith(f"{command} ")
-        for command in (
-            "!add-subgroup",
-            "!remove-from-subgroup",
-            "!delete-subgroup",
-            "!list-subgroups",
-            "!subgroup-info",
-        )
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -513,12 +507,8 @@ def register(client: "NewClient", config: dict) -> callable:
         if not body:
             return
 
-        # TEST-ONLY FEATURE: review/remove the own-account command exception
-        # for production. Production should ignore every IsFromMe message.
-        # Allow explicit commands sent from the bot's own account for testing,
-        # but ignore all other own-account messages. This prevents generated
-        # subgroup replies/tags from triggering recursive loops.
-        if message.Info.MessageSource.IsFromMe and not _is_subgroup_command(body):
+        # Never process messages sent by the paired account.
+        if message.Info.MessageSource.IsFromMe:
             return
 
         # ----- Command handling -----
@@ -570,7 +560,12 @@ def register(client: "NewClient", config: dict) -> callable:
         # ----- @subgroup and @admins tag detection -----
         if not gate(session_factory, sender, client, chat, "member", "subgroup.tag"):
             return
-        subgroups = _read_subgroups(store)
+        from features.community_tag import get_client_self_jids
+        self_jids = get_client_self_jids(client)
+        subgroups = {
+            name: [jid for jid in members if normalize_jid(jid) not in self_jids]
+            for name, members in _read_subgroups(store).items()
+        }
         matched = _detect_subgroup_mentions(body, subgroups)
         has_admin_mention = bool(re.search(r"@admins?\b", body, re.IGNORECASE))
         if not matched and not has_admin_mention:

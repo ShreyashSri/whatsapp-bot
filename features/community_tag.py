@@ -21,6 +21,7 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
     Message,
 )
 from neonize.utils.jid import Jid2String, JIDToNonAD
+from db.auth import normalize_jid
 from features.text import public_text
 
 if TYPE_CHECKING:
@@ -84,15 +85,43 @@ def _get_group_mentions(ctx: ContextInfo) -> list[tuple[str, str]]:
     return mentions
 
 
+def get_client_self_jids(client: "NewClient") -> set[str]:
+    """Return the paired account's phone and LID JIDs for safety filtering."""
+    try:
+        device = client.get_me()
+    except Exception:
+        log.debug("Could not resolve the bot's own JIDs", exc_info=True)
+        return set()
+
+    result: set[str] = set()
+    for field in ("JID", "LID"):
+        value = getattr(device, field, None)
+        if isinstance(value, str):
+            raw = value
+        else:
+            user = getattr(value, "User", None)
+            server = getattr(value, "Server", None)
+            raw = (
+                f"{user}@{server}"
+                if isinstance(user, str) and isinstance(server, str) and user and server
+                else ""
+            )
+        normalized = normalize_jid(raw)
+        if normalized:
+            result.add(normalized)
+    return result
+
+
 def get_group_member_jids(client: "NewClient", group_jid) -> list[str]:
     """Return the current human participant JIDs for a joined WhatsApp group.
 
     Community tagging already needs this information.  Keep the lookup in a
     shared helper so other features can resolve semantic targets such as
     ``everyone in this group`` without exposing participant data to the LLM.
-    The caller remains responsible for excluding the bot and applying policy.
+    The paired account is always excluded before the list leaves this helper.
     """
     groups = client.get_joined_groups()
+    self_jids = get_client_self_jids(client)
     wanted = str(group_jid)
     wanted_user = getattr(group_jid, "User", "")
     for group in groups:
@@ -112,7 +141,9 @@ def get_group_member_jids(client: "NewClient", group_jid) -> list[str]:
             jid = getattr(participant, "JID", None)
             if jid is None or not getattr(jid, "User", ""):
                 continue
-            members.append(Jid2String(JIDToNonAD(jid)))
+            normalized = normalize_jid(Jid2String(JIDToNonAD(jid)))
+            if normalized and normalized not in self_jids:
+                members.append(normalized)
         return list(dict.fromkeys(members))
     return []
 
@@ -132,8 +163,7 @@ def register(client: "NewClient", config: dict) -> callable:
         if getattr(chat, "Server", "") != "g.us":
             return
 
-        # TEST-ONLY GUARD: review/remove for production routing.
-        # Ignore our own messages to prevent loops
+        # Ignore our own messages to prevent loops.
         if message.Info.MessageSource.IsFromMe:
             return
 

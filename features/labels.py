@@ -174,6 +174,12 @@ def register(client: "NewClient", config: dict) -> callable:
                                               "Ask an admin to change someone else's labels.")
                     return
             if action in ("create", "add", "assign"):
+                from features.community_tag import get_client_self_jids
+                self_jids = get_client_self_jids(client)
+                targets = [jid for jid in targets if jid not in self_jids]
+                if not targets:
+                    client.send_message(chat, "⚠️ The bot cannot be added to a label or subgroup.")
+                    return
                 added, total = add_label_members(store, name, targets)
                 audit(factory, actor, "label.create" if action == "create" else "label.assign",
                       "whatsapp", {"label": name, "added": added})

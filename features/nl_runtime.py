@@ -413,9 +413,9 @@ def resolve_target(
                 for name in resolved_names
                 for member in collections.get(name, [])
             ]
-            # For collection_members, never filter out self_jids — a human admin
-            # who runs the bot from their own number is a legitimate group member.
-            deduped = _dedupe_members(members, set())
+            # Stored collections may predate the self-message guard. Filter the
+            # paired account here as well so it cannot become an audience again.
+            deduped = _dedupe_members(members, self_jids)
             if not deduped:
                 return TargetResolution(
                     resolver=resolver,

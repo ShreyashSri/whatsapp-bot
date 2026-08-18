@@ -18,7 +18,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from neonize.client import NewClient
-from neonize.events import ConnectedEv, MessageEv, PairStatusEv
+from neonize.events import ConnectedEv, DisconnectedEv, MessageEv, PairStatusEv
+from sqlalchemy.exc import OperationalError
 
 from db.database import create_database
 from db.auth import normalize_group_jid, normalize_jid
@@ -58,8 +59,8 @@ def _build_config() -> dict:
             or None
         ),
         "media_group_id": os.getenv("MEDIA_GROUP_ID", "").strip() or None,
+        "reminder_group_id": os.getenv("REMINDER_GROUP_ID", "").strip() or None,
         "incident_group_id": os.getenv("INCIDENT_GROUP_ID", "").strip() or None,
-        "incident_webhook_secret": os.getenv("INCIDENT_WEBHOOK_SECRET", "").strip(),
         "incident_port": int(os.getenv("INCIDENT_PORT", "8081")),
         "fellowship_alert_group_id": (
             os.getenv("FELLOWSHIP_ALERT_GROUP_ID", "").strip()
@@ -106,8 +107,9 @@ def _configured_groups(config: dict, *keys: str) -> set[str]:
 
 def _allowed_inbound_groups(config: dict) -> set[str]:
     """Return groups explicitly configured to accept bot commands."""
-    # MEDIA_GROUP_ID is a command destination by design; incident and
-    # fellowship groups are webhook destinations and remain outbound-only.
+    # MEDIA_GROUP_ID is a command destination by design; incident, fellowship,
+    # and reminder groups are delivery destinations and remain outbound-only
+    # unless a message is a reply to a tracked reminder.
     return _configured_groups(config, "pbbot_group_id", "media_group_id")
 
 
@@ -115,7 +117,12 @@ def _allowed_inbound_chat(config: dict, chat, *, reminder_reply: bool = False) -
     """Allow configured groups and quoted replies to tracked reminders."""
     chat_id = normalize_jid(_jid_string(chat))
     if chat_id.endswith("@g.us"):
-        return chat_id in _allowed_inbound_groups(config)
+        if chat_id in _allowed_inbound_groups(config):
+            return True
+        return (
+            reminder_reply
+            and chat_id == normalize_group_jid(config.get("reminder_group_id"))
+        )
     return reminder_reply and chat_id.endswith(("@s.whatsapp.net", "@lid"))
 
 
@@ -125,6 +132,7 @@ def _allowed_outbound_groups(config: dict) -> set[str]:
         config,
         "pbbot_group_id",
         "media_group_id",
+        "reminder_group_id",
         "incident_group_id",
         "fellowship_alert_group_id",
     )
@@ -160,6 +168,55 @@ def _connect_with_retry(
             delay = min(max_delay, delay * 2)
 
 
+def _initialize_database_with_retry(
+    database,
+    *,
+    data_dir: Path,
+    retry_delay: float = 5.0,
+    max_retry_delay: float = 60.0,
+    max_attempts: int | None = None,
+    sleep=time.sleep,
+):
+    """Keep transient PostgreSQL startup failures from terminating the bot."""
+    from db.work_store import load_persistent_aliases
+
+    delay = max(0.1, float(retry_delay))
+    max_delay = max(delay, float(max_retry_delay))
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            database.initialize()
+            upgrade_unified_schema(database)
+            migrate_legacy_json(database.session_factory, data_dir)
+            migrate_unified_work(database.session_factory)
+            load_persistent_aliases(database.session_factory)
+            return
+        except KeyboardInterrupt:
+            raise
+        except OperationalError:
+            if max_attempts is not None and attempt >= max_attempts:
+                raise
+            log.exception(
+                "Database initialization attempt %d failed; retrying in %.1fs",
+                attempt,
+                delay,
+            )
+            sleep(delay)
+            delay = min(max_delay, delay * 2)
+
+
+def _set_readiness(path: Path, ready: bool) -> None:
+    """Expose WhatsApp connection state to the container readiness probe."""
+    try:
+        if ready:
+            path.touch()
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        log.exception("Could not update readiness marker %s", path)
+
+
 # Kept available for callers that import bot configuration, without creating a
 # database connection or a Neonize session as an import side effect.
 config = _build_config()
@@ -175,16 +232,9 @@ sys.excepthook = _excepthook
 def main() -> None:
     """Initialise all runtime dependencies and connect Neonize."""
     database = create_database(config["database_url"])
-    database.initialize()
-    upgrade_unified_schema(database)
-    migrate_legacy_json(database.session_factory, Path.cwd())
-    migrate_unified_work(database.session_factory)
-
-    # Load persisted LID<->phone alias mappings from DB so that the alias
-    # registry is available immediately, before the WhatsApp reconciliation
-    # background thread runs.
-    from db.work_store import load_persistent_aliases
-    load_persistent_aliases(database.session_factory)
+    _initialize_database_with_retry(database, data_dir=Path.cwd())
+    readiness_path = Path("/tmp/pbbot-ready")
+    _set_readiness(readiness_path, False)
 
     runtime_config = {
         **config,
@@ -213,11 +263,6 @@ def main() -> None:
     # before this process started, so old commands cannot run.
     startup_timestamp = int(time.time())
     accept_messages_after = time.monotonic() + 10
-    # TODO(remove-after-local-self-test): delete this temporary escape hatch
-    # once the paired account has finished its local WhatsApp verification.
-    allow_self_messages = os.getenv("PBBOT_ALLOW_SELF_MESSAGES", "").strip().casefold() in {
-        "1", "true", "yes",
-    }
 
     @client.event(PairStatusEv)
     def on_pair_status(_client: NewClient, event: PairStatusEv):
@@ -269,6 +314,7 @@ def main() -> None:
     @client.event(ConnectedEv)
     def on_connected(_client: NewClient, _event: ConnectedEv):
         log.info("✅ Bot connected to WhatsApp — all features active")
+        _set_readiness(readiness_path, True)
         try:
             from neonize.utils import Jid2String
             runtime_config["bot_jid"] = Jid2String(client.get_me().JID)
@@ -276,6 +322,11 @@ def main() -> None:
             log.warning("Could not determine bot JID: %s", e)
         _start_reminder_scheduler(client, runtime_config["db_session_factory"], runtime_config)
         _reconcile_lid_assignments(client, runtime_config["db_session_factory"])
+
+    @client.event(DisconnectedEv)
+    def on_disconnected(_client: NewClient, event: DisconnectedEv):
+        _set_readiness(readiness_path, False)
+        log.warning("WhatsApp connection lost: %s", event)
 
     def _reconcile_lid_assignments(client: NewClient, session_factory) -> None:
         """Resolve LID-based assignments to phone JIDs using the live client.
@@ -444,7 +495,7 @@ def main() -> None:
         source = getattr(info, "MessageSource", None)
         if source is None:
             return
-        if getattr(source, "IsFromMe", False) and not allow_self_messages:
+        if getattr(source, "IsFromMe", False):
             return
 
         chat = getattr(source, "Chat", None)

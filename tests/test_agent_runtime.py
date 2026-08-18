@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -82,6 +83,45 @@ def test_whatsapp_connection_retries_transient_startup_failures():
     assert result == "connected"
     assert client.connect.call_count == 2
     assert sleeps == [0.1]
+
+
+def test_database_startup_retries_transient_connection_failures():
+    from bot import _initialize_database_with_retry
+    from sqlalchemy.exc import OperationalError
+
+    database = MagicMock()
+    database.initialize.side_effect = [
+        OperationalError("connect", {}, RuntimeError("temporary")),
+        None,
+    ]
+    sleeps = []
+
+    with patch("bot.upgrade_unified_schema"), \
+         patch("bot.migrate_legacy_json"), \
+         patch("bot.migrate_unified_work"), \
+         patch("db.work_store.load_persistent_aliases") as load_aliases:
+        _initialize_database_with_retry(
+            database,
+            data_dir=Path("."),
+            retry_delay=0.1,
+            sleep=sleeps.append,
+        )
+
+    assert database.initialize.call_count == 2
+    assert sleeps == [0.1]
+    load_aliases.assert_called_once_with(database.session_factory)
+
+
+def test_readiness_marker_tracks_whatsapp_connection(tmp_path):
+    from bot import _set_readiness
+
+    marker = tmp_path / "pbbot-ready"
+
+    _set_readiness(marker, True)
+    assert marker.exists()
+
+    _set_readiness(marker, False)
+    assert not marker.exists()
 
 
 def test_tool_registry_has_no_schema_or_policy_drift():

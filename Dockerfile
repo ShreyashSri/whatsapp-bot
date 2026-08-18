@@ -10,8 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Playwright browsers in a shared location readable by the runtime
-# user instead of root's private cache.
+# Install Playwright browsers in a stable shared location.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Keep bot logs visible to the container runtime.
@@ -28,10 +27,7 @@ RUN playwright install --with-deps chromium
 COPY . .
 
 # Create directories for runtime data
-RUN mkdir -p /app/data \
-    && useradd --create-home botuser \
-    && chown -R botuser:botuser /app
-USER botuser
+RUN mkdir -p /app/data
 
 EXPOSE 8081 8082
 

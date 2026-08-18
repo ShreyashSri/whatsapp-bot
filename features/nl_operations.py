@@ -1756,6 +1756,12 @@ def execute_collection_mutation(
             return None
 
         if action == "add":
+            from features.community_tag import get_client_self_jids
+            self_jids = get_client_self_jids(client)
+            members = [
+                member for member in members
+                if normalize_jid(member) not in self_jids
+            ]
             added, total = add_subgroup_members(store, collection, members)
             if added:
                 from db.nl_state import record_undo
@@ -1814,6 +1820,13 @@ def execute_collection_tag(
         return None
     if not members:
         client.send_message(chat, f"📭 Subgroup @{public_text(collection, limit=80)} has no members.")
+        return None
+
+    from features.community_tag import get_client_self_jids
+    self_jids = get_client_self_jids(client)
+    members = [member for member in members if normalize_jid(member) not in self_jids]
+    if not members:
+        client.send_message(chat, f"📭 Subgroup @{public_text(collection, limit=80)} has no eligible members.")
         return None
 
     from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (

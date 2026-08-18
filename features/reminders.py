@@ -45,7 +45,7 @@ def _fmt_config(cfg: dict) -> str:
 
 def configured_reminder_group(config: dict) -> str | None:
     """Return the configured team chat used for multi-assignee reminders."""
-    candidates = [config.get("pbbot_group_id")]
+    candidates = [config.get("reminder_group_id"), config.get("pbbot_group_id")]
     candidates.extend(config.get("group_ids", set()) or set())
     for candidate in candidates:
         normalized = normalize_group_jid(candidate)

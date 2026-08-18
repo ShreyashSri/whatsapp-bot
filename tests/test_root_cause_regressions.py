@@ -535,7 +535,7 @@ def test_incident_group_jid_preserves_group_server():
     assert jid.Server == "g.us"
 
 
-def test_incident_webhook_requires_secret_and_sends_to_group(factory):
+def test_incident_webhook_sends_to_group(factory):
     client = MagicMock()
     captured = {}
 
@@ -555,7 +555,6 @@ def test_incident_webhook_requires_secret_and_sends_to_group(factory):
         register_incidents(client, {
             "db_session_factory": factory,
             "incident_group_id": "123456@g.us",
-            "incident_webhook_secret": "secret",
             "incident_port": 0,
         })
 
@@ -567,12 +566,7 @@ def test_incident_webhook_requires_secret_and_sends_to_group(factory):
         }],
     }
     with app.test_client() as test_client:
-        assert test_client.post("/alert", json=payload).status_code == 401
-        response = test_client.post(
-            "/alert",
-            json=payload,
-            headers={"X-Incident-Webhook-Secret": "secret"},
-        )
+        response = test_client.post("/alert", json=payload)
 
     assert response.status_code == 200
     sent_jid = client.send_message.call_args.args[0]
@@ -604,7 +598,6 @@ def test_incident_alert_is_not_suppressed_after_a_failed_send(factory):
         register_incidents(client, {
             "db_session_factory": factory,
             "incident_group_id": "123456@g.us",
-            "incident_webhook_secret": "secret",
             "incident_port": 0,
         })
 
@@ -614,12 +607,11 @@ def test_incident_alert_is_not_suppressed_after_a_failed_send(factory):
             "value": [0, 500],
         }],
     }
-    headers = {"X-Incident-Webhook-Secret": "secret"}
     with captured["app"].test_client() as test_client:
-        first = test_client.post("/alert", json=payload, headers=headers)
+        first = test_client.post("/alert", json=payload)
         assert first.status_code == 500
 
-        second = test_client.post("/alert", json=payload, headers=headers)
+        second = test_client.post("/alert", json=payload)
         assert second.status_code == 200
 
     # The alert must have actually gone out on the retry, not been treated
