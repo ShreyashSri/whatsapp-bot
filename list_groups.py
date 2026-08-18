@@ -2,6 +2,7 @@
 """Script to list all joined WhatsApp groups and their IDs."""
 
 import logging
+import os
 import sys
 import threading
 import time
@@ -13,7 +14,9 @@ from neonize.events import ConnectedEv
 # Silence neonize's debug logs to make the output clean
 logging.basicConfig(level=logging.WARNING)
 
-SESSION_DB = Path.cwd() / "neonize.db"
+SESSION_DB = Path(os.getenv("NEONIZE_SESSION_DB", "neonize.db"))
+if not SESSION_DB.is_absolute():
+    SESSION_DB = Path.cwd() / SESSION_DB
 
 if not SESSION_DB.exists():
     print("⚠️ neonize.db not found. Please run the main bot first to link your account.")

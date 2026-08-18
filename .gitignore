@@ -10,19 +10,28 @@ build/
 
 # neonize session
 neonize.db
+pbbot.db
 
 # Environment
 .env
 
 # Bot runtime state
 posts.json
+subgroups.json
 incident_state.json
 
 # Card preview output
 preview-card.png
 preview-card.pdf
+artifacts/
+pytestdebug.log
+scripts/*_probe.py
+scripts/*_hammer.py
 
 # Node.js (legacy)
 node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
+
+PBBot-PRD-Brief.pdf
+PRD.md

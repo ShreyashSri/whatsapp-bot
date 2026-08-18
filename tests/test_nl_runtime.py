@@ -1,0 +1,676 @@
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message
+
+from db.auth import upsert_user
+from db.event_store import EventStore
+from db.models import Base, Event, Task
+from features.natural_language import MistralCommandTranslator, register
+from features.nl_runtime import (
+    TargetResolution,
+    mention_indices_expression,
+    resolve_target,
+    target_is_required_and_missing,
+    validate_mutation_policy,
+    validate_execution_ready,
+)
+from features.labels import add_label_members, remove_label_members
+from features.subgroups import add_subgroup_members
+from features.work import register as register_work
+
+
+def make_group_message(sender="member@s.whatsapp.net"):
+    message = MagicMock()
+    message.Info.MessageSource.Chat.Server = "g.us"
+    message.Info.MessageSource.Sender = sender
+    return message
+
+
+def make_real_group_message(sender="member@s.whatsapp.net"):
+    return SimpleNamespace(
+        Message=Message(conversation=""),
+        Info=SimpleNamespace(
+            MessageSource=SimpleNamespace(
+                Chat=SimpleNamespace(Server="g.us"),
+                Sender=sender,
+            )
+        ),
+    )
+
+
+def test_required_capabilities_are_incomplete_without_an_audience():
+    assert target_is_required_and_missing(
+        {"capability": "collections.add", "arguments": {"collection": "everyone"}},
+        [],
+    )
+    assert target_is_required_and_missing(
+        {
+            "capability": "work.assign",
+            "arguments": {"target": "task 7", "target_id": 7},
+        },
+        [],
+    )
+
+
+def test_user_info_requires_audience_but_accepts_semantic_resolver():
+    from features.natural_language import validate_intent
+
+    intent = {
+        "capability": "whatsapp.user_info",
+        "arguments": {"audience": {"resolver": "explicit_mentions"}},
+    }
+    assert validate_intent(intent) is not None
+    assert target_is_required_and_missing(intent, []) is True
+
+
+def test_plan_output_resolver_turns_prior_member_output_into_targets():
+    message = make_group_message()
+    result = resolve_target(
+        MagicMock(),
+        message,
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "everyone",
+                "audience": {
+                    "resolver": "plan_output",
+                    "value": ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+                },
+            },
+        },
+        {"222@s.whatsapp.net"},
+        None,
+        lambda value: value,
+        [],
+    )
+    assert result.ready
+    assert result.members == ("111@s.whatsapp.net",)
+
+
+def test_work_item_target_is_not_confused_with_an_audience():
+    intent = {
+        "capability": "work.assign",
+        "arguments": {
+            "target": "task 7",
+            "target_type": "task",
+            "target_id": 7,
+        },
+    }
+    assert target_is_required_and_missing(intent, []) is True
+
+
+def test_explicit_mentions_are_resolved_and_bot_is_removed():
+    message = make_group_message()
+    message._pbbot_visible_mentions = [
+        "111@s.whatsapp.net",
+        "bot@s.whatsapp.net",
+        "111@s.whatsapp.net",
+    ]
+    result = resolve_target(
+        MagicMock(),
+        message,
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "audience": {"resolver": "explicit_mentions"},
+            },
+        },
+        {"bot@s.whatsapp.net"},
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net", "bot@s.whatsapp.net", "111@s.whatsapp.net"],
+    )
+    assert result.ready
+    assert result.members == ("111@s.whatsapp.net",)
+
+
+def test_explicit_mention_indices_select_only_the_requested_people():
+    message = make_group_message()
+    result = resolve_target(
+        MagicMock(),
+        message,
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "audience": {"resolver": "explicit_mentions"},
+                "mention_indices": [1],
+            },
+        },
+        set(),
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+    )
+    assert result.members == ("222@s.whatsapp.net",)
+
+
+def test_mention_indices_expression_prefers_nested_over_top_level():
+    assert mention_indices_expression(
+        {"audience": {"resolver": "explicit_mentions", "mention_indices": [1]}, "mention_indices": [0]}
+    ) == [1]
+    assert mention_indices_expression(
+        {"audience": {"resolver": "explicit_mentions"}, "mention_indices": [0]}
+    ) == [0]
+    assert mention_indices_expression({"audience": {"resolver": "explicit_mentions"}}) is None
+    assert mention_indices_expression({}) is None
+
+
+def test_mention_indices_nested_in_audience_select_only_the_requested_people():
+    """Real Mistral responses nest mention_indices inside audience, not as a
+    top-level sibling. The runtime must honor that placement instead of
+    silently falling back to "every visible mention" because it only looked
+    at the top level."""
+    message = make_group_message()
+    result = resolve_target(
+        MagicMock(),
+        message,
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "audience": {"resolver": "explicit_mentions", "mention_indices": [1]},
+            },
+        },
+        set(),
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+    )
+    assert result.members == ("222@s.whatsapp.net",)
+
+
+def test_nested_audience_mention_indices_take_precedence_over_top_level():
+    """When both locations are somehow present, the nested (canonical) one wins."""
+    message = make_group_message()
+    result = resolve_target(
+        MagicMock(),
+        message,
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "audience": {"resolver": "explicit_mentions", "mention_indices": [1]},
+                "mention_indices": [0],
+            },
+        },
+        set(),
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+    )
+    assert result.members == ("222@s.whatsapp.net",)
+
+
+def test_target_dict_with_resolver_key_is_never_read_as_audience():
+    """``target`` is reserved for work-item identity (task/event); a
+    resolver-shaped object nested under that key must not be treated as an
+    audience source -- that dual meaning was itself a source of drift."""
+    result = resolve_target(
+        MagicMock(),
+        make_group_message(),
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "target": {"resolver": "explicit_mentions"},
+            },
+        },
+        set(),
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net"],
+    )
+    assert result.members == ()
+    assert result.error == ""
+
+
+def test_unavailable_explicit_mention_index_fails_closed():
+    result = resolve_target(
+        MagicMock(),
+        make_group_message(),
+        {
+            "capability": "collections.add",
+            "arguments": {
+                "collection": "backend",
+                "audience": {"resolver": "explicit_mentions"},
+                "mention_indices": [4],
+            },
+        },
+        set(),
+        None,
+        lambda value: value,
+        ["111@s.whatsapp.net"],
+    )
+    assert "unavailable" in result.error
+
+
+def test_multi_step_plan_links_tasks_to_the_event_created_by_step_one():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+    client = MagicMock()
+    client.get_me.return_value = SimpleNamespace(
+        JID="bot@s.whatsapp.net", LID="999999@lid"
+    )
+    message = make_group_message(admin.jid)
+    message.Message.conversation = "@me create an event and tasks"
+    plan = {
+        "plan": [
+            {
+                "step_id": "event",
+                "capability": "work.create_event",
+                "arguments": {
+                    "type": "organization",
+                    "category": "other",
+                    "name": "Zenith 27",
+                },
+            },
+            {
+                "step_id": "money",
+                "capability": "work.create_task",
+                "arguments": {
+                    "title": "Raise lots of money",
+                    "event_id": "$event.event_id",
+                },
+            },
+            {
+                "step_id": "participants",
+                "capability": "work.create_task",
+                "arguments": {
+                    "title": "Get lots of participants",
+                    "event_id": "$event.event_id",
+                },
+            },
+        ]
+    }
+    with patch("features.natural_language._get_mentioned_jids", return_value=[]), \
+         patch.object(MistralCommandTranslator, "translate", return_value=(plan, "")):
+        handler = register(
+            client,
+            {"mistral_api_key": "secret", "db_session_factory": factory},
+        )
+        assert handler(client, message, MagicMock()) is True
+
+    with factory() as session:
+        event = session.query(Event).one()
+        tasks = session.query(Task).order_by(Task.id).all()
+        assert event.name == "Zenith 27"
+        assert (event.type, event.category) == ("organization", "other")
+        assert [task.title for task in tasks] == [
+            "Raise lots of money", "Get lots of participants"
+        ]
+        assert all(task.event_id == event.id for task in tasks)
+
+
+def test_mixed_database_plan_preserves_step_order():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+    member = upsert_user(factory, "member@s.whatsapp.net", role="member")
+    event = EventStore(factory).create_event(name="Ordered Event", type="organization")
+
+    client = MagicMock()
+    client.get_me.return_value = SimpleNamespace(
+        JID="bot@s.whatsapp.net", LID="999999@lid"
+    )
+    message = make_group_message(admin.jid)
+    message.Message.conversation = "@me complete event then assign it"
+    message.Message.extendedTextMessage = None
+    message.Message.imageMessage = None
+    plan = {
+        "plan": [
+            {
+                "step_id": "complete",
+                "capability": "work.set_lifecycle",
+                "arguments": {
+                    "target_type": "event",
+                    "target_id": event["id"],
+                    "status": "completed",
+                },
+            },
+            {
+                "step_id": "assign",
+                "capability": "work.assign",
+                "arguments": {
+                    "target_type": "event",
+                    "target_id": event["id"],
+                    "audience": {"resolver": "explicit_mentions"},
+                },
+            },
+        ]
+    }
+    observed_statuses = []
+
+    def observe_direct(_client, _message, _intent, _members, transaction_factory, _text):
+        with transaction_factory() as session:
+            observed_statuses.append(session.get(Event, event["id"]).status)
+        return {"target": f"event {event['id']}", "action": "assign", "members": []}
+
+    with patch("features.natural_language._get_mentioned_jids", return_value=[member.jid]), \
+         patch.object(MistralCommandTranslator, "translate", return_value=(plan, "")), \
+         patch("features.natural_language._execute_direct_operation", side_effect=observe_direct):
+        work_handler = register_work(client, {"db_session_factory": factory})
+
+        def dispatch(translated, session_factory=None, client_override=None):
+            if session_factory is not None:
+                translated._pbbot_session_factory = session_factory
+            return work_handler(client_override or client, translated)
+
+        handler = register(
+            client,
+            {"mistral_api_key": "secret", "db_session_factory": factory},
+        )
+        assert handler(client, message, dispatch) is True
+
+    assert observed_statuses == ["completed"]
+    with factory() as session:
+        assert session.get(Event, event["id"]).status == "completed"
+
+
+def test_current_group_lookup_exception_is_controlled():
+    message = make_group_message()
+    intent = {
+        "capability": "collections.add",
+        "arguments": {
+            "collection": "everyone",
+            "audience": {"resolver": "current_chat_members"},
+        },
+    }
+    with patch(
+        "features.community_tag.get_group_member_jids",
+        side_effect=RuntimeError("metadata unavailable"),
+    ):
+        result = resolve_target(
+            MagicMock(), message, intent, set(), None, lambda value: value
+        )
+    assert result.ready is False
+    assert "resolve" in result.error
+
+
+def test_real_neonize_message_is_not_mutated_with_runtime_attributes():
+    message = make_real_group_message()
+    intent = {
+        "capability": "collections.add",
+        "arguments": {
+            "collection": "everyone",
+            "audience": {"resolver": "current_chat_members"},
+        },
+    }
+    with patch(
+        "features.community_tag.get_group_member_jids",
+        return_value=["111@s.whatsapp.net"],
+    ):
+        result = resolve_target(
+            MagicMock(), message, intent, set(), None, lambda value: value
+        )
+    assert result.members == ("111@s.whatsapp.net",)
+    assert not hasattr(message.Message, "_pbbot_visible_mentions")
+
+
+def test_empty_or_bot_only_group_cannot_execute():
+    message = make_group_message()
+    intent = {
+        "capability": "collections.add",
+        "arguments": {
+            "collection": "everyone",
+            "audience": {"resolver": "current_chat_members"},
+        },
+    }
+    for members in ([], ["bot@s.whatsapp.net"]):
+        with patch("features.community_tag.get_group_member_jids", return_value=members):
+            result = resolve_target(
+                MagicMock(), message, intent, {"bot@s.whatsapp.net"}, None, lambda value: value
+            )
+        assert result.ready is False
+        assert "eligible" in result.error
+
+
+def test_non_group_chat_cannot_resolve_current_members():
+    message = make_group_message()
+    message.Info.MessageSource.Chat.Server = "s.whatsapp.net"
+    intent = {
+        "capability": "collections.add",
+        "arguments": {
+            "collection": "everyone",
+            "audience": {"resolver": "current_chat_members"},
+        },
+    }
+    result = resolve_target(MagicMock(), message, intent, set(), None, lambda value: value)
+    assert "unavailable" in result.error
+
+
+def test_collection_and_admin_resolvers_fail_closed_without_required_context():
+    message = make_group_message()
+    collection_intent = {
+        "capability": "collections.add",
+        "arguments": {
+            "collection": "everyone",
+            "audience": {"resolver": "collection_members", "value": "missing"},
+        },
+    }
+    result = resolve_target(
+        MagicMock(), message, collection_intent, set(), MagicMock(), lambda value: None
+    )
+    assert "not found" in result.error
+
+    admin_intent = {
+        "capability": "work.assign",
+        "arguments": {
+            "target_type": "task",
+            "target_id": 7,
+            "audience": {"resolver": "active_admins"},
+        },
+    }
+    result = resolve_target(
+        MagicMock(), message, admin_intent, set(), None, lambda value: value
+    )
+    assert "unavailable" in result.error
+
+
+def test_unknown_resolver_and_missing_required_target_are_rejected():
+    message = make_group_message()
+    unknown = {
+        "capability": "collections.add",
+        "arguments": {
+            "collection": "everyone",
+            "audience": {"resolver": "invented_users"},
+        },
+    }
+    result = resolve_target(MagicMock(), message, unknown, set(), None, lambda value: value)
+    assert "not available" in result.error
+
+    error = validate_execution_ready(
+        {"capability": "collections.add", "arguments": {"collection": "everyone"}},
+        TargetResolution(),
+        [],
+    )
+    assert "identify who" in error
+
+
+def test_optional_revoke_and_bulk_delete_require_explicit_scope():
+    assert validate_mutation_policy(
+        {"capability": "whatsapp.group_invite", "arguments": {}},
+        "show the invite",
+    ) is None
+    assert validate_mutation_policy(
+        {"capability": "whatsapp.group_invite", "arguments": {}},
+        "revoke the invite",
+    ) == "whatsapp.group_invite requires argument revoke"
+    assert validate_mutation_policy(
+        {"capability": "whatsapp.contact_qr", "arguments": {"revoke": True}},
+        "show the QR",
+    ) == "whatsapp.contact_qr requires explicit destructive wording"
+    assert validate_mutation_policy(
+        {"capability": "work.unassign", "arguments": {}},
+        "clear assignments",
+    ) is None
+    assert validate_mutation_policy(
+        {"capability": "collections.delete", "arguments": {}},
+        "delete all subgroups",
+    ) is None
+    assert validate_mutation_policy(
+        {"capability": "collections.delete", "arguments": {}},
+        "delete the subgroup",
+    ) == "collections.delete requires argument collection"
+    assert validate_mutation_policy(
+        {"capability": "collections.delete", "arguments": {"collection": "team"}},
+        "do not delete team",
+    ) == "collections.delete requires explicit destructive wording"
+
+
+def test_failed_resolution_cannot_be_treated_as_ready():
+    intent = {
+        "capability": "work.assign",
+        "arguments": {
+            "target_type": "event",
+            "target_id": 7,
+            "audience": {"resolver": "current_chat_members"},
+        },
+    }
+    error = validate_execution_ready(
+        intent,
+        TargetResolution(error="metadata unavailable"),
+        [],
+    )
+    assert error == "metadata unavailable"
+
+
+def test_subgroup_domain_operation_persists_resolved_members_directly():
+    store = MagicMock()
+    store.read.return_value = {}
+
+    added, total = add_subgroup_members(
+        store,
+        "everyone",
+        ["111@s.whatsapp.net", "222@s.whatsapp.net", "111@s.whatsapp.net"],
+    )
+
+    assert (added, total) == (2, 2)
+    store.write.assert_called_once_with({
+        "everyone": ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+    })
+
+
+def test_create_task_assigns_mentioned_people_atomically_at_creation():
+    """"create a task to write the blog post, assign it to @Alice" must
+    actually assign Alice, not silently create an unassigned task -- the
+    audience the model attaches to a work.create_task intent has to flow
+    through to TaskStore.create, not be dropped for lack of wiring."""
+    from features.nl_operations import execute_work_creation
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+    bob = upsert_user(factory, "bob@s.whatsapp.net", role="member")
+    carol = upsert_user(factory, "carol@s.whatsapp.net", role="member")
+
+    client = MagicMock()
+    message = make_group_message(admin.jid)
+    intent = {
+        "capability": "work.create_task",
+        "arguments": {
+            "title": "Review the design",
+            "audience": {"resolver": "explicit_mentions", "mention_indices": [0, 1]},
+        },
+    }
+
+    result = execute_work_creation(
+        client, message, intent, factory, [bob.jid, carol.jid]
+    )
+
+    assert result is not None
+    task_id = result["task_id"]
+    from db.work_store import WorkStore
+    rows = WorkStore(factory).overview(target_type="task", target_id=task_id, admin=True)
+    assert {row["user_jid"] for row in rows} == {bob.jid, carol.jid}
+
+
+def test_create_task_without_a_named_assignee_stays_unassigned():
+    from features.nl_operations import execute_work_creation
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    admin = upsert_user(factory, "admin@s.whatsapp.net", role="admin")
+
+    client = MagicMock()
+    message = make_group_message(admin.jid)
+    intent = {
+        "capability": "work.create_task",
+        "arguments": {"title": "Fix login bug", "priority": "high"},
+    }
+
+    result = execute_work_creation(client, message, intent, factory, [])
+
+    assert result is not None
+    from db.work_store import WorkStore
+    rows = WorkStore(factory).overview(
+        target_type="task", target_id=result["task_id"], admin=True
+    )
+    assert rows == []
+
+
+def test_subgroup_tag_sends_real_mentions_without_mutating_membership():
+    from features.nl_operations import execute_collection_tag
+
+    client = MagicMock()
+    message = make_group_message()
+    actor = SimpleNamespace(role="member")
+
+    with patch("db.auth.gate", return_value=actor):
+        result = execute_collection_tag(
+            client,
+            message,
+            {"capability": "collections.tag", "arguments": {"collection": "abc"}},
+            ["111@s.whatsapp.net", "222@s.whatsapp.net"],
+            MagicMock(),
+            lambda _factory, name: name,
+        )
+
+    assert result["member_count"] == 2
+    sent = client.send_message.call_args.args[1]
+    assert sent.extendedTextMessage.text == "📢 Tagging: @abc"
+    assert list(sent.extendedTextMessage.contextInfo.mentionedJID) == [
+        "111@s.whatsapp.net",
+        "222@s.whatsapp.net",
+    ]
+
+
+def test_label_domain_operations_accept_resolved_members_directly():
+    store = MagicMock()
+    store.read.return_value = {}
+    added, total = add_label_members(
+        store, "everybody", ["111@s.whatsapp.net", "222@s.whatsapp.net"]
+    )
+    assert added == ["111@s.whatsapp.net", "222@s.whatsapp.net"]
+    assert total == 2
+
+    store.read.return_value = {
+        "everybody": ["111@s.whatsapp.net", "222@s.whatsapp.net"]
+    }
+    removed, deleted = remove_label_members(
+        store, "everybody", ["111@s.whatsapp.net"]
+    )
+    assert (removed, deleted) == (1, False)
+def test_declared_tool_outputs_are_verified_for_all_producing_tools():
+    from features.nl_runtime import verify_operation_result
+
+    assert verify_operation_result(
+        {"capability": "whatsapp.joined_groups"},
+        {"groups": [], "group_count": 0},
+    ) is None
+    assert "omitted declared outputs" in verify_operation_result(
+        {"capability": "whatsapp.joined_groups"},
+        {"groups": []},
+    )
+    assert verify_operation_result(
+        {"capability": "whatsapp.send"}, {"sent": True}
+    ) is None

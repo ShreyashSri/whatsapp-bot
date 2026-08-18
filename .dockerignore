@@ -6,8 +6,11 @@ venv/
 .git/
 .github/
 neonize.db
-posts.json
-incident_state.json
+pbbot.db
+artifacts/
+pytestdebug.log
+scripts/*_probe.py
+scripts/*_hammer.py
 preview-card.*
 node_modules/
 .wwebjs_auth/

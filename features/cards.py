@@ -18,11 +18,20 @@ import re
 from typing import TYPE_CHECKING
 
 from neonize.events import MessageEv
+from features.text import public_text, split_command_fields
+from features.subgroups import _get_text as _shared_get_text
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
 
 log = logging.getLogger(__name__)
+
+# A native WhatsApp mention at the beginning of a caption is rendered as
+# ``@me`` for the sender.  It is commonly used to wake the NLP layer, but a
+# direct command must accept it too.
+_LEADING_MENTION_COMMAND_RE = re.compile(
+    r"^\s*@\S+\s+(?=!card(?:-pdf)?\b)", re.IGNORECASE
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -30,13 +39,12 @@ log = logging.getLogger(__name__)
 
 
 def _get_text(message: MessageEv) -> str:
-    """Extract text body from a message (handles both plain, extended, and image captions)."""
-    text = message.Message.conversation or ""
-    if message.Message.extendedTextMessage and message.Message.extendedTextMessage.text:
-        text = message.Message.extendedTextMessage.text
-    elif message.Message.imageMessage and message.Message.imageMessage.caption:
-        text = message.Message.imageMessage.caption
-    return text.strip()
+    return _shared_get_text(message)
+
+
+def _get_command_text(message: MessageEv) -> str:
+    """Return a caption/body with one leading bot mention removed."""
+    return _LEADING_MENTION_COMMAND_RE.sub("", _get_text(message)).strip()
 
 
 def _has_image(message: MessageEv) -> bool:
@@ -65,15 +73,16 @@ async def _handle_card_command(
     from cards import render_card, CARD_TYPES
     from features.help import MODULE_HELP
 
-    body = _get_text(message)
+    body = _get_command_text(message)
     chat_jid = message.Info.MessageSource.Chat
     rest = body[len(cmd_prefix):].strip()
+    design = getattr(message, "_pbbot_card_design", None)
 
     # Split on newlines or pipes
     if "\n" in rest:
         parts = [s.strip() for s in rest.split("\n")]
     else:
-        parts = [s.strip() for s in rest.split("|")]
+        parts = split_command_fields(rest)
 
     raw_type = parts[0] if len(parts) > 0 else ""
     name = parts[1] if len(parts) > 1 else ""
@@ -95,7 +104,7 @@ async def _handle_card_command(
     if card_type not in CARD_TYPES:
         client.send_message(
             chat_jid,
-            f'⚠️ Unknown card type "{raw_type}". Use one of: {", ".join(CARD_TYPES)}\n\n'
+            f'⚠️ Unknown card type "{public_text(raw_type, limit=40)}". Use one of: {", ".join(CARD_TYPES)}\n\n'
             "See `!help card` for details.",
         )
         return
@@ -123,7 +132,7 @@ async def _handle_card_command(
 
     try:
         fmt_label = "PNG + PDF" if with_pdf else "PNG"
-        client.send_message(chat_jid, f"🎨 Rendering {card_type} card for {name} ({fmt_label})...")
+        client.send_message(chat_jid, f"🎨 Rendering {card_type} card for {public_text(name, limit=80)} ({fmt_label})...")
 
         # Download attached image
         photo_bytes = client.download_any(message.Message)
@@ -143,6 +152,7 @@ async def _handle_card_command(
             logo_url=logo_url,
             event_name=event_name,
             event_logo_urls=event_logo_urls,
+            design=design,
             formats=formats,
         )
 
@@ -152,7 +162,7 @@ async def _handle_card_command(
             png_bytes = base64.b64decode(out["png"])
             png_msg = client.build_image_message(
                 png_bytes,
-                caption=f"🎉 {name}",
+                caption=f"🎉 {public_text(name, limit=80)}",
             )
             client.send_message(chat_jid, png_msg)
 
@@ -161,16 +171,22 @@ async def _handle_card_command(
             doc_msg = client.build_document_message(
                 pdf_bytes,
                 filename=f"{safe_name}-card.pdf",
-                caption=f"📄 {name} — editable PDF",
+                caption=f"📄 {public_text(name, limit=80)} — editable PDF",
                 mimetype="application/pdf",
             )
             client.send_message(chat_jid, doc_msg)
 
-        log.info("Card rendered: type=%s name=%r formats=%s", card_type, name, "+".join(formats))
+        log.info(
+            "Card rendered: type=%s template=%s name=%r formats=%s",
+            card_type,
+            (design or {}).get("base_template", card_type),
+            public_text(name, limit=80),
+            "+".join(formats),
+        )
 
     except Exception as exc:
         log.error("Card render error: %s", exc)
-        client.send_message(chat_jid, f"❌ Card render failed: {exc}")
+        client.send_message(chat_jid, "❌ Card rendering failed. Check the card fields and attached image, then try again.")
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +198,7 @@ def register(client: "NewClient", config: dict) -> callable:
     """Register the card generation feature on the neonize client."""
 
     def on_message(client: "NewClient", message: MessageEv):
-        body = _get_text(message)
+        body = _get_command_text(message)
         lower = body.lower()
         chat_jid = str(message.Info.MessageSource.Chat)
 

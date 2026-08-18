@@ -21,6 +21,8 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
     Message,
 )
 from neonize.utils.jid import Jid2String, JIDToNonAD
+from db.auth import normalize_jid
+from features.text import public_text
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
@@ -83,6 +85,69 @@ def _get_group_mentions(ctx: ContextInfo) -> list[tuple[str, str]]:
     return mentions
 
 
+def get_client_self_jids(client: "NewClient") -> set[str]:
+    """Return the paired account's phone and LID JIDs for safety filtering."""
+    try:
+        device = client.get_me()
+    except Exception:
+        log.debug("Could not resolve the bot's own JIDs", exc_info=True)
+        return set()
+
+    result: set[str] = set()
+    for field in ("JID", "LID"):
+        value = getattr(device, field, None)
+        if isinstance(value, str):
+            raw = value
+        else:
+            user = getattr(value, "User", None)
+            server = getattr(value, "Server", None)
+            raw = (
+                f"{user}@{server}"
+                if isinstance(user, str) and isinstance(server, str) and user and server
+                else ""
+            )
+        normalized = normalize_jid(raw)
+        if normalized:
+            result.add(normalized)
+    return result
+
+
+def get_group_member_jids(client: "NewClient", group_jid) -> list[str]:
+    """Return the current human participant JIDs for a joined WhatsApp group.
+
+    Community tagging already needs this information.  Keep the lookup in a
+    shared helper so other features can resolve semantic targets such as
+    ``everyone in this group`` without exposing participant data to the LLM.
+    The paired account is always excluded before the list leaves this helper.
+    """
+    groups = client.get_joined_groups()
+    self_jids = get_client_self_jids(client)
+    wanted = str(group_jid)
+    wanted_user = getattr(group_jid, "User", "")
+    for group in groups:
+        candidate = getattr(group, "JID", None)
+        if candidate is None:
+            continue
+        candidate_user = getattr(candidate, "User", "")
+        if candidate_user and wanted_user:
+            matches = candidate_user == wanted_user
+        else:
+            matches = Jid2String(JIDToNonAD(candidate)) == wanted
+        if not matches:
+            continue
+
+        members: list[str] = []
+        for participant in getattr(group, "Participants", []):
+            jid = getattr(participant, "JID", None)
+            if jid is None or not getattr(jid, "User", ""):
+                continue
+            normalized = normalize_jid(Jid2String(JIDToNonAD(jid)))
+            if normalized and normalized not in self_jids:
+                members.append(normalized)
+        return list(dict.fromkeys(members))
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Feature registration
 # ---------------------------------------------------------------------------
@@ -98,7 +163,7 @@ def register(client: "NewClient", config: dict) -> callable:
         if getattr(chat, "Server", "") != "g.us":
             return
 
-        # Ignore our own messages to prevent loops
+        # Ignore our own messages to prevent loops.
         if message.Info.MessageSource.IsFromMe:
             return
 
@@ -140,22 +205,18 @@ def register(client: "NewClient", config: dict) -> callable:
             # Collect participant JIDs as full strings (user@server)
             mentioned_jids: list[str] = []
 
-            for p in getattr(ginfo, "Participants", []):
-                jid = getattr(p, "JID", None)
-                if jid is None:
-                    continue
-                user = getattr(jid, "User", "")
-                if not user:
-                    continue
-                # Convert to non-AD form and then to string
-                mentioned_jids.append(Jid2String(JIDToNonAD(jid)))
+            try:
+                mentioned_jids = get_group_member_jids(client, ginfo.JID)
+            except Exception as exc:
+                log.error("Failed to resolve participants for group %s: %s", group_subject, exc)
+                continue
 
             if not mentioned_jids:
                 log.warning("No participants found in group %s", group_subject)
                 continue
 
             # Clean message — no @names visible, but mentionedJID ensures notifications
-            text = f"📢 Tagging all members of {group_subject}"
+            text = f"📢 Tagging all members of {public_text(group_subject or 'the community group', limit=120)}"
 
             # Construct the protobuf Message directly so we have full control
             # over mentionedJID (avoids the regex-based ghost_mentions hack).

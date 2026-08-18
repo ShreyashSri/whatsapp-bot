@@ -17,10 +17,13 @@ import base64
 import html as html_mod
 import logging
 import re
+import secrets
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+from features.url_policy import safe_public_url
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +78,31 @@ TYPES: dict[str, dict[str, Any]] = {
 
 CARD_TYPES: list[str] = list(TYPES.keys())
 
+CARD_TONES = frozenset({
+    "sincere", "celebratory", "grateful", "professional",
+    "playful", "sarcastic", "deadpan", "dramatic",
+})
+
+TONE_ACCENTS = {
+    "sincere": "#5C9BD6",
+    "celebratory": "#FBBC04",
+    "grateful": "#48F80D",
+    "professional": "#5C9BD6",
+    "playful": "#A855F7",
+    "sarcastic": "#FF5C8A",
+    "deadpan": "#A0AEC0",
+    "dramatic": "#F97316",
+}
+
+VARIATION_ACCENTS = (
+    "#48F80D",
+    "#FF5C8A",
+    "#22D3EE",
+    "#FACC15",
+    "#A78BFA",
+    "#FB923C",
+)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -87,6 +115,101 @@ def _escape(s: str) -> str:
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
 
+def validate_card_design(value: object) -> dict[str, Any] | None:
+    """Validate the bounded design vocabulary used by natural-language cards.
+
+    The model is allowed to select an existing visual family and a small set
+    of presentation values.  It is never allowed to provide HTML, CSS,
+    arbitrary layout coordinates, or executable content.
+    """
+    if not isinstance(value, dict):
+        return None
+
+    base_template = value.get("base_template", value.get("template", "custom"))
+    if not isinstance(base_template, str):
+        return None
+    base_template = base_template.strip().lower()
+    # Talk is a separate, fixed layout with different required fields.
+    if base_template not in TYPES or base_template == "talk":
+        return None
+
+    def bounded_text(key: str, limit: int) -> str | None:
+        item = value.get(key)
+        if item is None:
+            return None
+        if not isinstance(item, str):
+            return None
+        item = item.strip()
+        return item if len(item) <= limit else None
+
+    title = bounded_text("title", 64)
+    pill = bounded_text("pill", 96)
+    if title is None and value.get("title") is not None:
+        return None
+    if pill is None and value.get("pill") is not None:
+        return None
+
+    accent = value.get("accent")
+    if accent is not None:
+        if not isinstance(accent, str) or not _HEX_RE.match(accent.strip()):
+            return None
+        accent = "#" + _HEX_RE.match(accent.strip()).group(1).upper()
+
+    logo_url = value.get("logo_url")
+    if logo_url is not None:
+        if not isinstance(logo_url, str) or len(logo_url.strip()) > 2000:
+            return None
+        logo_url = logo_url.strip()
+        if not (logo_url.startswith("https://") or logo_url.startswith("http://")
+                or logo_url.startswith("data:image/")):
+            return None
+        if logo_url.startswith("data:image/") and len(logo_url) > 5_000_000:
+            return None
+
+    highlight_terms = value.get("highlight_terms", [])
+    if highlight_terms is None:
+        highlight_terms = []
+    if not isinstance(highlight_terms, list) or len(highlight_terms) > 8:
+        return None
+    normalized_highlights: list[str] = []
+    for term in highlight_terms:
+        if not isinstance(term, str):
+            return None
+        term = term.strip()
+        if not term or len(term) > 48:
+            return None
+        normalized_highlights.append(term)
+
+    tone = value.get("tone", "celebratory")
+    if not isinstance(tone, str) or tone.strip().lower() not in CARD_TONES:
+        return None
+    tone = tone.strip().lower()
+
+    occasion = value.get("occasion")
+    if occasion is not None:
+        if not isinstance(occasion, str) or len(occasion.strip()) > 120:
+            return None
+        occasion = occasion.strip()
+
+    variation = value.get("variation")
+    if variation is not None and (
+        not isinstance(variation, int) or isinstance(variation, bool) or not 0 <= variation < len(VARIATION_ACCENTS)
+    ):
+        return None
+
+    return {
+        "base_template": base_template,
+        "title": title,
+        "pill": pill,
+        "accent": accent,
+        "logo_url": logo_url,
+        "highlight_terms": normalized_highlights,
+        "tone": tone,
+        "occasion": occasion,
+        "variation": variation,
+    }
+
+
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
     m = _HEX_RE.match(hex_color)
     if not m:
@@ -96,12 +219,22 @@ def _hex_to_rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha})"
 
 
-def _process_highlights(escaped_text: str) -> str:
-    return re.sub(
+def _process_highlights(escaped_text: str, highlight_terms: list[str] | None = None) -> str:
+    highlighted = re.sub(
         r"\[([^\[\]\n]+)\]",
         r'<span class="highlight">\1</span>',
         escaped_text,
     )
+    for term in highlight_terms or []:
+        escaped_term = _escape(term)
+        highlighted = re.sub(
+            re.escape(escaped_term),
+            f'<span class="highlight">{escaped_term}</span>',
+            highlighted,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return highlighted
 
 
 _EXT_TO_MIME: dict[str, str] = {
@@ -113,21 +246,67 @@ _EXT_TO_MIME: dict[str, str] = {
     "webp": "image/webp",
 }
 
+_DATA_IMAGE_RE = re.compile(
+    r"^data:(image/(?:png|jpeg|jpg|gif|webp|svg\+xml));base64,([A-Za-z0-9+/=]+)$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_data_image(source: str) -> str:
+    """Accept only canonical base64 image data, never inline HTML/SVG text."""
+    match = _DATA_IMAGE_RE.fullmatch(source.strip())
+    if not match:
+        raise ValueError("image data must be a base64-encoded image")
+    mime, encoded = match.groups()
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        raise ValueError("image data is not valid base64") from None
+    if not raw or len(raw) > 5 * 1024 * 1024:
+        raise ValueError("image is too large")
+    return f"data:{mime.lower()};base64,{base64.b64encode(raw).decode()}"
+
 
 async def _fetch_image_as_data_url(url: str) -> str:
     """Fetch an image URL and return a base64 ``data:`` URL."""
-    async with httpx.AsyncClient(follow_redirects=True) as http:
-        resp = await http.get(url, timeout=15)
-        resp.raise_for_status()
+    current = url.strip()
+    if not safe_public_url(current):
+        raise ValueError("image URL must point to a public HTTP(S) host")
+    max_bytes = 5 * 1024 * 1024
+    async with httpx.AsyncClient(follow_redirects=False, timeout=15) as http:
+        for _ in range(3):
+            async with http.stream("GET", current) as resp:
+                if 300 <= resp.status_code < 400:
+                    from urllib.parse import urljoin
+                    location = resp.headers.get("location", "")
+                    current = urljoin(current, location)
+                    if not safe_public_url(current):
+                        raise ValueError("image redirect points outside public HTTP(S) hosts")
+                    continue
+                resp.raise_for_status()
+                raw_length = resp.headers.get("content-length")
+                if raw_length and raw_length.isdigit() and int(raw_length) > max_bytes:
+                    raise ValueError("image is too large")
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in resp.aiter_bytes():
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise ValueError("image is too large")
+                    chunks.append(chunk)
+                content = b"".join(chunks)
+                ct_mime = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                break
+        else:
+            raise ValueError("image URL redirected too many times")
 
-    ct_mime = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-    ext = url.split("?")[0].split("#")[0].rsplit(".", 1)[-1].lower()
+    ext = current.split("?")[0].split("#")[0].rsplit(".", 1)[-1].lower()
     inferred = _EXT_TO_MIME.get(ext)
     mime = ct_mime if ct_mime.startswith("image/") else inferred
     if not mime:
         raise ValueError(f"Couldn't determine image type (content-type: {ct_mime or 'unknown'})")
 
-    b64 = base64.b64encode(resp.content).decode()
+    b64 = base64.b64encode(content).decode()
     return f"data:{mime};base64,{b64}"
 
 
@@ -135,7 +314,7 @@ async def _resolve_image_as_data_url(source: str) -> str:
     """Return an image ``data:`` URL from either a data URL or a remote URL."""
     cleaned = source.strip()
     if cleaned.startswith("data:image/"):
-        return cleaned
+        return _normalize_data_image(cleaned)
     return await _fetch_image_as_data_url(cleaned)
 
 
@@ -202,7 +381,7 @@ def _build_deco_svg(accent_hex: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_html(
+def _build_original_html(
     *,
     card_type: str,
     name: str,
@@ -210,6 +389,13 @@ def _build_html(
     photo_data_url: str,
     logo_data_url: str | None,
 ) -> str:
+    """Build the unmodified main-branch achievement-card template.
+
+    Natural-language processing may decide what a card says, but it must not
+    change its visual template unless the sender explicitly asks for styling
+    changes.  Keeping this builder separate makes the default output exactly
+    match the original template.
+    """
     cfg = TYPES.get(card_type, TYPES["custom"])
     accent = cfg["accent"]
     sentence_html = _process_highlights(_escape(text))
@@ -233,11 +419,115 @@ def _build_html(
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:;">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=JetBrains+Mono:wght@600;700&display=swap">
 <style>
   :root {{ --accent: {accent}; }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  html, body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+  body {{
+    width: {CARD_W}px; height: {CARD_H}px; background: #07070d;
+    background-image: radial-gradient(ellipse 70% 50% at 50% 50%, {accent_soft} 0%, transparent 70%);
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #fff; position: relative; overflow: hidden;
+  }}
+  .grid-bg, .deco {{ position: absolute; top: 0; left: 0; width: {CARD_W}px; height: {CARD_H}px; pointer-events: none; }}
+  .grid-bg {{ z-index: 0; }} .deco {{ z-index: 1; }}
+  .pb-logo {{ position: absolute; top: 70px; left: 0; right: 0; text-align: center; z-index: 2; font-family: 'JetBrains Mono', monospace; font-weight: 700; letter-spacing: 0.05em; }}
+  .pb-logo .mark {{ width: 220px; height: auto; display: block; margin: 0 auto; }}
+  .pb-logo .row {{ font-size: 32px; margin-top: 20px; }} .pb-logo .point {{ color: #48F80D; }} .pb-logo .blank {{ color: #fff; }}
+  .title {{ position: absolute; top: 230px; left: 0; right: 0; text-align: center; font-size: 86px; font-weight: 800; letter-spacing: -0.02em; text-shadow: 0 0 18px {title_glow}; z-index: 2; }}
+  .avatar {{ position: absolute; left: 50%; top: 380px; transform: translateX(-50%); width: 340px; height: 340px; border-radius: 50%; overflow: hidden; background: #1a1a2e; box-shadow: 0 0 0 6px rgba(255,255,255,0.6); }}
+  .avatar img {{ width: 100%; height: 100%; object-fit: cover; display: block; }}
+  .person-name {{ position: absolute; top: 770px; left: 0; right: 0; text-align: center; font-size: 60px; font-weight: 700; }}
+  .sentence {{ position: absolute; top: 905px; left: 90px; right: 90px; text-align: center; font-size: 36px; line-height: 1.5; font-weight: 500; }}
+  .highlight {{ color: var(--accent); font-weight: 700; }}
+  .pill {{ position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%); background: #ffffff; color: #15192b; padding: 22px 44px; border-radius: 18px; font-weight: 700; font-size: 30px; white-space: nowrap; box-shadow: 0 10px 26px rgba(0,0,0,0.5); }}
+  .pill.logo-pill {{ padding: 0; background: transparent; box-shadow: none; }}
+  .pill.logo-pill img {{ max-height: 150px; max-width: 480px; object-fit: contain; display: block; margin: 0 auto; border-radius: 12px; }}
+</style>
+</head>
+<body>
+  <svg class="grid-bg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {CARD_W} {CARD_H}" width="{CARD_W}" height="{CARD_H}" aria-hidden="true">
+    <defs><pattern id="grid-pattern" width="52" height="52" patternUnits="userSpaceOnUse" patternTransform="translate(20, 25)"><path d="M 52 0 L 0 0 0 52" fill="none" stroke="#969FBE" stroke-opacity="0.34" stroke-width="1"/></pattern></defs>
+    <rect width="{CARD_W}" height="{CARD_H}" fill="url(#grid-pattern)"/>
+  </svg>
+  {deco_svg}
+  <div class="pb-logo">{pb_logo_mark}<div class="row"><span class="point">Point</span> <span class="blank">Blank</span></div></div>
+  <div class="title">Congratulations</div>
+  <div class="avatar"><img src="{photo_data_url}" alt="profile" /></div>
+  <div class="person-name">{_escape(name)}</div>
+  <div class="sentence">{sentence_html}</div>
+  {pill_html}
+</body>
+</html>"""
+
+
+def _build_html(
+    *,
+    card_type: str,
+    name: str,
+    text: str,
+    photo_data_url: str,
+    logo_data_url: str | None,
+    design: dict[str, Any] | None = None,
+) -> str:
+    cfg = TYPES.get(card_type, TYPES["custom"])
+    design = design or {}
+    tone = design.get("tone", "celebratory")
+    accent = design.get("accent") or TONE_ACCENTS.get(tone) or cfg["accent"]
+    variation = design.get("variation")
+    if not isinstance(variation, int) or isinstance(variation, bool):
+        variation = 0
+    variation %= len(VARIATION_ACCENTS)
+    secondary = VARIATION_ACCENTS[variation]
+    sentence_html = _process_highlights(
+        _escape(text), design.get("highlight_terms")
+    )
+    accent_soft = _hex_to_rgba(accent, 0.08)
+    title_glow = _hex_to_rgba(accent, 0.18)
+    deco_svg = _build_deco_svg(accent)
+
+    pill_html = ""
+    if logo_data_url:
+        pill_html = f'<div class="pill logo-pill"><img src="{logo_data_url}" alt="logo" /></div>'
+    else:
+        pill = design["pill"] if "pill" in design else cfg.get("pill")
+        if pill:
+            pill_html = f'<div class="pill">{_escape(pill)}</div>'
+
+    title = design.get("title") or "Congratulations"
+    template_class = re.sub(r"[^a-z0-9-]", "", card_type.lower()) or "custom"
+    tone_class = re.sub(r"[^a-z0-9-]", "", tone.lower()) or "celebratory"
+    variation_class = f"variation-{variation}"
+    title_font = _size_for_text(
+        title, base=78, medium=62, small=48, medium_at=28, small_at=44
+    )
+    sentence_font = _size_for_text(
+        text, base=36, medium=31, small=27, medium_at=90, small_at=140
+    )
+    avatar_top = 410 if len(title) >= 29 else 380
+    name_top = avatar_top + 390
+    sentence_top = name_top + 125
+
+    pb_logo_mark = (
+        f'<img class="mark" src="{_PB_LOGO_DATA_URL}" alt="Point Blank mark" />'
+        if _PB_LOGO_DATA_URL
+        else '<div style="font-size:56px;color:#48F80D;line-height:1;">&lt;.&gt;</div>'
+    )
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:;">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=JetBrains+Mono:wght@600;700&display=swap">
+<style>
+  :root {{ --accent: {accent}; }}
+  :root {{ --secondary: {secondary}; }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
   html, body {{
@@ -254,6 +544,140 @@ def _build_html(
     color: #fff;
     position: relative;
     overflow: hidden;
+  }}
+
+  .poster-wash, .poster-band {{
+    position: absolute;
+    pointer-events: none;
+    z-index: 0;
+  }}
+  .poster-wash {{
+    inset: 0;
+    background:
+      radial-gradient(ellipse 76% 47% at 50% 33%, {accent_soft} 0%, transparent 70%),
+      linear-gradient(135deg, rgba(255,255,255,0.035), transparent 38%, rgba(0,0,0,0.34));
+  }}
+  .poster-band {{
+    width: 145%;
+    height: 250px;
+    left: -22%;
+    top: 575px;
+    transform: rotate(-11deg);
+    border-top: 2px solid {_hex_to_rgba(accent, 0.28)};
+    border-bottom: 2px solid {_hex_to_rgba(accent, 0.12)};
+    background: linear-gradient(90deg, transparent, {_hex_to_rgba(accent, 0.16)}, transparent);
+    box-shadow: 0 0 90px {_hex_to_rgba(accent, 0.14)};
+  }}
+  .poster-orbit, .poster-burst {{
+    position: absolute;
+    pointer-events: none;
+    z-index: 0;
+  }}
+  .poster-orbit {{
+    width: 760px;
+    height: 760px;
+    left: 160px;
+    top: 225px;
+    border: 2px solid {_hex_to_rgba(secondary, 0.16)};
+    border-radius: 50%;
+    transform: rotate(-18deg) scaleX(0.78);
+    box-shadow: 0 0 90px {_hex_to_rgba(secondary, 0.12)};
+  }}
+  .poster-orbit::before, .poster-orbit::after {{
+    content: "";
+    position: absolute;
+    inset: 42px;
+    border: 1px dashed {_hex_to_rgba(secondary, 0.18)};
+    border-radius: 50%;
+  }}
+  .poster-orbit::after {{
+    inset: 120px;
+    border-style: solid;
+    border-color: {_hex_to_rgba(accent, 0.12)};
+  }}
+  .poster-burst {{
+    width: 420px;
+    height: 420px;
+    right: -175px;
+    top: -120px;
+    border: 2px solid {_hex_to_rgba(secondary, 0.22)};
+    transform: rotate(26deg);
+    background: linear-gradient(135deg, {_hex_to_rgba(secondary, 0.12)}, transparent 55%);
+    clip-path: polygon(0 0, 100% 0, 100% 18%, 18% 100%, 0 100%);
+  }}
+  .variation-1 .poster-band {{
+    height: 115px;
+    top: 495px;
+    transform: rotate(17deg);
+  }}
+  .variation-1 .poster-orbit {{
+    left: 240px;
+    top: 305px;
+    transform: rotate(22deg) scaleX(0.58);
+  }}
+  .variation-2 .poster-band {{
+    height: 390px;
+    top: 460px;
+    transform: rotate(-24deg);
+    opacity: 0.72;
+  }}
+  .variation-2 .poster-orbit {{
+    left: -90px;
+    top: 340px;
+    transform: rotate(-8deg) scaleX(0.62);
+  }}
+  .variation-3 .poster-band {{
+    height: 72px;
+    top: 760px;
+    transform: rotate(-4deg);
+    border-top-style: dashed;
+    border-bottom-style: dashed;
+  }}
+  .variation-3 .poster-orbit {{
+    width: 900px;
+    height: 520px;
+    left: 90px;
+    top: 330px;
+    transform: rotate(-12deg) scaleX(0.9);
+  }}
+  .variation-4 .poster-band {{
+    height: 180px;
+    top: 335px;
+    transform: rotate(8deg);
+    background: linear-gradient(90deg, transparent, {_hex_to_rgba(secondary, 0.24)}, transparent);
+  }}
+  .variation-4 .poster-orbit {{
+    left: 180px;
+    top: 390px;
+    transform: rotate(4deg) scaleX(0.72);
+  }}
+  .variation-5 .poster-band {{
+    height: 300px;
+    top: 640px;
+    transform: rotate(28deg);
+  }}
+  .variation-5 .poster-orbit {{
+    left: 255px;
+    top: 180px;
+    transform: rotate(-30deg) scaleX(0.66);
+  }}
+  .style-gsoc .poster-band {{
+    background: linear-gradient(90deg, transparent, rgba(251,188,4,0.22), transparent);
+  }}
+  .style-lfx .poster-band {{
+    background: linear-gradient(90deg, transparent, rgba(92,155,214,0.22), transparent);
+  }}
+  .style-hackathon .poster-band, .style-custom .poster-band {{
+    background: linear-gradient(90deg, transparent, rgba(168,85,247,0.24), rgba(249,115,22,0.12), transparent);
+  }}
+  .style-competitive .poster-band {{
+    background: linear-gradient(90deg, transparent, rgba(46,213,115,0.22), transparent);
+  }}
+  .style-acm .poster-band {{
+    background: linear-gradient(90deg, transparent, rgba(245,166,35,0.22), transparent);
+  }}
+  .style-internship .poster-band {{
+    background: linear-gradient(90deg, transparent, rgba(0,188,212,0.22), transparent);
   }}
 
   .grid-bg, .deco {{
@@ -287,18 +711,38 @@ def _build_html(
 
   .title {{
     position: absolute;
-    top: 230px; left: 0; right: 0;
+    top: 215px; left: 70px; right: 70px;
+    min-height: 155px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     text-align: center;
-    font-size: 86px;
+    font-size: {title_font}px;
+    line-height: 1.08;
     font-weight: 800;
     letter-spacing: -0.02em;
     text-shadow: 0 0 18px {title_glow};
     z-index: 2;
+    overflow-wrap: break-word;
+  }}
+
+  .tone-sarcastic .title {{
+    letter-spacing: 0.015em;
+    text-transform: uppercase;
+  }}
+  .tone-deadpan .title {{
+    text-shadow: none;
+  }}
+  .tone-playful .pill {{
+    border-radius: 999px;
+  }}
+  .tone-dramatic .title {{
+    text-shadow: 0 0 18px {title_glow}, 0 0 36px {title_glow};
   }}
 
   .avatar {{
     position: absolute;
-    left: 50%; top: 380px;
+    left: 50%; top: {avatar_top}px;
     transform: translateX(-50%);
     width: 340px; height: 340px;
     border-radius: 50%;
@@ -310,17 +754,17 @@ def _build_html(
 
   .person-name {{
     position: absolute;
-    top: 770px; left: 0; right: 0;
+    top: {name_top}px; left: 0; right: 0;
     text-align: center;
-    font-size: 60px;
+    font-size: {_size_for_text(name, base=60, medium=50, small=42, medium_at=20, small_at=30)}px;
     font-weight: 700;
   }}
 
   .sentence {{
     position: absolute;
-    top: 905px; left: 90px; right: 90px;
+    top: {sentence_top}px; left: 90px; right: 90px;
     text-align: center;
-    font-size: 36px;
+    font-size: {sentence_font}px;
     line-height: 1.5;
     font-weight: 500;
   }}
@@ -340,11 +784,18 @@ def _build_html(
     box-shadow: 0 10px 26px rgba(0,0,0,0.5);
   }}
   .pill.logo-pill {{
+    width: 480px;
+    height: 150px;
     padding: 0;
     background: transparent;
     box-shadow: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }}
   .pill.logo-pill img {{
+    width: 100%;
+    height: 100%;
     max-height: 150px;
     max-width: 480px;
     object-fit: contain;
@@ -354,7 +805,11 @@ def _build_html(
   }}
 </style>
 </head>
-<body>
+<body class="poster style-{_escape(template_class)} tone-{_escape(tone_class)} {variation_class}">
+  <div class="poster-wash"></div>
+  <div class="poster-band"></div>
+  <div class="poster-orbit"></div>
+  <div class="poster-burst"></div>
   <svg class="grid-bg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {CARD_W} {CARD_H}" width="{CARD_W}" height="{CARD_H}" aria-hidden="true">
     <defs>
       <pattern id="grid-pattern" width="52" height="52" patternUnits="userSpaceOnUse" patternTransform="translate(20, 25)">
@@ -371,7 +826,7 @@ def _build_html(
     <div class="row"><span class="point">Point</span> <span class="blank">Blank</span></div>
   </div>
 
-  <div class="title">Congratulations</div>
+  <div class="title">{_escape(title)}</div>
 
   <div class="avatar"><img src="{photo_data_url}" alt="profile" /></div>
 
@@ -527,6 +982,7 @@ def _build_talk_html(
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:;">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700&display=swap">
@@ -745,6 +1201,7 @@ async def render_card(
     logo_url: str | None = None,
     event_name: str | None = None,
     event_logo_urls: list[str] | None = None,
+    design: dict[str, Any] | None = None,
     formats: list[str] | None = None,
 ) -> dict[str, str]:
     """Render an achievement card and return ``{"png": base64, "pdf": base64}``.
@@ -759,6 +1216,18 @@ async def render_card(
     if card_type not in TYPES:
         raise ValueError(f'Unknown card type "{card_type}". Use one of: {", ".join(TYPES)}')
 
+    design_spec = None
+    if design is not None:
+        design_spec = validate_card_design(design)
+        if design_spec is None:
+            raise ValueError("Invalid card design specification")
+        if card_type == "talk":
+            raise ValueError("Custom design overrides are not supported for talk cards")
+        if design_spec["variation"] is None:
+            # Generate one variation per render call. PNG and PDF from this
+            # call share the same spec, while separate runs can look fresh.
+            design_spec["variation"] = secrets.randbelow(len(VARIATION_ACCENTS))
+
     want_png = "png" in formats
     want_pdf = "pdf" in formats
     if not want_png and not want_pdf:
@@ -766,8 +1235,13 @@ async def render_card(
 
     # Resolve logo
     logo_data_url: str | None = None
-    cfg = TYPES[card_type]
-    effective_logo_url = logo_url or cfg.get("logoUrl")
+    template_type = design_spec["base_template"] if design_spec else card_type
+    cfg = TYPES[template_type]
+    effective_logo_url = (
+        (design_spec.get("logo_url") if design_spec else None)
+        or logo_url
+        or cfg.get("logoUrl")
+    )
     if card_type != "talk" and effective_logo_url:
         try:
             logo_data_url = await _resolve_image_as_data_url(effective_logo_url)
@@ -807,13 +1281,23 @@ async def render_card(
         )
         page_height = TALK_CARD_H
     else:
-        page_html = _build_html(
-            card_type=card_type,
-            name=name,
-            text=text,
-            photo_data_url=photo_data_url,
-            logo_data_url=logo_data_url,
-        )
+        if design_spec is None:
+            page_html = _build_original_html(
+                card_type=card_type,
+                name=name,
+                text=text,
+                photo_data_url=photo_data_url,
+                logo_data_url=logo_data_url,
+            )
+        else:
+            page_html = _build_html(
+                card_type=template_type,
+                name=name,
+                text=text,
+                photo_data_url=photo_data_url,
+                logo_data_url=logo_data_url,
+                design=design_spec,
+            )
         page_height = CARD_H
 
     from playwright.async_api import async_playwright  # lazy import
