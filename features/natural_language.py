@@ -3121,16 +3121,11 @@ class MistralCardDesigner:
 
 
 def _self_jids(client, config: dict) -> set[str]:
+    from features.community_tag import get_client_self_jids
+
     configured = config.get("bot_jid") or os.getenv("BOT_JID", "")
     result = {normalize_jid(configured)} if configured else set()
-    try:
-        device = client.get_me()
-        for field in ("JID", "LID"):
-            value = normalize_jid(getattr(device, field, None))
-            if value:
-                result.add(value)
-    except Exception:
-        log.debug("Could not resolve the bot's own JIDs", exc_info=True)
+    result |= get_client_self_jids(client)
     return {jid for jid in result if jid}
 
 

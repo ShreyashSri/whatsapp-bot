@@ -13,6 +13,7 @@ Requirements:
 from __future__ import annotations
 
 import logging
+import weakref
 from typing import TYPE_CHECKING
 
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
@@ -85,8 +86,21 @@ def _get_group_mentions(ctx: ContextInfo) -> list[tuple[str, str]]:
     return mentions
 
 
+_self_jids_cache: "weakref.WeakKeyDictionary[NewClient, set[str]]" = weakref.WeakKeyDictionary()
+
+
 def get_client_self_jids(client: "NewClient") -> set[str]:
-    """Return the paired account's phone and LID JIDs for safety filtering."""
+    """Return the paired account's phone and LID JIDs for safety filtering.
+
+    Cached per client instance after the first successful lookup: get_me()
+    blocks on live transport state, and every message handler calls this, so
+    an unresolved transport hiccup would otherwise wedge the single-threaded
+    dispatch worker on every message indefinitely.
+    """
+    cached = _self_jids_cache.get(client)
+    if cached is not None:
+        return cached
+
     try:
         device = client.get_me()
     except Exception:
@@ -109,6 +123,8 @@ def get_client_self_jids(client: "NewClient") -> set[str]:
         normalized = normalize_jid(raw)
         if normalized:
             result.add(normalized)
+    if result:
+        _self_jids_cache[client] = result
     return result
 
 
