@@ -14,6 +14,7 @@ import queue
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -417,6 +418,19 @@ def main() -> None:
     # work out of the transport callback.
     dispatch_queue: queue.Queue = queue.Queue(maxsize=64)
 
+    # Neonize client calls (get_me, send_message, get_group_info, ...) are
+    # blocking network I/O with no built-in timeout. A WhatsApp connection
+    # can go silently half-dead -- socket still open, no error, just no
+    # response -- for hours before whatsmeow itself notices and reconnects
+    # (observed in prod: ~8h). Since dispatch() runs on a single worker to
+    # preserve message order, one such call permanently wedges every future
+    # message with no crash and no log line. Running each dispatch() through
+    # a bounded pool with a hard timeout means a stuck call can no longer
+    # take the whole bot down with it -- worst case we leak one blocked
+    # worker thread and keep going.
+    DISPATCH_TIMEOUT_SECONDS = 60
+    dispatch_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="MessageDispatchWorker")
+
     def _dispatch_worker() -> None:
         while True:
             queued_message = dispatch_queue.get()
@@ -436,7 +450,18 @@ def main() -> None:
                     continue
                 try:
                     with allow_reminder_reply(queued_message):
-                        dispatch(queued_message)
+                        future = dispatch_executor.submit(dispatch, queued_message)
+                        try:
+                            future.result(timeout=DISPATCH_TIMEOUT_SECONDS)
+                        except FutureTimeoutError:
+                            log.error(
+                                "message dispatch timed out after %ss (id=%s chat=%s) -- "
+                                "likely a stuck Neonize call on a half-dead connection; "
+                                "abandoning this attempt and continuing",
+                                DISPATCH_TIMEOUT_SECONDS, queued_id, queued_chat_jid,
+                            )
+                            release_message(runtime_config["db_session_factory"], queued_id, queued_chat_jid)
+                            continue
                 except BaseException:
                     # dispatch() is expected to catch its own user-facing
                     # errors (bad command, validation failure) and reply
