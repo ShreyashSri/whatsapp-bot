@@ -2,11 +2,15 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+
 from features.natural_language import (
     MISTRAL_CHAT_URL,
     MistralCardDesigner,
     MistralCommandTranslator,
     _admin_target_suffix,
+    _post_gemini,
     build_knowledge_context,
     compile_card_design,
     compile_intent,
@@ -766,6 +770,44 @@ def test_subgroup_tag_is_allowed_in_compound_plans():
     assert "collections.tag" in TRANSACTIONAL_PLAN_CAPABILITIES
     assert "media.posted" in TRANSACTIONAL_PLAN_CAPABILITIES
     assert "media.unposted" in TRANSACTIONAL_PLAN_CAPABILITIES
+
+
+def _gemini_response(status_code, body=None, headers=None):
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.headers = headers or {}
+    resp.json.return_value = body or {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+    if status_code >= 400:
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            f"{status_code}", request=MagicMock(), response=resp
+        )
+    else:
+        resp.raise_for_status.return_value = None
+    return resp
+
+
+def test_post_gemini_honors_retry_after_header_on_429():
+    client = MagicMock()
+    client.post.side_effect = [
+        _gemini_response(429, headers={"retry-after": "3"}),
+        _gemini_response(200),
+    ]
+    with patch("features.natural_language.time.sleep") as sleep:
+        result = _post_gemini(client, "key", "gemma-4-31b-it", {"messages": []})
+    assert client.post.call_count == 2
+    sleep.assert_called_once_with(3.0)
+    assert result.json()["choices"][0]["message"]["content"] == "ok"
+
+
+def test_post_gemini_backs_off_without_retry_after_and_eventually_raises():
+    client = MagicMock()
+    client.post.side_effect = [_gemini_response(429), _gemini_response(429), _gemini_response(429)]
+    with patch("features.natural_language.time.sleep") as sleep:
+        with pytest.raises(Exception):
+            _post_gemini(client, "key", "gemma-4-31b-it", {"messages": []})
+    # 3 attempts total: 2 backoff sleeps (escalating), then the final 429 raises.
+    assert client.post.call_count == 3
+    assert sleep.call_args_list == [((1.5,),), ((3.0,),)]
 
 
 def test_media_handler_uses_plan_transaction_session_factory():

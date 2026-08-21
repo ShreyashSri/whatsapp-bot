@@ -2716,20 +2716,42 @@ def _post_gemini(client, api_key: str, model: str, payload: dict):
     headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
     url = GEMINI_GENERATE_URL_TEMPLATE.format(model=model)
     transient_statuses = {408, 429, 500, 502, 503, 504}
-    for attempt in range(2):
+    # Free-tier Gemma has a low requests-per-minute quota, so 429s are
+    # routine under back-to-back messages, not exceptional. A flat 0.25s
+    # backoff (below) never clears a real rate-limit window -- observed in
+    # prod losing two straight attempts 0.5s apart to 429 while a separate
+    # slow (37s) request was still holding a quota slot. 429 gets its own
+    # longer, Retry-After-aware backoff; other transient statuses keep the
+    # fast retry since those usually aren't quota-based.
+    max_attempts = 3
+    for attempt in range(max_attempts):
         try:
             raw_response = client.post(url, headers=headers, json=gemini_payload)
             status_code = getattr(raw_response, "status_code", None)
-            if status_code in transient_statuses and attempt == 0:
-                time.sleep(0.25)
+            if status_code in transient_statuses and attempt < max_attempts - 1:
+                if status_code == 429:
+                    retry_after = _parse_retry_after(raw_response.headers.get("retry-after"))
+                    time.sleep(retry_after if retry_after is not None else 1.5 * (attempt + 1))
+                else:
+                    time.sleep(0.25)
                 continue
             raw_response.raise_for_status()
             return _GeminiResponseShim(raw_response)
         except httpx.TransportError:
-            if attempt == 1:
+            if attempt == max_attempts - 1:
                 raise
             time.sleep(0.25)
     raise RuntimeError("Gemini request did not return a response")
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse a Retry-After header's delay-seconds form; ignore HTTP-date form."""
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return None
 
 
 def _post_mistral(client, api_key: str, model: str, payload: dict, *, provider: str = "mistral"):
