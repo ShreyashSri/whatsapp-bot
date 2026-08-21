@@ -212,6 +212,7 @@ def register(client: "NewClient", config: dict) -> callable:
     if factory is None:
         raise RuntimeError("Reminders feature requires db_session_factory")
     store = ReminderStore(factory)
+    reminder_group_jid = configured_reminder_group(config)
 
     def on_message(client: "NewClient", message: "MessageEv"):
         if not message.Info or not message.Info.MessageSource:
@@ -227,6 +228,10 @@ def register(client: "NewClient", config: dict) -> callable:
 
         lower = body.lower()
         if not any(lower == cmd or lower.startswith(f"{cmd} ") for cmd in REMINDER_CMDS):
+            return
+
+        if reminder_group_jid and normalize_jid(chat) != reminder_group_jid:
+            client.send_message(chat, "⛔ Reminders are managed in the designated reminder group.")
             return
 
         command, _, args = body.partition(" ")

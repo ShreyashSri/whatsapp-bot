@@ -792,7 +792,7 @@ def test_media_handler_uses_plan_transaction_session_factory():
     assert captured == [transaction_factory]
 
 
-def test_media_handler_accepts_commands_in_pbbot_group():
+def test_media_handler_rejects_pbbot_group_when_distinct_from_media_group():
     from features.media import register as register_media
 
     default_factory = object()
@@ -816,7 +816,9 @@ def test_media_handler_accepts_commands_in_pbbot_group():
     with patch("features.media._handle_media_command", side_effect=capture_store):
         handler(client, message)
 
-    assert captured == [default_factory]
+    # Media is restricted to MEDIA_GROUP_ID specifically -- the general
+    # PBBOT_GROUP_ID no longer grants access on its own.
+    assert captured == []
 
 
 def test_media_validation_failure_aborts_a_compound_transaction():

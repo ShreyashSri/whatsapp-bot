@@ -105,24 +105,16 @@ def _configured_groups(config: dict, *keys: str) -> set[str]:
     return groups
 
 
-def _allowed_inbound_groups(config: dict) -> set[str]:
-    """Return groups explicitly configured to accept bot commands."""
-    # MEDIA_GROUP_ID is a command destination by design; incident, fellowship,
-    # and reminder groups are delivery destinations and remain outbound-only
-    # unless a message is a reply to a tracked reminder.
-    return _configured_groups(config, "pbbot_group_id", "media_group_id")
-
-
 def _allowed_inbound_chat(config: dict, chat, *, reminder_reply: bool = False) -> bool:
-    """Allow configured groups and quoted replies to tracked reminders."""
+    """Allow any group the bot has joined; DMs only for tracked reminder replies.
+
+    Group-specific restriction (media/cards to MEDIA_GROUP_ID, reminders to
+    REMINDER_GROUP_ID) is enforced per-feature instead of at this global
+    gate, so other modules stay usable from any group the bot is in.
+    """
     chat_id = normalize_jid(_jid_string(chat))
     if chat_id.endswith("@g.us"):
-        if chat_id in _allowed_inbound_groups(config):
-            return True
-        return (
-            reminder_reply
-            and chat_id == normalize_group_jid(config.get("reminder_group_id"))
-        )
+        return True
     return reminder_reply and chat_id.endswith(("@s.whatsapp.net", "@lid"))
 
 

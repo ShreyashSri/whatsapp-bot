@@ -732,6 +732,9 @@ def _handle_work_subcommand(
         if action in ("reminders", "reminder"):
             # Reminder controls are part of the unified work workflow. The
             # old !reminders commands remain aliases in features/reminders.
+            if reminder_group_jid and normalize_jid(chat) != reminder_group_jid:
+                _send(client, chat, "⛔ Reminders are managed in the designated reminder group.")
+                return True
             from features.reminders import (
                 _cmd_config, _cmd_history, _cmd_remind, _cmd_reminders_summary, _cmd_run,
             )

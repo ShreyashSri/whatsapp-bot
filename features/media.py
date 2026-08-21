@@ -335,10 +335,7 @@ def register(client: "NewClient", config: dict) -> callable:
     """Register the media task-manager feature on the neonize client."""
     command_groups = {
         group_id
-        for group_id in (
-            normalize_group_jid(config.get("media_group_id")),
-            normalize_group_jid(config.get("pbbot_group_id")),
-        )
+        for group_id in (normalize_group_jid(config.get("media_group_id")),)
         if group_id
     }
 

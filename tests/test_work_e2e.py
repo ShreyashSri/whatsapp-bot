@@ -235,6 +235,26 @@ def test_full_work_lifecycle(db_session_factory, handler, admin_user, member_use
     assert mock_client.send_message.called
 
 
+def test_work_reminders_restricted_to_configured_reminder_group(db_session_factory, admin_user, member_user):
+    mock_client = MagicMock()
+    run = register_work(
+        mock_client,
+        {"db_session_factory": db_session_factory, "reminder_group_id": "111@g.us"},
+    )
+
+    wrong_group = make_msg("!work reminders", member_user.jid)
+    wrong_group.Info.MessageSource.Chat.User = "222"
+    mock_client.reset_mock()
+    run(mock_client, wrong_group)
+    assert "designated reminder group" in last_reply(mock_client)
+
+    right_group = make_msg("!work reminders", member_user.jid)
+    right_group.Info.MessageSource.Chat.User = "111"
+    mock_client.reset_mock()
+    run(mock_client, right_group)
+    assert "Reminder System Status" in last_reply(mock_client)
+
+
 def test_unassigned_member_cannot_act_on_others_work(db_session_factory, handler, admin_user, member_user):
     mock_client, run = handler
     other = upsert_user(db_session_factory, "other@s.whatsapp.net", role="member", display_name="Other")

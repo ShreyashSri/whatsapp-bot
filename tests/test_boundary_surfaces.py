@@ -198,12 +198,15 @@ def test_group_configuration_normalizes_bare_numbers_consistently():
     assert normalize_group_jid("12345@s.whatsapp.net") == ""
 
 
-def test_inbound_commands_allow_configured_groups_and_direct_chats():
+def test_inbound_commands_allow_any_group_and_direct_reminder_replies():
     config = {"group_ids": {"12345@g.us"}, "pbbot_group_id": None, "media_group_id": None}
 
+    # Any group the bot has been added to may trigger commands; per-feature
+    # restriction (media/cards to MEDIA_GROUP_ID, reminders to
+    # REMINDER_GROUP_ID) is enforced in those features instead.
     assert _allowed_inbound_chat(config, SimpleNamespace(User="12345", Server="g.us"))
+    assert _allowed_inbound_chat(config, SimpleNamespace(User="99999", Server="g.us"))
     direct = SimpleNamespace(User="67890", Server="s.whatsapp.net")
     assert not _allowed_inbound_chat(config, direct)
     assert _allowed_inbound_chat(config, direct, reminder_reply=True)
     assert not _allowed_inbound_chat(config, SimpleNamespace(User="67890", Server="lid"))
-    assert not _allowed_inbound_chat(config, SimpleNamespace(User="99999", Server="g.us"))

@@ -242,6 +242,34 @@ def test_reminder_feature_commands(db_session_factory, admin_user, member_user):
     assert "⚡ *Reminder Run Completed*" in call_args
 
 
+def test_reminder_commands_restricted_to_configured_reminder_group(db_session_factory, admin_user):
+    mock_client = MagicMock()
+    config = {"db_session_factory": db_session_factory, "reminder_group_id": "111@g.us"}
+    handler = register_reminders(mock_client, config)
+
+    def make_msg(text, sender_jid, group_user):
+        msg = MagicMock()
+        msg.Info.MessageSource.Chat.Server = "g.us"
+        msg.Info.MessageSource.Chat.User = group_user
+        msg.Info.MessageSource.Sender = sender_jid
+        msg.Message.conversation = text
+        msg.Message.extendedTextMessage = None
+        msg.Message.imageMessage = None
+        return msg
+
+    # Wrong group is rejected, even for an admin.
+    mock_client.reset_mock()
+    handler(mock_client, make_msg("!reminders", admin_user.jid, "222"))
+    call_args = mock_client.send_message.call_args[0][1]
+    assert "designated reminder group" in call_args
+
+    # The configured reminder group works as usual.
+    mock_client.reset_mock()
+    handler(mock_client, make_msg("!reminders", admin_user.jid, "111"))
+    call_args = mock_client.send_message.call_args[0][1]
+    assert "⏰ *Reminder System Status*" in call_args
+
+
 def test_task_reminders(db_session_factory, reminder_store, admin_user, member_user):
     from db.models import Task, Assignment
     from datetime import datetime, timezone

@@ -18,6 +18,7 @@ import re
 from typing import TYPE_CHECKING
 
 from neonize.events import MessageEv
+from db.auth import normalize_group_jid, normalize_jid
 from features.text import public_text, split_command_fields
 from features.subgroups import _get_text as _shared_get_text
 
@@ -196,13 +197,19 @@ async def _handle_card_command(
 
 def register(client: "NewClient", config: dict) -> callable:
     """Register the card generation feature on the neonize client."""
+    command_group = normalize_group_jid(config.get("media_group_id"))
+    if not command_group:
+        log.warning("No media command group configured — skipping card generation feature.")
+        return None
 
     def on_message(client: "NewClient", message: MessageEv):
+        chat_jid = normalize_jid(message.Info.MessageSource.Chat)
+        if chat_jid != command_group:
+            return
+
         body = _get_command_text(message)
         lower = body.lower()
-        chat_jid = str(message.Info.MessageSource.Chat)
 
-        # Card commands can come from any registered group (media or CTF)
         if lower.startswith("!card-pdf") and (lower == "!card-pdf" or lower[9:10] in (" ", "\n")):
             try:
                 asyncio.run(
