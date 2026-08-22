@@ -74,8 +74,8 @@ def _reminder_key(value) -> str:
 
 
 @contextmanager
-def _allow_direct(destination, reason: str):
-    key = _direct_key(destination)
+def _allow_direct(destination, reason: str, *, key_fn=_direct_key):
+    key = key_fn(destination)
     if not key:
         yield
         return
@@ -194,11 +194,29 @@ def allow_reminder_reply(message):
         yield
 
 
+@contextmanager
+def allow_reply_to_source_chat(message):
+    """Allow outbound sends back to the exact chat an inbound message came from.
+
+    Inbound handling accepts commands from any group the bot has joined
+    (see bot.py's _allowed_inbound_chat) -- a command's reply must be able
+    to reach that same group even when it isn't in the static configured
+    group list, or every command silently "does nothing" in any group that
+    wasn't manually added to GROUP_ID/MEDIA_GROUP_ID/etc. Replying to the
+    chat a request already came from carries no more risk than accepting
+    that request did; this does not authorize any OTHER destination an NL
+    plan might try to construct.
+    """
+    chat = _message_chat(message)
+    with _allow_direct(chat, "source_chat", key_fn=_reminder_key) if chat else nullcontext():
+        yield
+
+
 def _allowed_destination(value, allowed_groups: set[str]) -> bool:
     jid = _jid_text(value)
     if jid.endswith("@s.whatsapp.net") or jid.endswith("@lid"):
         return _direct_key(jid) in _DIRECT_AUTHORIZATION.get()
-    return jid.endswith("@g.us") and jid in allowed_groups
+    return jid.endswith("@g.us") and (jid in allowed_groups or jid in _DIRECT_AUTHORIZATION.get())
 
 
 def _destinations(method: str, args: tuple, kwargs: dict) -> list[object]:

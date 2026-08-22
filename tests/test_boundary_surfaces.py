@@ -7,6 +7,7 @@ from features.neonize_policy import (
     OutboundDestinationError,
     allow_reminder_delivery,
     allow_reminder_reply,
+    allow_reply_to_source_chat,
     install_outbound_policy,
     is_reminder_reply,
 )
@@ -147,6 +148,67 @@ def test_group_reminder_reply_is_recognized():
         ),
     )
     assert is_reminder_reply(reply)
+
+
+def test_allow_reply_to_source_chat_permits_replying_to_an_unconfigured_group():
+    """A command from a group the bot has joined but that isn't in the
+    static config (GROUP_ID/MEDIA_GROUP_ID/...) must still be able to get
+    a reply -- inbound already accepts any joined group, so the reply
+    should reach that same chat instead of failing with
+    OutboundDestinationError."""
+    class Client:
+        def send_message(self, destination, text):
+            return SimpleNamespace(ID="msg-1")
+
+    client = Client()
+    install_outbound_policy(client, {"12345@g.us"})
+
+    message = SimpleNamespace(
+        Info=SimpleNamespace(MessageSource=SimpleNamespace(Chat="99999@g.us")),
+    )
+
+    with pytest.raises(OutboundDestinationError):
+        client.send_message("99999@g.us", "blocked")
+
+    with allow_reply_to_source_chat(message):
+        client.send_message("99999@g.us", "reply")
+
+    # Authorization does not leak to an unrelated group after the block ends.
+    with pytest.raises(OutboundDestinationError):
+        client.send_message("99999@g.us", "unrelated")
+    with allow_reply_to_source_chat(message):
+        with pytest.raises(OutboundDestinationError):
+            client.send_message("54321@g.us", "still not this one")
+
+
+def test_dispatch_worker_context_propagates_reply_authorization_across_threads():
+    """dispatch() runs in a ThreadPoolExecutor worker (see bot.py's dispatch
+    timeout), which does not inherit ContextVars from the submitting thread
+    on its own -- the allow_* context managers must be captured via
+    contextvars.copy_context().run(), or authorization silently vanishes
+    the moment it crosses threads."""
+    import contextvars
+    from concurrent.futures import ThreadPoolExecutor
+
+    class Client:
+        def send_message(self, destination, text):
+            return SimpleNamespace(ID="msg-1")
+
+    client = Client()
+    install_outbound_policy(client, set())
+    message = SimpleNamespace(
+        Info=SimpleNamespace(MessageSource=SimpleNamespace(Chat="99999@g.us")),
+    )
+
+    def run_dispatch():
+        client.send_message("99999@g.us", "reply")
+
+    with allow_reply_to_source_chat(message):
+        # Without copy_context().run(), this would raise OutboundDestinationError
+        # because the executor thread never sees the ContextVar set above.
+        ctx = contextvars.copy_context()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(ctx.run, run_dispatch).result()
 
 
 def test_reply_quoting_an_untracked_group_message_is_not_a_reminder_reply():

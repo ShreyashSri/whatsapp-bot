@@ -8,6 +8,7 @@ Feature business rules remain in the feature modules.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import queue
@@ -246,6 +247,7 @@ def main() -> None:
     # replies, media, moderation, group settings, and webhook deliveries.
     from features.neonize_policy import (
         allow_reminder_reply,
+        allow_reply_to_source_chat,
         install_outbound_policy,
         is_reminder_reply,
     )
@@ -449,8 +451,15 @@ def main() -> None:
                 ):
                     continue
                 try:
-                    with allow_reminder_reply(queued_message):
-                        future = dispatch_executor.submit(dispatch, queued_message)
+                    with allow_reminder_reply(queued_message), allow_reply_to_source_chat(queued_message):
+                        # ThreadPoolExecutor does not propagate contextvars to
+                        # its worker thread on its own -- the allow_* context
+                        # managers above set ContextVars in *this* thread, so
+                        # without an explicit copy_context().run() dispatch()
+                        # would see none of that authorization once it starts
+                        # running on the executor's own thread.
+                        ctx = contextvars.copy_context()
+                        future = dispatch_executor.submit(ctx.run, dispatch, queued_message)
                         try:
                             future.result(timeout=DISPATCH_TIMEOUT_SECONDS)
                         except FutureTimeoutError:
