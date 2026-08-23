@@ -1,10 +1,11 @@
 """Reminders Feature (PRD FR-7).
 
-Admin commands:
-  !reminder-config [frequency N] [| window HH:MM-HH:MM] [| threshold N] [| channel JID]
-  !reminder-run           — trigger scheduled reminder run idempotently
-  !reminder-history [id]  — view reminder execution history logs
-  !reminders              — show reminder status & config summary
+Natural language usage:
+  @bot show reminder status
+  @bot setup a reminder every 12 hours between 9 AM and 6 PM for admins
+  @bot run reminders now
+  @bot send a reminder for event 4
+  @bot show reminder history for assignment 22
 """
 
 from __future__ import annotations
@@ -99,7 +100,7 @@ def _cmd_config(client: "NewClient", chat, args: str, actor, mentions: list[str]
     if not parsed:
         client.send_message(
             chat,
-            "⚠️ Usage: `!work reminders config [frequency 24] [| window 09:00-18:00] [| threshold 3] [| channel @admin]`",
+            "⚠️ Ask me to set up reminders (e.g. `@bot setup a reminder every 12 hours between 9 AM and 6 PM for admins`).",
         )
         return
 
@@ -143,7 +144,7 @@ def _cmd_remind(
     if len(tokens) != 2 or tokens[0].lower() not in {"event", "task"} or not tokens[1].isdigit():
         client.send_message(
             chat,
-            "⚠️ Usage: `!work reminders remind <event|task> <id>`",
+            "⚠️ Specify an event or task ID to remind (e.g. `@bot send a reminder for event 4`).",
         )
         return
     target_type, target_id = tokens[0].lower(), int(tokens[1])
@@ -170,7 +171,7 @@ def _cmd_remind(
 def _cmd_history(client: "NewClient", chat, args: str, store: ReminderStore, *, actor=None) -> None:
     raw_assignment_id = args.strip()
     if raw_assignment_id and not raw_assignment_id.isdigit():
-        client.send_message(chat, "⚠️ Usage: `!work reminders history [assignment_id]`")
+        client.send_message(chat, "⚠️ Specify an assignment ID (e.g. `@bot show reminder history for assignment 22`).")
         return
     assignment_id = int(raw_assignment_id) if raw_assignment_id else None
     # Members can inspect only their own reminder history. Admins can inspect

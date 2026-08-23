@@ -53,7 +53,7 @@ def _owner_label(jid: str, display_name: str | None = None) -> str:
 def _cmd_progress(client, chat, store: ReportStore, args: str) -> None:
     tokens = args.split()
     if len(tokens) < 2 or tokens[0].lower() != "event" or not tokens[1].isdigit():
-        client.send_message(chat, "Usage: `!reports progress event <id>`")
+        client.send_message(chat, "Please specify the event ID (e.g. `@bot show progress for event 4`).")
         return
     data = store.cohort(int(tokens[1]))
     if not data["rows"]:
@@ -101,7 +101,7 @@ def _cmd_summary(client, chat, store: ReportStore) -> None:
         f"• Assignments: `{data['assignments']}`",
         f"• By status: {counts}",
         "",
-        "Try `!reports progress event <id>`, `!reports pending`, or `!reports completed`.",
+        "Ask me `@bot show progress for event <id>` or `@bot list pending assignments`.",
     ]))
 
 
@@ -165,7 +165,7 @@ def register(client: "NewClient", config: dict) -> callable:
             elif not action or action in ("generate", "summary"):
                 _cmd_summary(client, chat, store)
             else:
-                client.send_message(chat, "Usage: `!reports [progress event <id>|pending|in_progress|completed|cancelled]`")
+                client.send_message(chat, "Ask me e.g. `@bot show the overall work report` or `@bot list pending assignments`.")
         except Exception as exc:
             log.info("report command failed: %s", exc)
             client.send_message(chat, "⚠️ I couldn't load that report.")

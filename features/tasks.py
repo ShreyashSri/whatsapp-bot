@@ -1,17 +1,12 @@
 """Tasks Feature (PRD FR-5).
 
-Assignment is handled by the unified !assign / !unassign commands in events.py.
-
-Admin commands:
-  !add-task <title> [| description text] [| due YYYY-MM-DD] [| priority low|medium|high]
-  !update-task <id> | field value  (title/description/due/priority/status)
-  !delete-task <id>
-  !tasks                  — list all tasks
-
-Member commands:
-  !tasks                  — list own assigned tasks
-  !task <id>              — show task detail
-  !complete-task <id>     — mark own task done
+Natural language usage:
+  @bot create a task Prepare report due August 1st priority high
+  @bot mark task 7 as done
+  @bot what are my pending tasks?
+  @bot show all tasks
+  @bot show task 7 details
+  @bot delete task 7
 """
 
 from __future__ import annotations
@@ -136,7 +131,7 @@ def _cmd_add_task(client, chat, args: str, actor_jid: str, store: TaskStore) -> 
     if not title:
         client.send_message(
             chat,
-            "⚠️ Usage: `!add-task <title> [| description text] [| due YYYY-MM-DD] [| priority low|medium|high]`",
+            "⚠️ Tell me what task to create (e.g. `@bot create a task Prepare report due August 1st`).",
         )
         return
     try:
@@ -156,7 +151,7 @@ def _cmd_complete_task(
     client, chat, args: str, actor_jid: str, store: TaskStore, is_admin: bool
 ) -> None:
     if not args.strip().isdigit():
-        client.send_message(chat, "⚠️ Usage: `!complete-task <id>`")
+        client.send_message(chat, "⚠️ Specify the task ID to complete (e.g. `@bot mark task 7 as done`).")
         return
     task_id = int(args.strip())
     try:
@@ -172,7 +167,7 @@ def _cmd_complete_task(
 def _cmd_update_task(client, chat, args: str, store: TaskStore) -> None:
     parts = split_command_fields(args, limit=1)
     if len(parts) != 2 or not parts[0].isdigit() or not parts[1]:
-        client.send_message(chat, "⚠️ Usage: `!update-task <id> | field value`")
+        client.send_message(chat, "⚠️ Specify the task ID and field to update (e.g. `@bot update task 7 priority high`).")
         return
     task_id = int(parts[0])
     parsed = _parse_args(parts[1], include_title=False)
@@ -193,7 +188,7 @@ def _cmd_update_task(client, chat, args: str, store: TaskStore) -> None:
 
 def _cmd_delete_task(client, chat, args: str, store: TaskStore) -> None:
     if not args.strip().isdigit():
-        client.send_message(chat, "⚠️ Usage: `!delete-task <id>`")
+        client.send_message(chat, "⚠️ Specify the task ID to delete (e.g. `@bot delete task 7`).")
         return
     try:
         store.delete(int(args.strip()))
@@ -229,7 +224,7 @@ def _cmd_list_tasks(
 
 def _cmd_task_info(client, chat, args: str, store: TaskStore) -> None:
     if not args.strip().isdigit():
-        client.send_message(chat, "⚠️ Usage: `!task <id>`")
+        client.send_message(chat, "⚠️ Specify the task ID (e.g. `@bot show task 7 details`).")
         return
     task = store.get(int(args.strip()))
     if not task:

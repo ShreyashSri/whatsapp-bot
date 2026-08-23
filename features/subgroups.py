@@ -7,12 +7,13 @@ notification (ghost mention) — their names do not appear in the message.
 
 Subgroups are global (not per-group) and persisted in PostgreSQL.
 
-Commands:
-  !add-subgroup <name> | @user1 @user2 …
-  !remove-from-subgroup <name> | @user1 @user2 …
-  !delete-subgroup <name>
-  !list-subgroups
-  !subgroup-info <name>
+Natural language usage:
+  @bot create a subgroup called blog-team with @user1 and @user2
+  @bot add @user3 to the blog-team subgroup
+  @bot remove @user2 from blog-team
+  @bot delete the blog-team subgroup
+  @bot list all subgroups
+  @bot who is in the blog-team subgroup?
 """
 
 from __future__ import annotations
@@ -312,7 +313,7 @@ def _cmd_add_subgroup(
     raw_name = parts[0].strip().lstrip("@")
 
     if not raw_name:
-        _reply(client, chat_jid, "⚠️ Usage: `!add-subgroup <name> | @user1 @user2 …` or `!add-subgroup <name> | @everyone`")
+        _reply(client, chat_jid, "⚠️ Tell me which subgroup and users to add (e.g. `@bot create a subgroup called blog-team with @user1`).")
         return
 
     name = raw_name.lower()
@@ -361,7 +362,7 @@ def _cmd_remove_from_subgroup(
     name = raw_name.lower()
 
     if not name:
-        _reply(client, chat_jid, "⚠️ Usage: `!remove-from-subgroup <name> | @user1 @user2 …`")
+        _reply(client, chat_jid, "⚠️ Tell me which subgroup and users to remove (e.g. `@bot remove @user1 from blog-team`).")
         return
 
     after_pipe = parts[1].strip() if len(parts) > 1 else ""
@@ -395,7 +396,7 @@ def _cmd_delete_subgroup(client, chat_jid, name_raw: str, store: SubgroupStore) 
     name = name_raw.strip().lstrip("@").lower()
 
     if not name:
-        _reply(client, chat_jid, "⚠️ Usage: `!delete-subgroup <name>`")
+        _reply(client, chat_jid, "⚠️ Tell me which subgroup to delete (e.g. `@bot delete the blog-team subgroup`).")
         return
 
     subgroups = _read_subgroups(store)
@@ -430,7 +431,7 @@ def _cmd_subgroup_info(client, chat_jid, name_raw: str, store: SubgroupStore) ->
     name = name_raw.strip().lstrip("@").lower()
 
     if not name:
-        _reply(client, chat_jid, "⚠️ Usage: `!subgroup-info <name>`")
+        _reply(client, chat_jid, "⚠️ Tell me which subgroup to check (e.g. `@bot who is in the blog-team subgroup?`).")
         return
 
     subgroups = _read_subgroups(store)
@@ -520,7 +521,7 @@ def register(client: "NewClient", config: dict) -> callable:
             if not gate(session_factory, sender, client, chat, "admin", "subgroup.add"): return
             args = body[len("!add-subgroup"):].strip()
             if not args:
-                _reply(client, chat, "⚠️ Usage: `!add-subgroup <name> | @user1 @user2 …`")
+                _reply(client, chat, "⚠️ Tell me which subgroup and users to add (e.g. `@bot create a subgroup called blog-team with @user1`).")
             else:
                 _cmd_add_subgroup(client, chat, args, _get_mentioned_jids(message), store)
             return
@@ -529,7 +530,7 @@ def register(client: "NewClient", config: dict) -> callable:
             if not gate(session_factory, sender, client, chat, "admin", "subgroup.remove"): return
             args = body[len("!remove-from-subgroup"):].strip()
             if not args:
-                _reply(client, chat, "⚠️ Usage: `!remove-from-subgroup <name> | @user1 @user2 …`")
+                _reply(client, chat, "⚠️ Tell me which subgroup and users to remove (e.g. `@bot remove @user1 from blog-team`).")
             else:
                 _cmd_remove_from_subgroup(client, chat, args, _get_mentioned_jids(message), store)
             return
@@ -538,7 +539,7 @@ def register(client: "NewClient", config: dict) -> callable:
             if not gate(session_factory, sender, client, chat, "admin", "subgroup.delete"): return
             args = body[len("!delete-subgroup"):].strip()
             if not args:
-                _reply(client, chat, "⚠️ Usage: `!delete-subgroup <name>`")
+                _reply(client, chat, "⚠️ Tell me which subgroup to delete (e.g. `@bot delete the blog-team subgroup`).")
             else:
                 _cmd_delete_subgroup(client, chat, args, store)
             return
@@ -552,7 +553,7 @@ def register(client: "NewClient", config: dict) -> callable:
             if not gate(session_factory, sender, client, chat, "member", "subgroup.info"): return
             args = body[len("!subgroup-info"):].strip()
             if not args:
-                _reply(client, chat, "⚠️ Usage: `!subgroup-info <name>`")
+                _reply(client, chat, "⚠️ Tell me which subgroup to check (e.g. `@bot who is in the blog-team subgroup?`).")
             else:
                 _cmd_subgroup_info(client, chat, args, store)
             return

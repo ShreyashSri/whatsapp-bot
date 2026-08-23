@@ -45,13 +45,13 @@ def register(client, config):
                 tokens = [t.strip().lower() for t in args.replace("|", " ").split()]
                 role = next((t for t in tokens if t in ("admin", "member")), "") or "member"
                 if not mentions:
-                    reply(chat, "⚠️ Usage: `!add-user [admin|member] @person`"); return
+                    reply(chat, "⚠️ Mention a user and role (e.g. `@bot make @user1 an admin`)."); return
                 for jid in mentions:
                     upsert_user(factory, jid, role, actor=actor)
                 reply(chat, f"✅ add-user ({role}) completed for {len(mentions)} user(s).")
             elif cmd == "!remove-user":
                 if not mentions:
-                    reply(chat, "⚠️ Usage: `!remove-user @person`"); return
+                    reply(chat, "⚠️ Mention a user to remove (e.g. `@bot remove @user1 from the bot`)."); return
                 results = []
                 for jid in mentions:
                     _, action = remove_or_demote_user(factory, jid, actor=actor)
