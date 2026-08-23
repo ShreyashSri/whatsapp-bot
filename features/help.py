@@ -92,7 +92,7 @@ MODULE_HELP = {
         "• `!users`\n"
         "• `!admins` (aliases: `!admin-list`, `!admins-list`)"
     ),
-    "events": (
+    "work": (
         "*📋 Unified Work — Events, Tasks, Assignments, Progress*\n\n"
         "*Everyone*\n"
         "`!my` — show your assigned events and tasks. Example: `!my`\n"
@@ -103,7 +103,8 @@ MODULE_HELP = {
         "`!work history event <id>` — show progress revisions. Example: `!work history event 4`\n"
         "`!work edit <revision_id> <new value>` — append a correction. Example: `!work edit 18 prs 4`\n"
         "`!work start event <id>` — mark your assignment in progress. Example: `!work start event 4`\n"
-        "`!work complete task <id>` — mark your task completed. Example: `!work complete task 7`\n\n"
+        "`!work complete task <id>` — mark your task completed. Example: `!work complete task 7`\n"
+        "`!work reminders remind event|task <id>` — manually trigger a reminder for a target.\n\n"
         "`!work reminders` — show reminder status. Example: `!work reminders`\n"
         "`!work reminders history [assignment_id]` — show reminder history. Example: `!work reminders history 22`\n\n"
         "*Admin only*\n"
@@ -128,48 +129,14 @@ MODULE_HELP = {
         "• `!work unassign task 7 | @Bibisha`\n"
         "• `!work set-status event 4 @Ananya in_progress`\n"
         "• `!work reminders config frequency 12 | window 09:00-18:00 | threshold 3 | channel @admin`\n"
-        "• `!work reminders run`\n\n"
+        "• `!work reminders run`\n"
+        "• `!work reminders remind event 4`\n\n"
         "Participation categories: `gsoc`, `lfx`, `hacktoberfest`, `research`, `other`.\n"
         "Organization categories: `recruitment`, `hackathon`, `workshop`, `bootcamp`, `other`.\n"
         "Progress statuses: `pending`, `in_progress`, `completed`, `cancelled`.\n"
         "Task filters also accept `todo`/`to-do`/`pending`, `in_progress`/`in-progress`, `done`/`completed`, and `cancelled`.\n"
         "When multiple users are assigned, an admin must mention the target user.\n"
         "Use spaces in references (`event 4`, `task 7`); old colon forms remain accepted for compatibility."
-    ),
-    "tasks": (
-        "*✅ Tasks*\n\n"
-        "*Admin commands:*\n"
-        "`!add-task <title> [| description text] [| due YYYY-MM-DD] [| priority low|medium|high]` — create a task (admin).\n"
-        "`!update-task <id> | field value` — edit `title`, `description`, `due`, `priority`, or lifecycle `status` (admin).\n"
-        "`!delete-task <id>` — delete a task (admin).\n\n"
-        "*Member commands:*\n"
-        "`!tasks` — compatibility alias showing task assignments.\n"
-        "`!task <id>` — show one assigned task.\n"
-        "`!complete-task <id>` — mark your assigned task completed.\n\n"
-        "Examples:\n"
-        "• `!add-task Prepare report | due 2026-08-01 | priority high`\n"
-        "• `!update-task 7 | priority high`\n"
-        "• `!delete-task 7`\n"
-        "• `!tasks`\n"
-        "• `!task 7`\n"
-        "• `!complete-task 7`"
-    ),
-    "updates": (
-        "*📝 Assignment Updates*\n\n"
-        "`!update <target> <field> <value>` — append a progress revision.\n"
-        "`!update-edit <revision_id> <new value>` — append an edited revision.\n"
-        "`!history <target>` — show the complete append-only history.\n"
-        "`!status <target>` — show current progress and reminder status.\n"
-        "`!set-status <target> <status>` — set progress status (admin).\n"
-        "Targets: numeric assignment ID, `event <id>@<jid>`, or `task <id>@<jid>`.\n"
-        "Statuses: `pending`, `in_progress`, `completed`, `cancelled`.\n"
-        "Example: `!update task 7@919999999999@s.whatsapp.net note Waiting for review`\n"
-        "Examples:\n"
-        "• `!update task 7 note Waiting for review`\n"
-        "• `!update-edit 18 Waiting for approval`\n"
-        "• `!history task 7`\n"
-        "• `!status event 4`\n"
-        "• `!set-status event 4 in_progress`"
     ),
     "incidents": (
         "*🚨 Incident Alerts*\n\n"
@@ -182,10 +149,12 @@ MODULE_HELP = {
         "Members see only their own eligible assignments and history; admins see the overall system.\n\n"
         "Frequency and threshold must be positive numbers; times use 24-hour UTC.\n\n"
         "Examples:\n"
-        "• `!work reminders`\n"
-        "• `!work reminders history 22`\n"
+        "• `!work reminders` — show reminder status and config\n"
+        "• `!work reminders history 22` — show history for assignment 22\n"
+        "• `!work reminders remind event 4` — send an immediate reminder for event 4\n"
+        "• `!work reminders remind task 7` — send an immediate reminder for task 7\n"
         "• `!work reminders config frequency 12 | window 09:00-18:00 | threshold 3 | channel @admin`\n"
-        "• `!work reminders run`\n"
+        "• `!work reminders run` — trigger an idempotent reminder run\n"
         "Compatibility aliases: `!reminders`, `!reminder-config`, `!reminder-run`, `!reminder-history`."
     ),
     "labels": (
@@ -196,7 +165,7 @@ MODULE_HELP = {
         "Examples:\n"
         "• `!labels`\n"
         "• `!labels add lfx-applicants`\n"
-        "• `!labels of @Ananya`\n"
+        "• `!labels of @Ananya` — show labels assigned to user.\n"
         "• `!labels create backend | @Ananya @Bibisha` _(admin)_\n"
         "• `!labels remove lfx-applicants`\n"
         "• `!labels delete backend` _(admin)_\n"
@@ -221,31 +190,66 @@ MODULE_HELP = {
         "Admin only. `!reports progress` shows every assignee's current field values as a table; "
         "long lists collapse to a count, and `!work history` has the full values.\n\n"
         "Examples:\n"
-        "• `!reports`\n"
-        "• `!reports progress event 4`\n"
-        "• `!reports pending`\n"
-        "• `!reports completed`\n"
-        "• `!audit`\n"
+        "• `!reports` — summary of all work (events, tasks, assignment counts)\n"
+        "• `!reports progress event 4` — per-member progress table for event 4\n"
+        "• `!reports pending` / `!reports in_progress` / `!reports completed` / `!reports cancelled`\n"
+        "• `!audit` — full audit log\n"
         "• `!audit update` _(filter by operation)_"
+    ),
+    "nl": (
+        "*🧠 Natural Language / AI Commands*\n\n"
+        "Tag the bot to describe any command in plain English instead of typing it directly.\n"
+        "The request is translated into one (or more) normal commands and runs through the "
+        "same permissions, validation, and audit path as a typed command.\n\n"
+        "*How to trigger:*\n"
+        "• @mention the bot in a group message — the standard WhatsApp @name mention.\n"
+        "• Type `@me` anywhere in a group message as a lightweight text alias.\n"
+        "• Reply to a reminder the bot sent — no mention needed; the reply is automatically treated as addressed to the bot.\n\n"
+        "*What it can do:*\n"
+        "Every command the bot supports can be triggered via NL, including:\n"
+        "• Work — create/assign/update events and tasks, set status, record progress\n"
+        "• Labels — create labels, add/remove members, assign labels to work\n"
+        "• Subgroups — create, manage, or tag custom subgroups\n"
+        "• Admin — add/remove users or change roles\n"
+        "• Cards — generate achievement or event cards by describing them naturally\n"
+        "• Media — add posts, mark stages, list pending\n"
+        "• Reports — query progress, status lists, or audit log\n"
+        "• Reminders — configure, trigger, or check reminder status\n\n"
+        "*Multi-step workflows:* a single sentence can trigger several actions in sequence\n"
+        "(e.g. \"create a GSoC event and assign @Ananya and @Bibisha\"); each step is independent\n"
+        "and the whole plan rolls back if any step fails.\n\n"
+        "*Limitations:*\n"
+        "• The bot never invents IDs, phone numbers, or permissions — it uses only what's in your message.\n"
+        "• A message that starts with `!` after the trigger is treated as a direct command, not NL.\n"
+        "• NL requires `GEMINI_API_KEY` or `MISTRAL_API_KEY` to be configured.\n\n"
+        "Examples:\n"
+        "• `@bot show my pending work`\n"
+        "• `@bot assign the GSoC event to @Ananya`\n"
+        "• `@bot create a label lfx-applicants and add @Bibisha`\n"
+        "• `@bot generate a GSoC card for Zodiak` (attach photo)\n"
+        "• `@bot mark event 4 as completed for @Ananya`\n"
+        "• `@me add Publish the blog post` — using the @me text alias"
     ),
 }
 
-# Work is the single documented workflow for event/task assignment and progress.
-# Keep the older module names as compatibility aliases, but avoid presenting
-# three competing command families in the top-level help.
-MODULE_HELP["work"] = MODULE_HELP["events"]
+# Work is the single unified workflow for events, tasks, assignments and progress.
+# Keep the older module names as aliases so `!help events`, `!help tasks`, and
+# `!help updates` all show the same up-to-date content.
+MODULE_HELP["events"] = MODULE_HELP["work"]
 MODULE_HELP["tasks"] = MODULE_HELP["work"]
 MODULE_HELP["updates"] = MODULE_HELP["work"]
+MODULE_HELP["ai"] = MODULE_HELP["nl"]
 
 GLOBAL_HELP = (
     "*🤖 Bot Help*\n\n"
     "Use `!help <module>` for syntax, permissions, and examples.\n\n"
-    "You can also tag the bot and describe an existing command naturally, "
-    "for example: `@bot show my pending work`. The request is translated "
-    "into a normal command and still uses the usual permissions.\n\n"
-    "Examples: `!help`, `!help work`, `!help reminders`, `!help posted`.\n\n"
+    "You can also tag the bot and describe any command in plain English — "
+    "the request is translated into a normal command with the same permissions.\n\n"
+    "*🧠 Natural language (AI):* @mention the bot, type `@me`, or reply to a bot reminder "
+    "to trigger NL mode. Multi-step requests are supported. Use `!help nl` for full details.\n\n"
+    "Examples: `!help`, `!help work`, `!help nl`, `!help reminders`, `!help posted`.\n\n"
     "Available modules:\n"
-    "• `!help media` — Task manager\n"
+    "• `!help media` — Post task manager\n"
     "• `!help cards` — Card generation\n"
     "• `!help community` — Community group tags\n"
     "• `!help subgroups` — Custom subgroup tags\n"
@@ -255,7 +259,8 @@ GLOBAL_HELP = (
     "• `!help schema` — Event field definitions and validation\n"
     "• `!help reports` — Progress tables and audit log\n"
     "• `!help reminders` — Scheduled reminders\n"
-    "• `!help incidents` — Incident alerts\n\n"
+    "• `!help incidents` — Incident alerts\n"
+    "• `!help nl` — Natural language / AI commands\n\n"
     "Type `!help <module>` for detailed commands."
 )
 
@@ -294,15 +299,15 @@ def register(client: "NewClient", config: dict) -> callable:
                     "subgroup-info": "subgroups", "events": "work", "tasks": "work", "task": "work",
                     "assign": "work", "unassign": "work", "undo": "work", "work": "work", "my": "work",
                     "update": "work", "edit": "work", "history": "work", "status": "work", "set-status": "work",
-                    "start": "work", "complete": "work", "create": "work",
+                    "start": "work", "complete": "work", "create": "work", "reminders": "reminders",
                     "create-event": "work", "update-event": "work", "delete-event": "work",
                     "add-user": "admin", "remove-user": "admin", "users": "admin",
                     "admins": "admin", "admin-list": "admin", "admins-list": "admin",
                     "add-task": "work", "complete-task": "work", "update-task": "work", "delete-task": "work",
                     "update-edit": "work", "schema": "schema", "labels": "labels", "label": "labels",
                     "report": "reports", "reports": "reports", "audit": "reports",
-                    "reminders": "reminders", "reminder-config": "reminders",
-                    "reminder-run": "reminders", "reminder-history": "reminders"
+                    "reminder-config": "reminders", "reminder-run": "reminders", "reminder-history": "reminders",
+                    "nl": "nl", "ai": "nl", "natural-language": "nl", "natural_language": "nl",
                 }
                 
                 module = cmd_to_module.get(args)

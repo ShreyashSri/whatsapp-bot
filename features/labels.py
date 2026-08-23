@@ -194,7 +194,7 @@ def register(client: "NewClient", config: dict) -> callable:
                                     + ("" if not deleted else " Label deleted (now empty)."))
                 return
 
-            client.send_message(chat, "Usage: `!labels [list|create|assign|remove|delete] <name> | @user`")
+            client.send_message(chat, "Usage: `!labels [add|of @user|create <name> | @user|remove <name>|delete <name>]`")
         except Exception as exc:
             log.info("label command failed: %s", exc)
             client.send_message(chat, f"⚠️ {public_error(exc, 'I could not update that label.')}")

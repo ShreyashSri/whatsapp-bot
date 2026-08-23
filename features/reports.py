@@ -165,7 +165,7 @@ def register(client: "NewClient", config: dict) -> callable:
             elif not action or action in ("generate", "summary"):
                 _cmd_summary(client, chat, store)
             else:
-                client.send_message(chat, "Usage: `!reports [progress event <id>|pending|completed]`")
+                client.send_message(chat, "Usage: `!reports [progress event <id>|pending|in_progress|completed|cancelled]`")
         except Exception as exc:
             log.info("report command failed: %s", exc)
             client.send_message(chat, "⚠️ I couldn't load that report.")

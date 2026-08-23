@@ -1235,7 +1235,7 @@ def handle(client, message, session_factory, *, reminder_group_jid: str | None =
                 return True
             parts = split_command_fields(args, limit=1)
             if len(parts) != 2 or not parts[0].isdigit() or not parts[1]:
-                _send(client, chat, "Usage: `!set-status <event_id> | <draft|active|completed|cancelled>`")
+                _send(client, chat, "Usage: `!set-status <event_id> | <pending|in_progress|completed|cancelled>`")
                 return True
             try:
                 EventStore(session_factory).set_status(int(parts[0]), parts[1].lower())

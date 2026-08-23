@@ -99,7 +99,7 @@ def _cmd_config(client: "NewClient", chat, args: str, actor, mentions: list[str]
     if not parsed:
         client.send_message(
             chat,
-            "⚠️ Usage: `!reminder-config [frequency 24] [| window 09:00-18:00] [| threshold 3] [| channel @admin]`",
+            "⚠️ Usage: `!work reminders config [frequency 24] [| window 09:00-18:00] [| threshold 3] [| channel @admin]`",
         )
         return
 
@@ -170,7 +170,7 @@ def _cmd_remind(
 def _cmd_history(client: "NewClient", chat, args: str, store: ReminderStore, *, actor=None) -> None:
     raw_assignment_id = args.strip()
     if raw_assignment_id and not raw_assignment_id.isdigit():
-        client.send_message(chat, "⚠️ Usage: `!reminder-history [assignment_id]`")
+        client.send_message(chat, "⚠️ Usage: `!work reminders history [assignment_id]`")
         return
     assignment_id = int(raw_assignment_id) if raw_assignment_id else None
     # Members can inspect only their own reminder history. Admins can inspect
