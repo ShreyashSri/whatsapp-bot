@@ -30,6 +30,7 @@ from features.natural_language import (
     _inherit_plan_context,
     _target_arguments,
     _typed_target_parts,
+    _intent_argument_error,
     _intent_compile_error,
     _intent_completeness_issue,
     _plan_completeness_issue,
@@ -829,11 +830,19 @@ def test_validate_intent_accepts_admin_add_user_with_an_audience_object():
     assert intent is not None
     assert intent["capability"] == "admin.add_user"
     assert intent["arguments"]["role"] == "admin"
+    # validate_intent passing isn't the whole story -- _intent_argument_error
+    # is a second, independent gate that also has to accept this. It used to
+    # reject the same payload for a different reason ("requires argument
+    # mention_indices", since that was declared required despite never being
+    # read), a follow-on prod failure caught after the first fix shipped.
+    assert _intent_argument_error(intent, [], "@me make @Bibisha admin") is None
 
-    assert validate_intent({
+    remove_intent = validate_intent({
         "capability": "admin.remove_user",
         "arguments": {"audience": {"resolver": "explicit_mentions", "mention_indices": [1]}},
-    }) is not None
+    })
+    assert remove_intent is not None
+    assert _intent_argument_error(remove_intent, [], "@me remove @Bibisha") is None
 
 
 def test_media_handler_uses_plan_transaction_session_factory():

@@ -228,9 +228,15 @@ def test_mutating_legacy_capabilities_have_exact_required_arguments():
     assert validate_tool_arguments("labels.delete", {}) == (
         "labels.delete requires argument collection"
     )
-    assert validate_tool_arguments("admin.remove_user", {}) == (
-        "admin.remove_user requires argument mention_indices"
-    )
+    # admin.add_user/remove_user deliberately have no required arguments --
+    # compile_intent never reads arguments.mention_indices (or .audience)
+    # for either; the target person comes entirely from the WhatsApp native
+    # mention metadata preserved on the re-synthesized !add-user/!remove-user
+    # command message. Requiring a field the compiler never consumes just
+    # rejected legitimate requests (the model attaches an audience object
+    # here the same way it does for most other targeted capabilities).
+    assert validate_tool_arguments("admin.remove_user", {}) is None
+    assert validate_tool_arguments("admin.add_user", {}) is None
 
 
 def test_neonize_adapters_are_registered_as_narrow_tools():

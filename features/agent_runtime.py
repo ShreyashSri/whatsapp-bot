@@ -228,8 +228,8 @@ TOOL_SPECS.update({
 
 _TOOL_ARGUMENTS = {
     "help.show": ("module?",),
-    "admin.add_user": ("role?", "mention_indices[]"),
-    "admin.remove_user": ("mention_indices[]",),
+    "admin.add_user": ("role?", "mention_indices[]?"),
+    "admin.remove_user": ("mention_indices[]?",),
     "labels.of": ("mention?",),
     "labels.add": ("collection", "audience?"),
     "labels.remove": ("collection", "audience?"),
@@ -328,8 +328,14 @@ for _capability in tuple(_TOOL_ARGUMENTS):
         _TOOL_ARGUMENTS[_capability] = (*_TOOL_ARGUMENTS[_capability], "target_chat?")
 
 _TOOL_REQUIRED = {
-    "admin.add_user": ("mention_indices",),
-    "admin.remove_user": ("mention_indices",),
+    # mention_indices was declared required here, but compile_intent never
+    # reads arguments.mention_indices (or arguments.audience) for either of
+    # these -- the target person comes entirely from the WhatsApp native
+    # mention metadata preserved on the re-synthesized !add-user/!remove-user
+    # command message. Requiring a field the compiler never consumes only
+    # meant the model's own audience-object attempt (see validate_intent's
+    # allowed_target_capabilities) got rejected a second time, right here,
+    # for lacking a flat mention_indices the request never needed.
     "labels.add": ("collection",),
     "labels.remove": ("collection",),
     "labels.delete": ("collection",),
