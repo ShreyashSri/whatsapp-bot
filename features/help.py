@@ -190,45 +190,11 @@ MODULE_HELP = {
         "Admin only. `!reports progress` shows every assignee's current field values as a table; "
         "long lists collapse to a count, and `!work history` has the full values.\n\n"
         "Examples:\n"
-        "• `!reports` — summary of all work (events, tasks, assignment counts)\n"
-        "• `!reports progress event 4` — per-member progress table for event 4\n"
+        "• `!reports`\n"
+        "• `!reports progress event 4`\n"
         "• `!reports pending` / `!reports in_progress` / `!reports completed` / `!reports cancelled`\n"
         "• `!audit` — full audit log\n"
         "• `!audit update` _(filter by operation)_"
-    ),
-    "nl": (
-        "*🧠 Natural Language / AI Commands*\n\n"
-        "Tag the bot to describe any command in plain English instead of typing it directly.\n"
-        "The request is translated into one (or more) normal commands and runs through the "
-        "same permissions, validation, and audit path as a typed command.\n\n"
-        "*How to trigger:*\n"
-        "• @mention the bot in a group message — the standard WhatsApp @name mention.\n"
-        "• Type `@me` anywhere in a group message as a lightweight text alias.\n"
-        "• Reply to a reminder the bot sent — no mention needed; the reply is automatically treated as addressed to the bot.\n\n"
-        "*What it can do:*\n"
-        "Every command the bot supports can be triggered via NL, including:\n"
-        "• Work — create/assign/update events and tasks, set status, record progress\n"
-        "• Labels — create labels, add/remove members, assign labels to work\n"
-        "• Subgroups — create, manage, or tag custom subgroups\n"
-        "• Admin — add/remove users or change roles\n"
-        "• Cards — generate achievement or event cards by describing them naturally\n"
-        "• Media — add posts, mark stages, list pending\n"
-        "• Reports — query progress, status lists, or audit log\n"
-        "• Reminders — configure, trigger, or check reminder status\n\n"
-        "*Multi-step workflows:* a single sentence can trigger several actions in sequence\n"
-        "(e.g. \"create a GSoC event and assign @Ananya and @Bibisha\"); each step is independent\n"
-        "and the whole plan rolls back if any step fails.\n\n"
-        "*Limitations:*\n"
-        "• The bot never invents IDs, phone numbers, or permissions — it uses only what's in your message.\n"
-        "• A message that starts with `!` after the trigger is treated as a direct command, not NL.\n"
-        "• NL requires `GEMINI_API_KEY` or `MISTRAL_API_KEY` to be configured.\n\n"
-        "Examples:\n"
-        "• `@bot show my pending work`\n"
-        "• `@bot assign the GSoC event to @Ananya`\n"
-        "• `@bot create a label lfx-applicants and add @Bibisha`\n"
-        "• `@bot generate a GSoC card for Zodiak` (attach photo)\n"
-        "• `@bot mark event 4 as completed for @Ananya`\n"
-        "• `@me add Publish the blog post` — using the @me text alias"
     ),
 }
 
@@ -238,16 +204,14 @@ MODULE_HELP = {
 MODULE_HELP["events"] = MODULE_HELP["work"]
 MODULE_HELP["tasks"] = MODULE_HELP["work"]
 MODULE_HELP["updates"] = MODULE_HELP["work"]
-MODULE_HELP["ai"] = MODULE_HELP["nl"]
 
 GLOBAL_HELP = (
     "*🤖 Bot Help*\n\n"
     "Use `!help <module>` for syntax, permissions, and examples.\n\n"
-    "You can also tag the bot and describe any command in plain English — "
-    "the request is translated into a normal command with the same permissions.\n\n"
-    "*🧠 Natural language (AI):* @mention the bot, type `@me`, or reply to a bot reminder "
-    "to trigger NL mode. Multi-step requests are supported. Use `!help nl` for full details.\n\n"
-    "Examples: `!help`, `!help work`, `!help nl`, `!help reminders`, `!help posted`.\n\n"
+    "You can also tag the bot and describe an existing command naturally, "
+    "for example: `@bot show my pending work`. The request is translated "
+    "into a normal command and still uses the usual permissions.\n\n"
+    "Examples: `!help`, `!help work`, `!help reminders`, `!help posted`.\n\n"
     "Available modules:\n"
     "• `!help media` — Post task manager\n"
     "• `!help cards` — Card generation\n"
@@ -259,8 +223,7 @@ GLOBAL_HELP = (
     "• `!help schema` — Event field definitions and validation\n"
     "• `!help reports` — Progress tables and audit log\n"
     "• `!help reminders` — Scheduled reminders\n"
-    "• `!help incidents` — Incident alerts\n"
-    "• `!help nl` — Natural language / AI commands\n\n"
+    "• `!help incidents` — Incident alerts\n\n"
     "Type `!help <module>` for detailed commands."
 )
 
@@ -306,8 +269,7 @@ def register(client: "NewClient", config: dict) -> callable:
                     "add-task": "work", "complete-task": "work", "update-task": "work", "delete-task": "work",
                     "update-edit": "work", "schema": "schema", "labels": "labels", "label": "labels",
                     "report": "reports", "reports": "reports", "audit": "reports",
-                    "reminder-config": "reminders", "reminder-run": "reminders", "reminder-history": "reminders",
-                    "nl": "nl", "ai": "nl", "natural-language": "nl", "natural_language": "nl",
+                    "reminder-config": "reminders", "reminder-run": "reminders", "reminder-history": "reminders"
                 }
                 
                 module = cmd_to_module.get(args)
