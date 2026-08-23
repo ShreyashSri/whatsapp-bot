@@ -2120,6 +2120,15 @@ def validate_intent(intent: object) -> dict | None:
         "whatsapp.profile_pictures",
         "whatsapp.create_group", "whatsapp.block_contacts", "whatsapp.unblock_contacts",
         "whatsapp.contact_devices",
+        # compile_intent never reads arguments.audience/mention_indices for
+        # these two -- the target person comes entirely from the WhatsApp
+        # native mention metadata preserved on the re-synthesized !add-user/
+        # !remove-user command message, not from anything the model puts in
+        # arguments. The model still routinely emits an audience object here
+        # (it's the pattern used for most other targeted capabilities), and
+        # rejecting the whole intent over an unused field meant "make @X
+        # admin" failed outright instead of just ignoring the dead field.
+        "admin.add_user", "admin.remove_user",
         # A task can be created already assigned to one or more people in
         # the same request ("create task X, assign it to @Alice") -- without
         # this, an audience the model correctly attached to a create_task

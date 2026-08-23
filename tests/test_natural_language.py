@@ -810,6 +810,32 @@ def test_post_gemini_backs_off_without_retry_after_and_eventually_raises():
     assert sleep.call_args_list == [((1.5,),), ((3.0,),)]
 
 
+def test_validate_intent_accepts_admin_add_user_with_an_audience_object():
+    """Reproduces a real prod failure: the model routinely attaches an
+    audience object to admin.add_user/remove_user (the pattern it uses for
+    most other targeted capabilities), but compile_intent never reads
+    arguments.audience/mention_indices for these two -- the target person
+    comes entirely from the WhatsApp native mention metadata preserved on
+    the re-synthesized !add-user/!remove-user message. Rejecting the whole
+    intent over that unused field made "make @X admin" fail outright with
+    a generic "couldn't resolve" reply instead of just ignoring it."""
+    intent = validate_intent({
+        "capability": "admin.add_user",
+        "arguments": {
+            "role": "admin",
+            "audience": {"resolver": "explicit_mentions", "mention_indices": [0]},
+        },
+    })
+    assert intent is not None
+    assert intent["capability"] == "admin.add_user"
+    assert intent["arguments"]["role"] == "admin"
+
+    assert validate_intent({
+        "capability": "admin.remove_user",
+        "arguments": {"audience": {"resolver": "explicit_mentions", "mention_indices": [1]}},
+    }) is not None
+
+
 def test_media_handler_uses_plan_transaction_session_factory():
     from features.media import register as register_media
 
