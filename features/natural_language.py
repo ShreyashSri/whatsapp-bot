@@ -2898,6 +2898,16 @@ class MistralCommandTranslator:
         # Compatibility during migration: accept an already compiled command,
         # but never guess a command when the model violates the contract.
         command = validate_command(result.get("command")) if isinstance(result, dict) else None
+        if command is None:
+            # intent/plan/command all failed validation -- this is the only
+            # point that sees the model's raw JSON before it's discarded, so
+            # log it here rather than let "no result" dead-end investigation
+            # the way it did for the "make @X admin" translator failures.
+            log.warning(
+                "Mistral/Gemini response matched no known shape (intent/plan/command all invalid) "
+                "for text=%r: %s",
+                text, json.dumps(result, ensure_ascii=False)[:800] if isinstance(result, dict) else repr(result)[:800],
+            )
         return command, ""
 
     def repair_missing_target(
