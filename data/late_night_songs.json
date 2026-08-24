@@ -1,0 +1,1468 @@
+{
+  "_status": "YouTube Music playlist (PLoiQR4DHZccTSYyv9KdQ3w_Chbyo-NSsj) still could not be scraped -- no live browser available in this environment (Chrome extension not connected; a Firefox-only alternative, claudezilla.com, was requested but there's no MCP tool connection to it in this session either), and the page is fully JS-rendered so WebFetch only sees a compatibility-error shell. All 3 Spotify playlists ARE represented here (07iOsFIwM1KEU8YP0tlKVx, 4TglDke9HyWCHMyqPXbRyU, 2BTPo1vqDtV160QeJ46mmC), de-duped by track URL. Re-run with a connected browser tool to add the YouTube tracks and fill in more lyric lines (only well-known lines were filled in confidently; the rest are null rather than guessed).",
+  "songs": [
+    {
+      "title": "Sunsetz",
+      "artist": "Cigarettes After Sex",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0yuAWlxq59xT3agQ965OxE",
+      "lyric": null
+    },
+    {
+      "title": "Somebody Else",
+      "artist": "The 1975",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4m0q0xQ2BNl9SCAGKyfiGZ",
+      "lyric": null
+    },
+    {
+      "title": "Line Without a Hook (feat. mxmtoon)",
+      "artist": "Ricky Montgomery, mxmtoon",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4dHdqpGaO9km4TEw9nNQSR",
+      "lyric": null
+    },
+    {
+      "title": "About You",
+      "artist": "The 1975",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1fDFHXcykq4iw8Gg7s5hG9",
+      "lyric": null
+    },
+    {
+      "title": "I Love You So",
+      "artist": "The Walters",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4SqWKzw0CbA05TGszDgMlc",
+      "lyric": null
+    },
+    {
+      "title": "Son of a Gun",
+      "artist": "Lord Huron",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0KzyweyZCAuqsn1It1t9np",
+      "lyric": null
+    },
+    {
+      "title": "Let You Break My Heart Again",
+      "artist": "Laufey, Philharmonia Orchestra",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/709p9UGPAuyImWf1Z3vjRo",
+      "lyric": null
+    },
+    {
+      "title": "Die For You",
+      "artist": "Joji",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/26hOm7dTtBi0TdpDGl141t",
+      "lyric": null
+    },
+    {
+      "title": "Where's My Love",
+      "artist": "SYML",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0IRmoVD5Zbndp79ShxphRb",
+      "lyric": null
+    },
+    {
+      "title": "SLOW DANCING IN THE DARK",
+      "artist": "Joji",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6rY5FAWxCdAGllYEOZMbjW",
+      "lyric": null
+    },
+    {
+      "title": "Regression",
+      "artist": "HOYO-MiX, Ayanga, 宫奇 Gon",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5AOUeVHPu24QMggutzhWYA",
+      "lyric": null
+    },
+    {
+      "title": "All Out of Love",
+      "artist": "Air Supply",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2lmcH6prYo3BlR8LfRUJc3",
+      "lyric": "I'm lying alone with my head on the phone"
+    },
+    {
+      "title": "Sailor Song",
+      "artist": "Gigi Perez",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2262bWmqomIaJXwCRHr13j",
+      "lyric": null
+    },
+    {
+      "title": "Cry",
+      "artist": "Cigarettes After Sex",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7mDTvYD2ieE4Q28XFziMfJ",
+      "lyric": null
+    },
+    {
+      "title": "My Love Mine All Mine",
+      "artist": "Mitski",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3vkCueOmm7xQDoJ17W1Pm3",
+      "lyric": null
+    },
+    {
+      "title": "I Wanna Be Yours",
+      "artist": "Arctic Monkeys",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5XeFesFbtLpXzIVDNQP22n",
+      "lyric": "I wanna be your vacuum cleaner, breathing in your dust"
+    },
+    {
+      "title": "double take",
+      "artist": "Dhruv",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0QzuaeCEEOV40Pn7IvKEny",
+      "lyric": null
+    },
+    {
+      "title": "Here With Me",
+      "artist": "d4vd",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/78Sw5GDo6AlGwTwanjXbGh",
+      "lyric": null
+    },
+    {
+      "title": "K.",
+      "artist": "Cigarettes After Sex",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1FWsomP9StpCcXNWmJk8Cl",
+      "lyric": null
+    },
+    {
+      "title": "Sparks",
+      "artist": "Coldplay",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7D0RhFcb3CrfPuTJ0obrod",
+      "lyric": null
+    },
+    {
+      "title": "Co2",
+      "artist": "Prateek Kuhad",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3hB9lDLyAClYVZivMMl20N",
+      "lyric": null
+    },
+    {
+      "title": "505",
+      "artist": "Arctic Monkeys",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0BxE4FqsDD1Ot4YuBXwAPp",
+      "lyric": "I'm going back to 505"
+    },
+    {
+      "title": "Do I Wanna Know?",
+      "artist": "Arctic Monkeys",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5FVd6KXrgO9B3JPmC8OPst",
+      "lyric": "Have you got colour in your cheeks?"
+    },
+    {
+      "title": "The Less I Know The Better",
+      "artist": "Tame Impala",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6K4t31amVTZDgR3sKmwUJJ",
+      "lyric": null
+    },
+    {
+      "title": "Creep",
+      "artist": "Radiohead",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/70LcF31zb1H0PyJoS1Sx1r",
+      "lyric": "I'm a creep, I'm a weirdo"
+    },
+    {
+      "title": "No Surprises",
+      "artist": "Radiohead",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/10nyNJ6zNy2YVYLrcwLccB",
+      "lyric": "I'll take a quiet life, a handshake of carbon monoxide"
+    },
+    {
+      "title": "7 Years",
+      "artist": "Lukas Graham",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5kqIPrATaCc2LqxVWzQGbk",
+      "lyric": "Once I was seven years old, my momma told me"
+    },
+    {
+      "title": "Mockingbird",
+      "artist": "Eminem",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/561jH07mF1jHuk7KlaeF0s",
+      "lyric": null
+    },
+    {
+      "title": "The Night We Met",
+      "artist": "Lord Huron",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3hRV0jL3vUpRrcy398teAU",
+      "lyric": "I had all and then most of you, some and now none of you"
+    },
+    {
+      "title": "Chamber Of Reflection",
+      "artist": "Mac DeMarco",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7H7NyZ3G075GqPx2evsfeb",
+      "lyric": "All alone in chamber of reflection"
+    },
+    {
+      "title": "Let Her Go",
+      "artist": "Passenger",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2pUpNOgJBIBCcjyQZQ00qU",
+      "lyric": "You only need the light when it's burning low"
+    },
+    {
+      "title": "Story of My Life",
+      "artist": "One Direction",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4nVBt6MZDDP6tRVdQTgxJg",
+      "lyric": "Written in these walls are the stories that I can't explain"
+    },
+    {
+      "title": "Someone You Loved",
+      "artist": "Lewis Capaldi",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2TIlqbIneP0ZY1O0EzYLlc",
+      "lyric": "Now the day bleeds into nightfall"
+    },
+    {
+      "title": "Space Song",
+      "artist": "Beach House",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1ujxjsoNvh4XgS2fUNwkZ2",
+      "lyric": "Fall back into place"
+    },
+    {
+      "title": "Fix You",
+      "artist": "Coldplay",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7LVHVU3tWfcxj5aiPFEW4Q",
+      "lyric": "Lights will guide you home"
+    },
+    {
+      "title": "This Is How It Feels (with Laufey)",
+      "artist": "d4vd, Laufey",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6BQPRUFGHsgtNYJxuwhktR",
+      "lyric": null
+    },
+    {
+      "title": "this is what sadness feels like",
+      "artist": "JVKE",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5GpYt1p4z2EPVKv5t7XDof",
+      "lyric": null
+    },
+    {
+      "title": "Love In The Dark",
+      "artist": "Adele",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0DuWDLjriRPjDRoPgaCslY",
+      "lyric": null
+    },
+    {
+      "title": "Robbers",
+      "artist": "The 1975",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/73jVPicY2G9YHmzgjk69ae",
+      "lyric": null
+    },
+    {
+      "title": "Chocolate",
+      "artist": "The 1975",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4WiiRw2PHMNQE0ad6y6GdD",
+      "lyric": null
+    },
+    {
+      "title": "Fallingforyou",
+      "artist": "The 1975",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7LbUv7w2z7rEbNqp1uIL9U",
+      "lyric": null
+    },
+    {
+      "title": "It's Not Living (If It's Not With You)",
+      "artist": "The 1975",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3TgMcrV32NUKjEG2ujn9eh",
+      "lyric": null
+    },
+    {
+      "title": "Apocalypse",
+      "artist": "Cigarettes After Sex",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1oAwsWBovWRIp7qLMGPIet",
+      "lyric": null
+    },
+    {
+      "title": "we fell in love in october",
+      "artist": "girl in red",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6IPwKM3fUUzlElbvKw2sKl",
+      "lyric": null
+    },
+    {
+      "title": "Memories",
+      "artist": "Conan Gray",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5UXJzLFdBn6u9FJTCnoHrH",
+      "lyric": null
+    },
+    {
+      "title": "Heather",
+      "artist": "Conan Gray",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4xqrdfXkTW4T0RauPLv3WA",
+      "lyric": null
+    },
+    {
+      "title": "Scott Street",
+      "artist": "Phoebe Bridgers",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6Uwi2Qk3H7fM4b4W4ExrAp",
+      "lyric": null
+    },
+    {
+      "title": "Mr. Loverman",
+      "artist": "Ricky Montgomery",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2IVsRhKrx8hlQBOWy4qebo",
+      "lyric": null
+    },
+    {
+      "title": "Yellow",
+      "artist": "Coldplay",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3AJwUDP919kvQ9QcozQPxg",
+      "lyric": "Look at the stars, look how they shine for you"
+    },
+    {
+      "title": "Romantic Homicide",
+      "artist": "d4vd",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1xK59OXxi2TAAAbmZK0kBL",
+      "lyric": null
+    },
+    {
+      "title": "Mind Over Matter (Reprise)",
+      "artist": "Young the Giant",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/77KnJc8o5G1eKVwX5ywMeZ",
+      "lyric": null
+    },
+    {
+      "title": "Glimpse of Us",
+      "artist": "Joji",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2mlNgAeIBnL78ZriXgrRHz",
+      "lyric": null
+    },
+    {
+      "title": "End of Beginning",
+      "artist": "Djo",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3qhlB30KknSejmIvZZLjOD",
+      "lyric": null
+    },
+    {
+      "title": "Where'd All the Time Go?",
+      "artist": "Dr. Dog",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0UV5zxRMz6AO4ZwUOZNIKI",
+      "lyric": null
+    },
+    {
+      "title": "Say Yes To Heaven",
+      "artist": "Lana Del Rey",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6GGtHZgBycCgGBUhZo81xe",
+      "lyric": null
+    },
+    {
+      "title": "No. 1 Party Anthem",
+      "artist": "Arctic Monkeys",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5TTGoX70AFrTvuEtqHK37S",
+      "lyric": null
+    },
+    {
+      "title": "Cinnamon Girl",
+      "artist": "Lana Del Rey",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2mdEsXPu8ZmkHRRtAdC09e",
+      "lyric": null
+    },
+    {
+      "title": "Until I Found You",
+      "artist": "Stephen Sanchez",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6VhuP99TE6gYNQRJIlAWFD",
+      "lyric": null
+    },
+    {
+      "title": "Sex, Drugs, Etc.",
+      "artist": "Beach Weather",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7MlDNspYwfqnHxORufupwq",
+      "lyric": null
+    },
+    {
+      "title": "Chemtrails Over The Country Club",
+      "artist": "Lana Del Rey",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7bPWdJgx8vek7S5i5yAtvG",
+      "lyric": null
+    },
+    {
+      "title": "Line Without a Hook",
+      "artist": "Ricky Montgomery",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5NvOZCjZaGGGL597exlQWv",
+      "lyric": null
+    },
+    {
+      "title": "Why'd You Only Call Me When You're High?",
+      "artist": "Arctic Monkeys",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/086myS9r57YsLbJpU0TgK9",
+      "lyric": null
+    },
+    {
+      "title": "WILDFLOWER",
+      "artist": "Billie Eilish",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3QaPy1KgI7nu9FJEQUgn6h",
+      "lyric": null
+    },
+    {
+      "title": "Iris",
+      "artist": "The Goo Goo Dolls",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6Qyc6fS4DsZjB2mRW9DsQs",
+      "lyric": "And I don't want the world to see me"
+    },
+    {
+      "title": "Gone, Gone, Gone",
+      "artist": "Phillip Phillips",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/56sxN1yKg1dgOZXBcAHkJG",
+      "lyric": "I'm gonna love you, baby, always and forever"
+    },
+    {
+      "title": "No One Noticed",
+      "artist": "The Marías",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3siwsiaEoU4Kuuc9WKMUy5",
+      "lyric": null
+    },
+    {
+      "title": "Mrs Magic",
+      "artist": "Strawberry Guy",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0TZejo18HlJ86OrWNsXKnw",
+      "lyric": null
+    },
+    {
+      "title": "Strawberries & Cigarettes",
+      "artist": "Troye Sivan",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3afkJSKX0EAMsJXTZnDXXJ",
+      "lyric": null
+    },
+    {
+      "title": "This Side of Paradise",
+      "artist": "Coyote Theory",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/79EkGysjP2dL5GdpeQjRxT",
+      "lyric": null
+    },
+    {
+      "title": "her",
+      "artist": "JVKE",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6G9YlbU3ByPJQvOFDRdwyM",
+      "lyric": null
+    },
+    {
+      "title": "Die For You",
+      "artist": "Joji",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/00WLowvlN5cjkYpQV6pjo4",
+      "lyric": null
+    },
+    {
+      "title": "Gimme Love",
+      "artist": "Joji",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0eF8TYM3rYzdS26URcs4U6",
+      "lyric": null
+    },
+    {
+      "title": "BLAHBLAHBLAH DEMO",
+      "artist": "Joji",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7aqkklKJ0EB7IZwUEOkEHT",
+      "lyric": null
+    },
+    {
+      "title": "Ew",
+      "artist": "Joji",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6gExa9cxGhE0TFvhcZrVfe",
+      "lyric": null
+    },
+    {
+      "title": "Politik",
+      "artist": "Coldplay",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0u35Dpz37TY2M2j20RUdMf",
+      "lyric": null
+    },
+    {
+      "title": "Lovers Rock",
+      "artist": "TV Girl",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6dBUzqjtbnIa1TwYbyw5CM",
+      "lyric": null
+    },
+    {
+      "title": "All I Need",
+      "artist": "Radiohead",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5Qv2Nby1xTr9pQyjkrc94J",
+      "lyric": null
+    },
+    {
+      "title": "Feel It",
+      "artist": "d4vd",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0auX6W6oLjO9cHmx4UTaNj",
+      "lyric": null
+    },
+    {
+      "title": "BIRDS OF A FEATHER",
+      "artist": "Billie Eilish",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6dOtVTDdiauQNBQEDOtlAB",
+      "lyric": null
+    },
+    {
+      "title": "Lilith",
+      "artist": "Saint Avangeline",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4RF4iaYoM1XBbdvmC6zRtD",
+      "lyric": null
+    },
+    {
+      "title": "Atlantis",
+      "artist": "Seafret",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1Fid2jjqsHViMX6xNH70hE",
+      "lyric": null
+    },
+    {
+      "title": "Sweet",
+      "artist": "Cigarettes After Sex",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2KhrPRV0V1FS2l4eQMJUWt",
+      "lyric": null
+    },
+    {
+      "title": "Afterthought",
+      "artist": "Joji, BENEE",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4G9hlKVIwuWE8qpW2UQpV3",
+      "lyric": null
+    },
+    {
+      "title": "Breathe Deeper",
+      "artist": "Tame Impala",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3LbZIhU0smEU5SUnxod4j4",
+      "lyric": null
+    },
+    {
+      "title": "back to friends",
+      "artist": "sombr",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0FTmksd2dxiE5e3rWyJXs6",
+      "lyric": null
+    },
+    {
+      "title": "Brooklyn Baby",
+      "artist": "Lana Del Rey",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1NZs6n6hl8UuMaX0UC0YTz",
+      "lyric": null
+    },
+    {
+      "title": "Mind Over Matter",
+      "artist": "Young the Giant",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5Az8KU81g2aLBbJN67F2CI",
+      "lyric": null
+    },
+    {
+      "title": "Let Down",
+      "artist": "Radiohead",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2fuYa3Lx06QQJAm0MjztKr",
+      "lyric": "Transport, motorways and tramlines"
+    },
+    {
+      "title": "Two Doors Down",
+      "artist": "Harriet Dagnall",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2eYfiljc87UBHu6Fh6BC1a",
+      "lyric": null
+    },
+    {
+      "title": "Losing Interest",
+      "artist": "Stract, Shiloh Dynasty",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3RbNcjVnQixKa1sULcwd2K",
+      "lyric": null
+    },
+    {
+      "title": "Landslide",
+      "artist": "Oh Wonder",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3X3mfRMRaPJRiIMDMQtSkd",
+      "lyric": "Well, I've been afraid of changing"
+    },
+    {
+      "title": "A Different Age",
+      "artist": "Current Joys",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/51NRDcy5WEdfda6HC09QaD",
+      "lyric": null
+    },
+    {
+      "title": "Nobody New",
+      "artist": "The Marías",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3BUc2A0MJ53FHwiy3eohBt",
+      "lyric": null
+    },
+    {
+      "title": "Can't Help Falling In Love - Live",
+      "artist": "André Rieu, Johann Strauss Orchestra",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3y8cVvbx0Az2uUG6bYZo7t",
+      "lyric": null
+    },
+    {
+      "title": "Exit Music (For A Film)",
+      "artist": "Radiohead",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0z1o5L7HJx562xZSATcIpY",
+      "lyric": "Today we escape, we escape"
+    },
+    {
+      "title": "Head.Cars.Bending",
+      "artist": "The 1975",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0EUL4oxWG62Bn16HXBWV1p",
+      "lyric": null
+    },
+    {
+      "title": "Shut up My Moms Calling",
+      "artist": "Hotel Ugly",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3hxIUxnT27p5WcmjGUXNwx",
+      "lyric": null
+    },
+    {
+      "title": "Don't Let Me Go",
+      "artist": "Cigarettes After Sex",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0nEGX81PCOQyGsXmllrOjI",
+      "lyric": null
+    },
+    {
+      "title": "Woh Kaghaz Ki Kashti",
+      "artist": "Jagjit Singh, Chitra Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6qtSFL6qFbw7EmaRIsS0IR",
+      "lyric": "woh kaagaz ki kashti, woh baarish ka paani"
+    },
+    {
+      "title": "Kal Chaudhvin Ki Raat Thi Live",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1qcGMyJzXHD70vie4HubFb",
+      "lyric": null
+    },
+    {
+      "title": "Hothon Se Chhu Lo Tum - From \"Prem Geet\"",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4mBmsPcPa1Eu4LDTHq55Ab",
+      "lyric": null
+    },
+    {
+      "title": "Tum Ko Dekha To Yeh Khayal Aaya",
+      "artist": "Jagjit Singh, Chitra Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/66KBRmenGEJkTKtbTWl7tS",
+      "lyric": null
+    },
+    {
+      "title": "Yeh Daulat Bhi Le Lo",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/53lvwreZSI90sqcRz9Dbqz",
+      "lyric": "yeh daulat bhi le lo, yeh shohrat bhi le lo"
+    },
+    {
+      "title": "Koi Fariyaad",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2AeMA6k7ocfbYDZqq8NdV7",
+      "lyric": null
+    },
+    {
+      "title": "Ye Bata De - From \"Saath Saath\"",
+      "artist": "Jagjit Singh, Chitra Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5Nb7w4ttSK4tCo8D9iNZ1D",
+      "lyric": null
+    },
+    {
+      "title": "Pyar Mujh Se Jo Kiya - From \"Saath Saath\"",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4m5BrUgxV2gIMql4jbUxOn",
+      "lyric": null
+    },
+    {
+      "title": "Tere Khushboo Mein Base Khat - From \"Arth\"",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6MNJd1WYmwd9ImFufwkGTm",
+      "lyric": null
+    },
+    {
+      "title": "Koi Yeh Kaise Bataye - From \"Arth\"",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1BrVA0VpLsHY99r6CTZxTV",
+      "lyric": null
+    },
+    {
+      "title": "Jhuki Jhuki Si Nazar - From \"Arth\"",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1iBQ8AhpWQyMaOCD7nzUdQ",
+      "lyric": null
+    },
+    {
+      "title": "Tappe",
+      "artist": "Jagjit Singh, Chitra Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0dJysiF7Obub6aUixhO08c",
+      "lyric": null
+    },
+    {
+      "title": "Tasveer Banata Hoon - From \"Namkeen\"",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7BY7ZZsFTOUqsiSMjZbvcQ",
+      "lyric": null
+    },
+    {
+      "title": "Kal Chaudhvin Ki Raat Thi - From \"Duniya Jise Kahte Hain\"",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5nPRbGNNRoe1vTZMkuQmxF",
+      "lyric": null
+    },
+    {
+      "title": "Sarakti Jaye Hai Rukh Se Naqab Aahista Aahista",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1yrLQdcicdpOSeBik4wcVg",
+      "lyric": null
+    },
+    {
+      "title": "Tum Itna Jo Muskura Rahe Ho - From \"Arth\"",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3z8yusocdZukQlelPeqRDb",
+      "lyric": "tum itna jo muskura rahe ho, kya gham hai jisko chhupa rahe ho"
+    },
+    {
+      "title": "Badi Nazuk Hai Ye Manzil",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0Vgvn2K0Oclw6XbxDU5D6o",
+      "lyric": null
+    },
+    {
+      "title": "Yeh Daulat Bhi Le Lo (Live)",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2eC714GlOCGYAwH1D5XubY",
+      "lyric": null
+    },
+    {
+      "title": "Hoshwalon Ko Khabar Kya",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5NbR7c5zrOZN3Dje3JVJEN",
+      "lyric": "hoshwalon ko khabar kya, bekhudi kya cheez hai"
+    },
+    {
+      "title": "Main Nashe Mein Hoon",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0w1qgN9ZbInXLIzAPEcMoI",
+      "lyric": null
+    },
+    {
+      "title": "Jab Samne Tum Aa Jate Ho",
+      "artist": "Asha Bhosle, Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/01AE7T17WGYmmB4DcM9unf",
+      "lyric": null
+    },
+    {
+      "title": "Eh Mera Geet Kise Na Gaana",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1hgxCyNMCBFoaMLeRJ6sbP",
+      "lyric": null
+    },
+    {
+      "title": "Yarian Rab Kar Ke",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4ReejH3jo9aHlJ98PJnGEi",
+      "lyric": null
+    },
+    {
+      "title": "Nazar Nazar Se (From \"Visions - Vol. 1\")",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6W5N50HYNFixj9r2nCqdFs",
+      "lyric": null
+    },
+    {
+      "title": "Chuley Aug Na Ghade Di Wich Pani - Chadeyan Di Jhoon Buri",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4G1UV0elDJa00bcGilPKkl",
+      "lyric": null
+    },
+    {
+      "title": "Sarakti Jaye Hai Rukh Se Naqab Aahista Aahista Live",
+      "artist": "Jagjit Singh",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2KxWcwePvMTBX3DKqSGWaz",
+      "lyric": null
+    },
+    {
+      "title": "Piala",
+      "artist": "Nusrat Fateh Ali Khan",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4oK6oDl5J8A7Lj9q8dlgG7",
+      "lyric": null
+    },
+    {
+      "title": "Rafta Rafta Woh Meri Hasti Ka (From \"Zeenat\")",
+      "artist": "Mehdi Hassan",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2CWKnKg2zzXI6wfsH2dTDE",
+      "lyric": null
+    },
+    {
+      "title": "Lover, You Should've Come Over",
+      "artist": "Jeff Buckley",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6Jv7kjGkhY2fT4yuBF3aTz",
+      "lyric": null
+    },
+    {
+      "title": "Silver Springs - Live at Warner Brothers Studios in Burbank, CA 5/23/97",
+      "artist": "Fleetwood Mac",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1QEzs30PUAJJPbHL1e4NYH",
+      "lyric": "You'll never get away from the sound of the woman that loved you"
+    },
+    {
+      "title": "Beautiful Boy (Darling Boy) - Remastered 2010",
+      "artist": "John Lennon",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5URfZHMlUWTWxPvvSBWcPk",
+      "lyric": null
+    },
+    {
+      "title": "Wicked Game",
+      "artist": "Chris Isaak",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7w5AOd6HrDIHewHfpABEss",
+      "lyric": "I don't wanna fall in love, with you"
+    },
+    {
+      "title": "Baby Came Home 2 / Valentines",
+      "artist": "The Neighbourhood",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/40gvh6jP5qxMJuMmF9lG9A",
+      "lyric": null
+    },
+    {
+      "title": "Jigsaw Falling Into Place",
+      "artist": "Radiohead",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0YJ9FWWHn9EfnN0lHwbzvV",
+      "lyric": null
+    },
+    {
+      "title": "Cool About It",
+      "artist": "boygenius",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5PJH1U5Iie893v48Fl9yaC",
+      "lyric": null
+    },
+    {
+      "title": "Don't Dream It's Over",
+      "artist": "Crowded House",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7G7tgVYORlDuVprcYHuFJh",
+      "lyric": "There is freedom within, there is freedom without"
+    },
+    {
+      "title": "The Cut That Always Bleeds",
+      "artist": "Conan Gray",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7wTqEW5nrMhvyEhEyTnOMd",
+      "lyric": null
+    },
+    {
+      "title": "not a lot, just forever",
+      "artist": "Adrianne Lenker",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/11hEwcy9LMEvzAlOYAFhkK",
+      "lyric": null
+    },
+    {
+      "title": "Every Breath You Take",
+      "artist": "The Police",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1JSTJqkT5qHq8MDJnJbRE1",
+      "lyric": "Every breath you take, every move you make, I'll be watching you"
+    },
+    {
+      "title": "With Or Without You",
+      "artist": "U2",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6ADSaE87h8Y3lccZlBJdXH",
+      "lyric": "I can't live, with or without you"
+    },
+    {
+      "title": "Futile Devices (Doveman Remix)",
+      "artist": "Sufjan Stevens",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5vTSnZTmS1gMiWuA9kDE19",
+      "lyric": null
+    },
+    {
+      "title": "Bad Religion",
+      "artist": "Frank Ocean",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2pMPWE7PJH1PizfgGRMnR9",
+      "lyric": null
+    },
+    {
+      "title": "Forget Her",
+      "artist": "Jeff Buckley",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6UuVONmxXwTKN1ISepuAoQ",
+      "lyric": null
+    },
+    {
+      "title": "Everyone Adores You (at least I do)",
+      "artist": "Matt Maltese",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6klFWv2xDGeTDoiKTtx4hg",
+      "lyric": null
+    },
+    {
+      "title": "Glue Song",
+      "artist": "beabadoobee",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3iBgrkexCzVuPy4O9vx7Mf",
+      "lyric": null
+    },
+    {
+      "title": "20191009 I Like Her",
+      "artist": "Mac DeMarco",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3oUn55qKRZ1JFzfQNbJjS1",
+      "lyric": null
+    },
+    {
+      "title": "Sitting, Waiting, Wishing",
+      "artist": "Jack Johnson",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1dnXuEuApvuVqQCn0v9McL",
+      "lyric": null
+    },
+    {
+      "title": "It Had To Be You",
+      "artist": "Frank Sinatra",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0Ab4lEHfPY98aqtQrKQbUu",
+      "lyric": "It had to be you, wonderful you"
+    },
+    {
+      "title": "A Lovely Night",
+      "artist": "Ryan Gosling & Emma Stone",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4r9hiElqKWMPT4Z3vN2exq",
+      "lyric": null
+    },
+    {
+      "title": "City Of Stars - From \"La La Land\" Soundtrack",
+      "artist": "Ryan Gosling & Emma Stone",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6XQHlsNu6so4PdglFkJQRJ",
+      "lyric": "City of stars, are you shining just for me?"
+    },
+    {
+      "title": "Come Back - Buddha Remastered 2001",
+      "artist": "The Five Stairsteps",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7K6KRwyvE0plDEzxrVmCon",
+      "lyric": null
+    },
+    {
+      "title": "I Want Someone Badly",
+      "artist": "Jeff Buckley & Shudder To Think",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7b2Uwgd1SxeNmjkiJabvCq",
+      "lyric": null
+    },
+    {
+      "title": "Glass in the park",
+      "artist": "Alex Turner",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5OHbgQbHzTjolHzWffSrvn",
+      "lyric": null
+    },
+    {
+      "title": "Chevy Chase",
+      "artist": "Bennett Woolsey",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3FbHgAVWhioKnO3TRTnErT",
+      "lyric": null
+    },
+    {
+      "title": "Feels Like We Only Go Backwards",
+      "artist": "Tame Impala",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0LtOwyZoSNZKJWHqjzADpW",
+      "lyric": null
+    },
+    {
+      "title": "Jim & Pam (Goddamn)",
+      "artist": "Malcolm.",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3GMqutydxfpzbU4mld7ccQ",
+      "lyric": null
+    },
+    {
+      "title": "Heart On My Sleeve",
+      "artist": "Water Will",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2L5NO90rDVbKl6Zq8bTnku",
+      "lyric": null
+    },
+    {
+      "title": "I Only Have Eyes for You",
+      "artist": "The Flamingos",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3YdKJzcoMZMacISlpY4QoP",
+      "lyric": null
+    },
+    {
+      "title": "Fade Into You",
+      "artist": "Mazzy Star",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1LzNfuep1bnAUR9skqdHCK",
+      "lyric": "Fade into you, strange you never knew"
+    },
+    {
+      "title": "I Love You",
+      "artist": "Fontaines D.C.",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5XhMgAWzou6EjDmQtoyoZE",
+      "lyric": null
+    },
+    {
+      "title": "Harvest Moon",
+      "artist": "Neil Young",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7sCHy8QQUz3CRvUMp53Cbm",
+      "lyric": "Because I'm still in love with you, I want to see you dance again"
+    },
+    {
+      "title": "Ribbon Laced Relationship",
+      "artist": "Jasmine Valentine",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6BvsxwTItJGGx7c5Q7EE4v",
+      "lyric": null
+    },
+    {
+      "title": "True Love Waits",
+      "artist": "Radiohead",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/07XaOyTS5hyaWiUK1Bc3bR",
+      "lyric": null
+    },
+    {
+      "title": "I'm Not Them",
+      "artist": "Them & I",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/79ddfmePpbSFnMgeY4vXhC",
+      "lyric": null
+    },
+    {
+      "title": "Another Day",
+      "artist": "Luke O'Connell",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4BSi9feE9bgGzlwu65AN7C",
+      "lyric": null
+    },
+    {
+      "title": "A Heart Like Hers",
+      "artist": "Mac DeMarco",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1Ijh9lrbGPUj1tui7OGpnB",
+      "lyric": null
+    },
+    {
+      "title": "Mia & Sebastian's Theme",
+      "artist": "Justin Hurwitz",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1Vk4yRsz0iBzDiZEoFMQyv",
+      "lyric": null
+    },
+    {
+      "title": "Love Will Set You Free",
+      "artist": "Kodaline",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/11IYMTXu5Uws1DjmUMLOcP",
+      "lyric": null
+    },
+    {
+      "title": "Mystery Of Love - Demo",
+      "artist": "Sufjan Stevens",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/62RTXxio7jbtBTxWz43JPS",
+      "lyric": null
+    },
+    {
+      "title": "Strangers",
+      "artist": "Elton John",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4Ousa0idpaZ6KpLmT1iUnF",
+      "lyric": null
+    },
+    {
+      "title": "WANTO",
+      "artist": "Fake Dad",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6mKrQBzf0xxN4sfp8MaVjA",
+      "lyric": null
+    },
+    {
+      "title": "Freaks In Love",
+      "artist": "Elton John",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5bZbZQRl6rO5pw65cRc5nQ",
+      "lyric": null
+    },
+    {
+      "title": "Antidote",
+      "artist": "Shannon K",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5OBOu5lWCI2IXdX1h63NPg",
+      "lyric": null
+    },
+    {
+      "title": "Spring Into Summer",
+      "artist": "Lizzy McAlpine",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6oCXDaFZYL7sHnowv6pdXb",
+      "lyric": null
+    },
+    {
+      "title": "Technicolor Rash",
+      "artist": "Tea Eater",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3UwQyLzCmKDwAp8WNWFn9X",
+      "lyric": null
+    },
+    {
+      "title": "Take My Hand",
+      "artist": "Matt Berry",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6n4iuOHAOIu5LtbXBKrD0f",
+      "lyric": null
+    },
+    {
+      "title": "You Could Start A Cult",
+      "artist": "Niall Horan & Lizzy McAlpine",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/45PRcjOnvjz6VMl7tI3O3c",
+      "lyric": null
+    },
+    {
+      "title": "Love Me Not",
+      "artist": "Ravyn Lenae",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1UNEuG9DYOWiikf00ayr52",
+      "lyric": null
+    },
+    {
+      "title": "undressed",
+      "artist": "sombr",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4AajxCEwGEsmHmT4H1TwjY",
+      "lyric": null
+    },
+    {
+      "title": "Told You About My Dreams",
+      "artist": "Stefon Eustache",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4CW4HZKg2A4xKFcant9jhi",
+      "lyric": null
+    },
+    {
+      "title": "THE GREATEST",
+      "artist": "Billie Eilish",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6TGd66r0nlPaYm3KIoI7ET",
+      "lyric": null
+    },
+    {
+      "title": "Heavy",
+      "artist": "The Marías",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1ShRHPAiiIrh0arZbSFmx1",
+      "lyric": null
+    },
+    {
+      "title": "twilight zone",
+      "artist": "Ariana Grande",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1UrwJzlNC2oaTlxj1OZmcu",
+      "lyric": null
+    },
+    {
+      "title": "White Ferrari",
+      "artist": "Frank Ocean",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2LMkwUfqC6S6s6qDVlEuzV",
+      "lyric": null
+    },
+    {
+      "title": "Across The Universe - Remastered 2009",
+      "artist": "The Beatles",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4dkoqJrP0L8FXftrMZongF",
+      "lyric": "Nothing's gonna change my world"
+    },
+    {
+      "title": "We'll Never Have Sex",
+      "artist": "Leith Ross",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4zXuYQNDmw3dlauyc8q3Kd",
+      "lyric": null
+    },
+    {
+      "title": "Our Song",
+      "artist": "Anne-Marie & Niall Horan",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3fGW43fnu3OHEw6ohTC2Bw",
+      "lyric": null
+    },
+    {
+      "title": "Touch",
+      "artist": "Cigarettes After Sex",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1v7ptGUBS2DbbRmfIG0hU2",
+      "lyric": null
+    },
+    {
+      "title": "Hello Hello",
+      "artist": "Elton John",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/51jloR6rJcBkT1f8n3paRW",
+      "lyric": null
+    },
+    {
+      "title": "Love Builds a Garden",
+      "artist": "Elton John",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/13QMfADHF25K7mH0ZZRMEW",
+      "lyric": null
+    },
+    {
+      "title": "Lover, You Should've Come Over - Live At Columbia Records Radio Hour",
+      "artist": "Jeff Buckley",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3Z7OFraob1P0QscGaSoh0v",
+      "lyric": null
+    },
+    {
+      "title": "Halley's Comet",
+      "artist": "Billie Eilish",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5XsAal7ZcWg1I5T4NcRjkv",
+      "lyric": null
+    },
+    {
+      "title": "God Only Knows",
+      "artist": "The Beach Boys",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0ObrXLrfrqJUNc8RfmIBHP",
+      "lyric": "God only knows what I'd be without you"
+    },
+    {
+      "title": "Wonderful Tonight",
+      "artist": "Eric Clapton",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/6zC0mpGYwbNTpk9SKwh08f",
+      "lyric": "And I say, my darling, you look wonderful tonight"
+    },
+    {
+      "title": "Come Back Baby",
+      "artist": "Bluesology",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/0qEyRxjwEbtM8PFcEF44KD",
+      "lyric": null
+    },
+    {
+      "title": "It Ain't Me, Babe",
+      "artist": "Timothée Chalamet & Monica Barbaro",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/47xQwrip8UriPhFPUjSRQ7",
+      "lyric": null
+    },
+    {
+      "title": "Fourth of July - Version 4",
+      "artist": "Sufjan Stevens",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/52SrGQ0vcsf1RwhO6ONk4A",
+      "lyric": null
+    },
+    {
+      "title": "welcome and goodbye",
+      "artist": "Dream, Ivory",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/00RLNHc2jkEjUoCUlFgPVT",
+      "lyric": null
+    },
+    {
+      "title": "I'd Have You Anytime - 2014 Remaster",
+      "artist": "George Harrison",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7c37wgrjBNMnxAvGTXBJTT",
+      "lyric": null
+    },
+    {
+      "title": "Perfect Pair",
+      "artist": "R.L. Beats",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1J6ZMaOzEvsy3pPFbMi1LB",
+      "lyric": null
+    },
+    {
+      "title": "Margaret (feat. Bleachers)",
+      "artist": "Lana Del Rey & Bleachers",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1o82DwNisONAd2mu1RcGE6",
+      "lyric": null
+    },
+    {
+      "title": "Pushing It Down and Praying",
+      "artist": "Lizzy McAlpine",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4wO2JlPZw72Xlu6dGUW4Ce",
+      "lyric": null
+    },
+    {
+      "title": "waiting room x fix you",
+      "artist": "Alexandra Riddell",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/1h1ELSxZwpp6D7egf8YIH9",
+      "lyric": null
+    },
+    {
+      "title": "For What It's Worth",
+      "artist": "Liam Gallagher",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/5Ih40KFkj3cSzxgisQxBvX",
+      "lyric": null
+    },
+    {
+      "title": "If I Had A Gun…",
+      "artist": "Noel Gallagher's High Flying Birds",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4i4ArYpqtsA3MJ1k0o2dxq",
+      "lyric": null
+    },
+    {
+      "title": "No. 1 Party Anthem - Instrumental",
+      "artist": "The Forgetfulness",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/3nNsveaZPTvgyyL5JqvpJg",
+      "lyric": null
+    },
+    {
+      "title": "I'm Gonna Miss You",
+      "artist": "Milli Vanilli",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2dThEJP9S344qzNhePcSzj",
+      "lyric": null
+    },
+    {
+      "title": "Everything Works Out in the End",
+      "artist": "Kodaline",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/45IFvFqHG8oiEK1fAYdNw1",
+      "lyric": null
+    },
+    {
+      "title": "Talk Tonight - Remastered",
+      "artist": "Oasis",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/2LNV0347QKt4AHxRSfCBij",
+      "lyric": null
+    },
+    {
+      "title": "Talk Tonight - Live For Teenage Cancer Trust",
+      "artist": "Noel Gallagher",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/4p1gzwv7IeRMXKdwQ991P8",
+      "lyric": null
+    },
+    {
+      "title": "Rein Me In (with Olivia Dean)",
+      "artist": "Sam Fender & Olivia Dean",
+      "source": "spotify",
+      "url": "https://open.spotify.com/track/7MZHqgTVTnN6xZGYAcEEAf",
+      "lyric": null
+    }
+  ]
+}

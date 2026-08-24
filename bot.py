@@ -306,6 +306,72 @@ def main() -> None:
         thread.start()
         log.info("⏰ Background reminder scheduler thread started.")
 
+    def _start_daily_greetings_scheduler(client: NewClient, runtime_config: dict) -> None:
+        import glob
+        import json
+        import random
+        import threading
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        if getattr(client, "_pbbot_greetings_scheduler_started", False):
+            return
+        client._pbbot_greetings_scheduler_started = True
+
+        target_chat = normalize_group_jid(
+            runtime_config.get("pbbot_group_id") or runtime_config.get("media_group_id")
+        )
+        ist = ZoneInfo("Asia/Kolkata")
+        # (hour, minute) windows, checked with a 5-minute poll -- each fires
+        # once per IST calendar date, tracked in last_sent below.
+        MORNING_HOUR, NIGHT_HOUR, SONGS_HOUR = 7, 22, 3
+
+        def run_greetings_loop():
+            from features.daily_greetings import GOOD_MORNING_MESSAGES, GOOD_NIGHT_MESSAGES
+
+            songs = []
+            try:
+                data_path = os.path.join(os.path.dirname(__file__), "data", "late_night_songs.json")
+                with open(data_path, encoding="utf-8") as f:
+                    songs = json.load(f).get("songs", [])
+            except Exception:
+                log.warning("Could not load late_night_songs.json; 3am song sends disabled")
+
+            gm_images = sorted(glob.glob(
+                os.path.join(os.path.dirname(__file__), "assets", "good_morning", "*.jpg")
+            ))
+
+            last_sent = {"morning": None, "night": None, "songs": None}
+            while True:
+                try:
+                    if target_chat:
+                        now = datetime.now(ist)
+                        today = now.date().isoformat()
+                        if now.hour == MORNING_HOUR and last_sent["morning"] != today:
+                            last_sent["morning"] = today
+                            caption = random.choice(GOOD_MORNING_MESSAGES)
+                            if gm_images:
+                                client.send_image(target_chat, random.choice(gm_images), caption=caption)
+                            else:
+                                client.send_message(target_chat, caption)
+                        if now.hour == NIGHT_HOUR and last_sent["night"] != today:
+                            last_sent["night"] = today
+                            client.send_message(target_chat, random.choice(GOOD_NIGHT_MESSAGES))
+                        if now.hour == SONGS_HOUR and last_sent["songs"] != today and songs:
+                            last_sent["songs"] = today
+                            song = random.choice(songs)
+                            text = song["url"]
+                            if song.get("lyric"):
+                                text = f"{song['url']}\n\n{song['lyric']}"
+                            client.send_message(target_chat, text)
+                except Exception:
+                    log.exception("Error in background daily-greetings scheduler loop")
+                time.sleep(300)
+
+        thread = threading.Thread(target=run_greetings_loop, name="DailyGreetingsScheduler", daemon=True)
+        thread.start()
+        log.info("🌸 Daily greetings scheduler thread started.")
+
     @client.event(ConnectedEv)
     def on_connected(_client: NewClient, _event: ConnectedEv):
         log.info("✅ Bot connected to WhatsApp — all features active")
@@ -316,6 +382,7 @@ def main() -> None:
         except Exception as e:
             log.warning("Could not determine bot JID: %s", e)
         _start_reminder_scheduler(client, runtime_config["db_session_factory"], runtime_config)
+        _start_daily_greetings_scheduler(client, runtime_config)
         _reconcile_lid_assignments(client, runtime_config["db_session_factory"])
 
     @client.event(DisconnectedEv)

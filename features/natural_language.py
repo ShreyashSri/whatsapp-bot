@@ -13,6 +13,7 @@ from difflib import SequenceMatcher
 import json
 import logging
 import os
+import random
 import re
 import time
 from datetime import date
@@ -42,6 +43,41 @@ GEMINI_GENERATE_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta
 DEFAULT_GEMINI_MODEL = "gemma-4-31b-it"
 MAX_INPUT_LENGTH = 4000
 MAX_COMMAND_LENGTH = 1200
+
+# Replies for when the LLM provider rate-limits us after exhausting retries
+# (see _post_gemini's backoff). Casual/informal on purpose -- this is a
+# routine "give it a second" state, not an actual error worth a generic
+# warning emoji message.
+RATE_LIMIT_REPLIES = [
+    "arre yaar ek second do, itna load mat do 😮‍💨",
+    "bhai rate limit lag gaya, thoda saans lene do",
+    "kitna kaam karwayega bhai, model bhi thak gaya 😩",
+    "ruk ruk, itni jaldi kya hai",
+    "google wale bhi break maang rahe hai bhai",
+    "ek min ruk ja, dimaag garam ho raha hai mera 🥵",
+    "itni requests? thoda toh reham kar yaar",
+    "chill kar bhai, rate limit kha gaya mujhe",
+    "system thoda overwhelmed hai, ek second de",
+    "bas bas, ek saans lene de pehle",
+]
+
+# Sent as an occasional bonus follow-up after ANY completed command -- not
+# tied to rate limits or errors, just the bot occasionally having a
+# personality. Not every time, see GENERAL_SNARK_CHANCE.
+GENERAL_SNARK_COMMENTS = [
+    "waise bhi itne commands lagatar kyun daal raha hai 👀",
+    "pro tip: patience bhi ek skill hai",
+    "this is exactly why bots deserve a union",
+    "kaam kaam kaam, kabhi thanks bhi bol diya kar",
+    "chalo theek hai, is baar maaf kiya 😤",
+    "not gonna lie, you're kind of a lot right now",
+    "free tier ki izzat kar bhai",
+    "arre wah, ek aur command, mazaa aa gaya 🙄",
+    "tu subah se yehi kar raha hai kya",
+    "no thanks needed, main toh bas machine hoon na 😌",
+    "ek din chhutti bhi de diya kar mujhe",
+]
+GENERAL_SNARK_CHANCE = 0.43
 MAX_KNOWLEDGE_LENGTH = 6000
 ME_ALIAS_RE = re.compile(r"(?<![\w@])@me(?![\w])", re.IGNORECASE)
 URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
@@ -3851,12 +3887,15 @@ def register(client, config: dict) -> Callable:
                             return True
             else:
                 command = translation
-        except Exception:
+        except Exception as exc:
             log.exception("Natural-language translation failed")
-            client.send_message(
-                chat,
-                "⚠️ I couldn't safely resolve that request for execution.",
-            )
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+                client.send_message(chat, random.choice(RATE_LIMIT_REPLIES))
+            else:
+                client.send_message(
+                    chat,
+                    "⚠️ I couldn't safely resolve that request for execution.",
+                )
             return abort_plan()
         if translation is None:
             log.warning("natural-language translation returned no result for body=%r", body)
@@ -3942,6 +3981,8 @@ def register(client, config: dict) -> Callable:
                 return True
         trace.record("completed", compiled_steps=len(compiled_steps))
         log.info("agent trace %s", trace.summary())
+        if random.random() < GENERAL_SNARK_CHANCE:
+            client.send_message(chat, random.choice(GENERAL_SNARK_COMMENTS))
         return True
 
     return on_message

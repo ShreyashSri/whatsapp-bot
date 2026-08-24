@@ -9,6 +9,8 @@ from features.natural_language import (
     MISTRAL_CHAT_URL,
     MistralCardDesigner,
     MistralCommandTranslator,
+    GENERAL_SNARK_COMMENTS,
+    RATE_LIMIT_REPLIES,
     _admin_target_suffix,
     _post_gemini,
     build_knowledge_context,
@@ -1096,6 +1098,67 @@ def test_group_message_without_bot_mention_or_reminder_reply_is_ignored():
 
     assert result is False
     translate.assert_not_called()
+
+
+def test_rate_limit_error_gets_a_casual_reply_instead_of_the_generic_warning():
+    client = MagicMock()
+    message = make_message("@me do something")
+    dispatch = MagicMock()
+    error = httpx.HTTPStatusError(
+        "429", request=MagicMock(), response=SimpleNamespace(status_code=429)
+    )
+
+    with patch("features.natural_language.is_bot_mentioned", return_value=True), \
+         patch.object(MistralCommandTranslator, "translate", side_effect=error):
+        handler = register(client, {"mistral_api_key": "secret"})
+        handler(client, message, dispatch)
+
+    sent_texts = [call.args[1] for call in client.send_message.call_args_list]
+    # 429 gets exactly one casual reply, no bonus attached -- bonus snark is
+    # a separate, general behavior that follows any successful command now,
+    # not something layered onto the rate-limit path specifically.
+    assert sent_texts == [sent_texts[0]]
+    assert sent_texts[0] in RATE_LIMIT_REPLIES
+    assert not any("couldn't safely resolve" in text for text in sent_texts)
+
+
+def test_non_rate_limit_error_still_gets_the_generic_warning():
+    client = MagicMock()
+    message = make_message("@me do something")
+    dispatch = MagicMock()
+
+    with patch("features.natural_language.is_bot_mentioned", return_value=True), \
+         patch.object(MistralCommandTranslator, "translate", side_effect=RuntimeError("boom")):
+        handler = register(client, {"mistral_api_key": "secret"})
+        handler(client, message, dispatch)
+
+    sent_texts = [call.args[1] for call in client.send_message.call_args_list]
+    assert any("couldn't safely resolve" in text for text in sent_texts)
+    assert not any(text in RATE_LIMIT_REPLIES for text in sent_texts)
+
+
+def test_general_snark_follows_a_successful_command_43_percent_of_the_time():
+    intent = {"capability": "help.show", "arguments": {}}
+
+    client = MagicMock()
+    message = make_message("@me show help")
+    with patch("features.natural_language.is_bot_mentioned", return_value=True), \
+         patch.object(MistralCommandTranslator, "translate", return_value=(intent, "")), \
+         patch("features.natural_language.random.random", return_value=0.0):
+        handler = register(client, {"mistral_api_key": "secret"})
+        handler(client, message, MagicMock())
+    sent_texts = [call.args[1] for call in client.send_message.call_args_list]
+    assert sent_texts == [sent_texts[0]]
+    assert sent_texts[0] in GENERAL_SNARK_COMMENTS
+
+    client2 = MagicMock()
+    message2 = make_message("@me show help")
+    with patch("features.natural_language.is_bot_mentioned", return_value=True), \
+         patch.object(MistralCommandTranslator, "translate", return_value=(intent, "")), \
+         patch("features.natural_language.random.random", return_value=0.99):
+        handler2 = register(client2, {"mistral_api_key": "secret"})
+        handler2(client2, message2, MagicMock())
+    assert client2.send_message.call_args_list == []
 
 
 def test_legacy_mutating_command_is_rejected_before_dispatch():

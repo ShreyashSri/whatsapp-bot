@@ -235,7 +235,12 @@ def audit(session_factory, actor: User, operation: str, source: str, payload: di
 
 
 def upsert_user(session_factory, jid, role="member", display_name="", *, deactivate=False, actor=None, operation="user.create") -> User:
-    jid = normalize_jid(jid)
+    # Route through the same canonical-phone resolution current_user() reads
+    # with. Writing to a bare LID here (e.g. a native @mention resolves to a
+    # LID, or an admin is seeded by LID) creates a row that current_user()'s
+    # canonical-phone preference then silently shadows with an older/lesser
+    # role on the phone JID -- the grant "succeeds" but never takes effect.
+    jid = canonical_jid(jid)
     if role not in ROLES:
         raise ValueError("role must be admin or member")
     now = datetime.now(timezone.utc)
