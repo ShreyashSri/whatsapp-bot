@@ -318,9 +318,15 @@ def main() -> None:
             return
         client._pbbot_greetings_scheduler_started = True
 
-        target_chat = normalize_group_jid(
+        target_chat_str = normalize_group_jid(
             runtime_config.get("pbbot_group_id") or runtime_config.get("media_group_id")
         )
+        target_chat = None
+        if target_chat_str:
+            from neonize.utils import build_jid
+
+            user, server = target_chat_str.split("@", 1)
+            target_chat = build_jid(user, server)
         ist = ZoneInfo("Asia/Kolkata")
         # (hour, minute) windows, checked with a 5-minute poll -- each fires
         # once per IST calendar date, tracked in last_sent below.
@@ -344,7 +350,7 @@ def main() -> None:
             last_sent = {"morning": None, "night": None, "songs": None}
             while True:
                 try:
-                    if target_chat:
+                    if target_chat is not None:
                         now = datetime.now(ist)
                         today = now.date().isoformat()
                         if now.hour == MORNING_HOUR and last_sent["morning"] != today:
