@@ -388,7 +388,7 @@ def main() -> None:
         except Exception as e:
             log.warning("Could not determine bot JID: %s", e)
         _start_reminder_scheduler(client, runtime_config["db_session_factory"], runtime_config)
-        _start_daily_greetings_scheduler(client, runtime_config)
+        # _start_daily_greetings_scheduler(client, runtime_config)
         _reconcile_lid_assignments(client, runtime_config["db_session_factory"])
 
     @client.event(DisconnectedEv)
