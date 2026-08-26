@@ -3,13 +3,12 @@
 Allows admins to create and manage events, and members to view and update
 their personal assignment statuses.
 
-Commands:
-    !events
-    !create-event <type> | <name> | [description]
-    !delete-event <event_id>
-    !set-status <event_id> | <status>
-    !my
-    !my-status <event_id> | <status>
+Natural language usage:
+    @bot create a new participation event Hacktoberfest
+    @bot list all events
+    @bot show my assigned work
+    @bot set event 4 status to completed
+    @bot mark event 4 as completed
 """
 
 from __future__ import annotations
@@ -71,7 +70,7 @@ def _cmd_create_event(client: "NewClient", chat_jid, args: str, store: EventStor
     """!create-event <type> | <name> | [description]"""
     parts = split_command_fields(args)
     if len(parts) < 2:
-        _reply(client, chat_jid, "⚠️ Usage: `!create-event <participation|organization> | <Name> | [Description]`")
+        _reply(client, chat_jid, "⚠️ Tell me what event to create (e.g. `@bot create a new participation event Hacktoberfest`).")
         return
 
     ev_type = parts[0].lower()
@@ -94,7 +93,7 @@ def _cmd_delete_event(client: "NewClient", chat_jid, args: str, store: EventStor
     """!delete-event <event_id>"""
     match = re.match(r"^(\d+)$", args)
     if not match:
-        _reply(client, chat_jid, "⚠️ Usage: `!delete-event <event_id>`")
+        _reply(client, chat_jid, "⚠️ Specify the event ID to delete (e.g. `@bot delete event 4`).")
         return
     event_id = int(match.group(1))
     try:
@@ -111,7 +110,7 @@ def _cmd_set_status(client: "NewClient", chat_jid, args: str, store: EventStore)
     """!set-status <event_id> | <status>"""
     parts = split_command_fields(args)
     if len(parts) != 2 or not parts[0].isdigit():
-        _reply(client, chat_jid, "⚠️ Usage: `!set-status <event_id> | <status>`")
+        _reply(client, chat_jid, "⚠️ Specify the event ID and status (e.g. `@bot set event 4 status to completed`).")
         return
     try:
         updated = store.set_status(event_id=int(parts[0]), status=parts[1].lower())
@@ -154,7 +153,7 @@ def _cmd_my_status(client: "NewClient", chat_jid, sender_jid: str, args: str, st
     parts = split_command_fields(args)
     if len(parts) < 2 or not parts[0].isdigit():
         _reply(client, chat_jid,
-               "⚠️ Usage: `!my-status <event_id> | <status>`\nExample: `!my-status 1 | completed`")
+               "⚠️ Specify the event ID and status (e.g. `@bot mark event 4 as completed`).")
         return
 
     new_status = parts[1].lower()
