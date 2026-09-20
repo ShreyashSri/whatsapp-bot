@@ -1,12 +1,10 @@
 """Card generation feature.
 
-Commands:
-    !card <type> | <name> | <text>       — generate a PNG card (attach photo)
-    !card-pdf <type> | <name> | <text>   — generate PNG + editable PDF
-
-For the ``talk`` type, ``name`` is the speaker, ``text`` is the talk title,
-and the fourth part is the event name. Optional fifth/sixth parts are event
-logo URLs.
+Natural language usage:
+    @bot create a GSoC card for @user1 saying she is a 2026 finalist (attach photo)
+    @bot generate an internship card for @user2 at Google (attach photo)
+    @bot create a talk card for @user3 — talk: Building with Python, event: Dev Workshop
+    @bot create a card PDF for the LFX workshop talk; use https://example.com/logo.png as the logo
 """
 
 from __future__ import annotations
@@ -114,8 +112,8 @@ async def _handle_card_command(
         if not event_name:
             client.send_message(
                 chat_jid,
-                "⚠️ Talk cards require an event name as the 4th field.\n\n"
-                "Usage: `!card talk | <speaker> | <talk title> | <event name> | <logoUrl1> | <logoUrl2>`",
+                "⚠️ Talk cards require an event name.\n\n"
+                "Example: `@bot create a talk card for @user1 — talk: Building with Python, event: Dev Workshop`",
             )
             return
 

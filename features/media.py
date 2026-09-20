@@ -1,13 +1,12 @@
 """Media-team task manager feature.
 
-Commands:
-    !add <text>              — add a post to to-do
-    !remove <id>             — remove a post (works on both lists)
-    !to-do / !todo           — list pending posts
-    !posted <id> <stage>     — mark a stage done
-    !unposted <id> <stage>   — un-mark a stage
-    !posted-list             — list fully posted entries
-    !help [command]          — show help
+Natural language usage:
+    @bot add a new post about our upcoming workshop to the to-do list
+    @bot show pending posts
+    @bot mark post 42 as posted on instagram
+    @bot undo post 42 on instagram
+    @bot remove post 12
+    @bot show all completed posts
 """
 
 from __future__ import annotations
@@ -169,7 +168,7 @@ async def _handle_media_command(
     if lower == "!add" or lower.startswith("!add "):
         text = body[4:].strip()
         if not text:
-            _reply(client, chat_jid, "⚠️ Usage: `!add <text>`")
+            _reply(client, chat_jid, "⚠️ Tell me what post to add (e.g. `@bot add a new post about our upcoming workshop to the to-do list`).")
             _mark_transaction_failed(store)
             return
         state = _read_posts(store)
@@ -192,7 +191,7 @@ async def _handle_media_command(
         try:
             entry_id = int(id_str)
         except (ValueError, TypeError):
-            _reply(client, chat_jid, "⚠️ Usage: `!remove <id>`")
+            _reply(client, chat_jid, "⚠️ Specify the post ID to remove (e.g. `@bot remove post 12`).")
             _mark_transaction_failed(store)
             return
 
@@ -219,14 +218,14 @@ async def _handle_media_command(
     if lower == "!posted" or lower.startswith("!posted "):
         args = body[7:].strip().split()
         if len(args) < 2:
-            _reply(client, chat_jid, "⚠️ Usage: `!posted <id> <stage>` (stage: design / insta / linkedin / twitter)")
+            _reply(client, chat_jid, "⚠️ Specify the post ID and stage (e.g. `@bot mark post 42 as posted on instagram`).")
             _mark_transaction_failed(store)
             return
 
         try:
             entry_id = int(args[0].lstrip("#"))
         except ValueError:
-            _reply(client, chat_jid, "⚠️ Id must be a number. Usage: `!posted <id> <stage>`")
+            _reply(client, chat_jid, "⚠️ Id must be a number (e.g. `@bot mark post 42 as posted on instagram`).")
             _mark_transaction_failed(store)
             return
 
@@ -274,14 +273,14 @@ async def _handle_media_command(
     if lower == "!unposted" or lower.startswith("!unposted "):
         args = body[9:].strip().split()
         if len(args) < 2:
-            _reply(client, chat_jid, "⚠️ Usage: `!unposted <id> <stage>` (stage: design / insta / linkedin / twitter)")
+            _reply(client, chat_jid, "⚠️ Specify the post ID and stage (e.g. `@bot undo post 42 on instagram`).")
             _mark_transaction_failed(store)
             return
 
         try:
             entry_id = int(args[0].lstrip("#"))
         except ValueError:
-            _reply(client, chat_jid, "⚠️ Id must be a number. Usage: `!unposted <id> <stage>`")
+            _reply(client, chat_jid, "⚠️ Id must be a number (e.g. `@bot undo post 42 on instagram`).")
             _mark_transaction_failed(store)
             return
 

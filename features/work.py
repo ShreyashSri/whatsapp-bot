@@ -678,7 +678,7 @@ def _handle_work_subcommand(
     tokens = args.split()
     if not tokens or tokens[0].lower() not in WORK_SUBCOMMANDS:
         if tokens:
-            _send(client, chat, "ℹ️ Use `!work` for the overview. Try `!work event <id>`, `!work update event <id> note <text>`, or `!work history event <id>`." )
+            _send(client, chat, "ℹ️ Ask me `@bot show my assigned work`, `@bot show progress for event <id>`, or `@bot show event <id> history`.")
         return True
     action = tokens[0].lower()
     store = WorkStore(factory)
@@ -775,7 +775,7 @@ def _handle_work_subcommand(
                 return True
             parts = split_command_fields(args[len(tokens[0]):].strip())
             if len(parts) < 2 or parts[0].lower() not in ("event", "task"):
-                _send(client, chat, "Usage: `!work create event | <participation|organization> | <category> | <name> | [description]` or `!work create task | <title> | [description] | [due YYYY-MM-DD] | [priority low|medium|high]`")
+                _send(client, chat, "Tell me what to create (e.g. `@bot create a new participation event Hacktoberfest` or `@bot create a task Prepare report`).")
                 return True
             if parts[0].lower() == "event":
                 if len(parts) < 4:
@@ -950,8 +950,8 @@ def _handle_work_subcommand(
                     _send(
                         client, chat,
                         f"ℹ️ An event doesn't have its own history — assignments live on its tasks. "
-                        f"Try `!reports progress event {ident}` to see everyone's status, "
-                        f"or `!work history task <id>` for one task.",
+                        f"Ask me `@bot show progress for event {ident}` to see everyone's status, "
+                        f"or `@bot show task <id> history` for one task.",
                     )
                     return True
             history = store.history(
@@ -1100,7 +1100,7 @@ def handle(client, message, session_factory, *, reminder_group_jid: str | None =
         ident_token = head[1] if typ in ("event", "task") and len(head) > 1 else (head[0] if head else "")
         targets, aliases = _assign_targets(client, chat, message, parts[1] if len(parts) > 1 else "", None, session_factory)
         if not ident_token.isdigit() or not targets:
-            _send(client, chat, f"Usage: `{command} {typ} <id> | @user`")
+            _send(client, chat, f"Please mention a user (e.g. `@bot assign {typ} {ident_token or '<id>'} to @user1`).")
             return True
         try:
             store = WorkStore(session_factory)
@@ -1235,7 +1235,7 @@ def handle(client, message, session_factory, *, reminder_group_jid: str | None =
                 return True
             parts = split_command_fields(args, limit=1)
             if len(parts) != 2 or not parts[0].isdigit() or not parts[1]:
-                _send(client, chat, "Usage: `!set-status <event_id> | <draft|active|completed|cancelled>`")
+                _send(client, chat, "Specify the event ID and status (e.g. `@bot set event 4 status to completed`).")
                 return True
             try:
                 EventStore(session_factory).set_status(int(parts[0]), parts[1].lower())

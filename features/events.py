@@ -1,8 +1,10 @@
 """Unified assignment commands for events and tasks.
 
-Commands:
-    !assign [task|event] <id> | @user    — assign to event (default) or task
-    !unassign [task|event] <id> [| @user] — unassign from event or task
+Natural language usage:
+    @bot assign event 4 to @user1
+    @bot assign task 7 to @user2
+    @bot remove @user1 from event 4
+    @bot remove @user2 from task 7
 """
 
 from __future__ import annotations
@@ -76,10 +78,8 @@ def _cmd_assign(
 
     if target_id is None:
         _reply(client, chat,
-               "⚠️ Usage: `!assign [task|event] <id> | @user`\n"
-               "Examples:\n"
-               "  `!assign 3 | @person` — assign to event #3\n"
-               "  `!assign task 5 | @person` — assign to task #5")
+               "⚠️ Mention the user and work ID to assign.\n"
+               "Example: `@bot assign event 4 to @user1`")
         return
 
     mentions = _get_mentioned_jids(message)
@@ -118,10 +118,8 @@ def _cmd_unassign(
 
     if target_id is None:
         _reply(client, chat,
-               "⚠️ Usage: `!unassign [task|event] <id> [| @user]`\n"
-               "Examples:\n"
-               "  `!unassign 3 | @person` — unassign from event #3\n"
-               "  `!unassign task 5` — unassign from task #5")
+               "⚠️ Mention the user and work ID to unassign.\n"
+               "Example: `@bot remove @user1 from event 4`")
         return
 
     try:
