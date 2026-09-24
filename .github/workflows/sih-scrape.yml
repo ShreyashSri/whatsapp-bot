@@ -27,6 +27,7 @@ jobs:
           SIH_INGEST_URL: ${{ secrets.SIH_INGEST_URL }}
           SIH_INGEST_SECRET: ${{ secrets.SIH_INGEST_SECRET }}
           SIH_PS_URL: ${{ vars.SIH_PS_URL }}
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           : "${SIH_INGEST_URL:?Configure the SIH_INGEST_URL repository secret}"
           : "${SIH_INGEST_SECRET:?Configure the SIH_INGEST_SECRET repository secret}"
