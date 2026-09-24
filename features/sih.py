@@ -1,17 +1,17 @@
 """SIH 2026 problem-statement watcher.
 
-Scraping is intended to run in GitHub Actions (`scripts/sih_scrape.py`).
-The bot receives the payload on POST /sih-ingest, stores counts, and
-notifies the WhatsApp group the first time a PS crosses 300 submissions.
+The Mumbai scraper POSTs JSON to POST /sih-ingest. This process does not
+fetch sih.gov.in. !sih refresh POSTs to the scraper trigger instead.
 
 Chat:
   !sih              summary + hottest PS
   !sih hot          every PS at or over the threshold
   !sih top [n]      top n by submissions (default 10, max 25)
   !sih <ps-number>  one problem statement
-  !sih refresh      scrape in-process (optional fallback; GHA is preferred)
-
-Help text is SIH_MODULE_HELP — import it in features/help.py.
+  !sih refresh      POST the Mumbai scraper /scrape (not this host)
+  !sih add dsce [..]     add PS numbers to the DSCE watchlist
+  !sih remove dsce [..]  remove PS numbers from the DSCE watchlist
+  !sih dsce top [n]      top n from the DSCE watchlist (default 10)
 """
 
 from __future__ import annotations
@@ -23,20 +23,23 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
+import httpx
 from flask import Flask, jsonify, request
+
+import re
 
 from db.auth import gate
 from db.sih_store import SIHStore
-from features.sih_scrape import candidate_urls, parse_ps_list, scrape_problem_statements
 from features.subgroups import _get_text
 from features.text import public_text
+
+PS_NUMBER_RE = re.compile(r"^SIH\d+$", re.I)
 
 if TYPE_CHECKING:
     from neonize.client import NewClient
 
 log = logging.getLogger(__name__)
 
-DEFAULT_URL = "https://sih.gov.in/sih2026PS"
 DEFAULT_THRESHOLD = 300
 DEFAULT_INGEST_PORT = 8083
 WHATSAPP_LIST_LIMIT = 20
@@ -49,7 +52,7 @@ SIH_MODULE_HELP = (
     "`!sih hot` — every PS at or over 300 submissions.\n"
     "`!sih top [n]` — top n by submissions (default 10, max 25).\n"
     "`!sih <ps-number>` — one problem statement, e.g. `!sih SIH1601`.\n"
-    "`!sih refresh` — scrape now from this host.\n"
+    "`!sih refresh` — ask the India scraper to fetch and POST counts here.\n"
     "`!sih add dsce 26001, 26002` — track those PS on the DSCE list.\n"
     "`!sih remove dsce 26001` — drop PS from the DSCE list.\n"
     "`!sih dsce top [n]` — hottest tracked DSCE PS (default 10).\n\n"
@@ -57,7 +60,31 @@ SIH_MODULE_HELP = (
 )
 
 DSCE_LIST = "dsce"
-WATCHLIST_ADD_LIMIT = 100
+WATCHLIST_ADD_LIMIT = 50
+
+
+def normalize_ps_number(token: str) -> str | None:
+    raw = (token or "").strip().upper().strip("[],")
+    if not raw:
+        return None
+    if raw.isdigit():
+        raw = f"SIH{raw}"
+    if not PS_NUMBER_RE.match(raw):
+        return None
+    return raw
+
+
+def parse_ps_list(text: str) -> list[str]:
+    cleaned = (text or "").replace("[", " ").replace("]", " ").replace(",", " ")
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for token in cleaned.split():
+        ps_number = normalize_ps_number(token)
+        if not ps_number or ps_number in seen:
+            continue
+        seen.add(ps_number)
+        ordered.append(ps_number)
+    return ordered
 
 
 def _build_chat_jid(value: str):
@@ -197,17 +224,25 @@ def ingest_rows(
     }
 
 
-def poll_once(
-    store: SIHStore,
-    client: "NewClient | None",
-    group_id: str | None,
-    urls: list[str],
-    threshold: int,
-    *,
-    notify: bool = True,
-) -> dict[str, Any]:
-    rows, source_url = scrape_problem_statements(urls)
-    return ingest_rows(store, rows, source_url, client, group_id, threshold, notify=notify)
+def trigger_remote_scrape(trigger_url: str, secret: str) -> dict[str, Any]:
+    url = trigger_url.rstrip("/")
+    if not url.endswith("/scrape"):
+        url = url + "/scrape"
+    response = httpx.post(
+        url,
+        headers={"X-SIH-Alert-Secret": secret, "Content-Type": "application/json"},
+        timeout=180.0,
+        follow_redirects=True,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"scraper HTTP {response.status_code}: {response.text[:300]}")
+    try:
+        body = response.json()
+    except Exception:
+        body = {"status": "ok"}
+    if not isinstance(body, dict):
+        body = {"status": "ok"}
+    return body
 
 
 def _wait_for_listener(thread: threading.Thread, port: int) -> bool:
@@ -318,34 +353,6 @@ def _start_ingest_server(app: Flask, port: int) -> None:
         log.error("SIH ingest webhook did not become reachable on port %s", port)
 
 
-def _start_poller(
-    client: "NewClient",
-    store: SIHStore,
-    group_id: str | None,
-    urls: list[str],
-    threshold: int,
-    poll_seconds: int,
-) -> None:
-    def _loop() -> None:
-        time.sleep(15)
-        while True:
-            try:
-                result = poll_once(store, client, group_id, urls, threshold)
-                log.info(
-                    "SIH poll complete total=%s over=%s alerts=%s source=%s",
-                    result["total"],
-                    result["over_threshold"],
-                    result["alerts_sent"],
-                    result["source_url"],
-                )
-            except Exception:
-                log.exception("SIH poll failed")
-            time.sleep(max(60, poll_seconds))
-
-    threading.Thread(target=_loop, name="SIHPoller", daemon=True).start()
-    log.info("SIH in-process poller started every %ss (GHA ingest is preferred)", poll_seconds)
-
-
 def register(client: "NewClient", config: dict) -> Callable:
     session_factory = config.get("db_session_factory")
     if session_factory is None:
@@ -354,10 +361,10 @@ def register(client: "NewClient", config: dict) -> Callable:
     store = SIHStore(session_factory)
     group_id = (config.get("sih_group_id") or "").strip() or None
     threshold = int(config.get("sih_threshold") or DEFAULT_THRESHOLD)
-    poll_seconds = int(config.get("sih_poll_seconds") or 0)
-    urls = candidate_urls(config.get("sih_ps_url") or DEFAULT_URL)
     secret = (config.get("sih_ingest_secret") or "").strip()
     ingest_port = int(config.get("sih_ingest_port") or DEFAULT_INGEST_PORT)
+    scraper_url = (config.get("sih_scraper_url") or "").strip()
+    scraper_secret = (config.get("sih_scraper_secret") or "").strip() or secret
 
     if secret:
         app = create_ingest_app(client, store, group_id, secret, threshold)
@@ -365,14 +372,8 @@ def register(client: "NewClient", config: dict) -> Callable:
     else:
         log.warning(
             "SIH ingest webhook disabled: set SIH_INGEST_SECRET "
-            "(and expose SIH_INGEST_PORT) so GitHub Actions can POST counts."
+            "(and expose SIH_INGEST_PORT) so the India scraper can POST counts."
         )
-
-    if poll_seconds > 0 and getattr(client, "_pbbot_sih_poller_started", False) is not True:
-        client._pbbot_sih_poller_started = True
-        _start_poller(client, store, group_id, urls, threshold, poll_seconds)
-    else:
-        log.info("SIH in-process poller off (SIH_POLL_SECONDS=%s). Using GitHub Actions ingest.", poll_seconds)
 
     def on_message(client: "NewClient", message) -> None:
         if not message.Info or not message.Info.MessageSource:
@@ -403,14 +404,23 @@ def register(client: "NewClient", config: dict) -> Callable:
                 client.send_message(chat, _format_hot(rows, threshold))
                 return
             if args.lower() == "refresh":
-                result = poll_once(store, client, group_id, urls, threshold)
-                client.send_message(
-                    chat,
-                    "SIH refresh complete: "
-                    f"{result['total']} PS, "
-                    f"{result['over_threshold']} over {threshold}, "
-                    f"{result['alerts_sent']} new alert(s).",
-                )
+                if not scraper_url or not scraper_secret:
+                    client.send_message(
+                        chat,
+                        "SIH refresh is not configured. Set SIH_SCRAPER_URL and SIH_SCRAPER_SECRET.",
+                    )
+                    return
+                result = trigger_remote_scrape(scraper_url, scraper_secret)
+                scraped = result.get("scraped")
+                ingest = result.get("ingest") if isinstance(result.get("ingest"), dict) else {}
+                alerts = ingest.get("alerts_sent")
+                extra = ""
+                if scraped is not None:
+                    extra = f" Scraped {scraped} PS"
+                    if alerts is not None:
+                        extra += f", {alerts} new alert(s)"
+                    extra += "."
+                client.send_message(chat, "SIH refresh complete." + extra)
                 return
             lower_args = args.lower()
             if lower_args.startswith("add dsce"):
@@ -478,7 +488,6 @@ def register(client: "NewClient", config: dict) -> Callable:
                 lines.extend(_format_ps_line(row) for row in shown)
                 client.send_message(chat, "\n".join(lines))
                 return
-
             if args.lower().startswith("top"):
                 _, _, rest = args.partition(" ")
                 try:

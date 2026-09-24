@@ -77,10 +77,10 @@ def _build_config() -> dict:
             or None
         ),
         "sih_threshold": int(os.getenv("SIH_THRESHOLD", "300")),
-        "sih_poll_seconds": int(os.getenv("SIH_POLL_SECONDS", "0")),
-        "sih_ps_url": os.getenv("SIH_PS_URL", "https://sih.gov.in/sih2026PS").strip(),
         "sih_ingest_secret": os.getenv("SIH_INGEST_SECRET", "").strip(),
         "sih_ingest_port": int(os.getenv("SIH_INGEST_PORT", "8083")),
+        "sih_scraper_url": os.getenv("SIH_SCRAPER_URL", "").strip(),
+        "sih_scraper_secret": os.getenv("SIH_SCRAPER_SECRET", "").strip(),
         "fellowship_alert_secret": os.getenv("FELLOWSHIP_ALERT_SECRET", "").strip(),
         "fellowship_alert_port": int(os.getenv("FELLOWSHIP_ALERT_PORT", "8082")),
         "subgroup_blocked_users": _parse_group_ids("SUBGROUP_BLOCKED_USERS"),
