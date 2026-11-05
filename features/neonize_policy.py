@@ -22,6 +22,9 @@ DESTINATION_METHODS = frozenset({
     "revoke_message", "set_disappearing_timer", "set_group_announce",
     "set_group_locked", "set_group_name", "set_group_photo", "set_group_topic",
     "update_group_participants", "leave_group", "link_group", "unlink_group",
+    # Not exposed to the planner, but guarded in case code ever calls them.
+    "send_spr_group", "set_group_join_approval_mode", "set_group_member_add_mode",
+    "update_group_request_participants", "request_history_sync",
 })
 
 
@@ -320,7 +323,8 @@ _EXCLUDED_GROUPS = {
     "session and transport operations": (
         "PairPhone", "connect", "connect_with_proxy", "disconnect", "logout",
         "stop", "set_passive", "set_proxy_address", "set_force_activate_delivery_receipts",
-        "send_app_state", "generate_message_id",
+        "send_app_state", "generate_message_id", "fetch_app_state",
+        "request_app_state_recovery", "request_history_sync", "send_peer_message",
     ),
     "unsupported or untrusted media/protocol primitives": (
         "build_album_content", "build_audio_message", "build_poll_vote", "build_reply_message",
@@ -337,13 +341,15 @@ _EXCLUDED_GROUPS = {
         "newsletter_toggle_mute", "unfollow_newsletter", "upload_newsletter",
     ),
     "global account/privacy surface requires a separate explicit admin subsystem": (
-        "get_privacy_settings", "get_status_privacy",
+        "get_privacy_settings", "get_status_privacy", "get_business_profile", "reject_call",
         "resolve_business_message_link", "resolve_contact_qr_link", "set_default_disappearing_timer",
         "set_privacy_setting",
         "subscribe_presence", "mark_read",
     ),
     "cross-group or protocol-link operations require explicit entity lifecycle design": (
         "get_group_info_from_invite", "join_group_with_invite",
+        "send_spr_group", "set_group_join_approval_mode", "set_group_member_add_mode",
+        "update_group_request_participants",
     ),
 }
 

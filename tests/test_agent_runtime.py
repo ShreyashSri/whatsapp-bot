@@ -124,6 +124,51 @@ def test_readiness_marker_tracks_whatsapp_connection(tmp_path):
     assert not marker.exists()
 
 
+def test_liveness_heartbeat_tolerates_brief_disconnects_but_not_outages(tmp_path):
+    from bot import _ConnectionState, _touch_heartbeat
+
+    now = [0.0]
+    state = _ConnectionState(clock=lambda: now[0])
+    heartbeat = tmp_path / "pbbot-alive"
+
+    # Booting counts as disconnected, but is inside the grace window.
+    assert _touch_heartbeat(heartbeat, state, grace=180)
+    assert heartbeat.exists()
+
+    state.set_connected(True)
+    now[0] = 1000.0
+    assert state.down_for() == 0.0
+    assert _touch_heartbeat(heartbeat, state, grace=180)
+
+    # A routine reconnect (seconds) keeps the heartbeat alive.
+    state.set_connected(False)
+    now[0] += 2.3
+    assert _touch_heartbeat(heartbeat, state, grace=180)
+
+    # Reconnecting resets the outage clock.
+    state.set_connected(True)
+    state.set_connected(False)
+    now[0] += 179
+    assert _touch_heartbeat(heartbeat, state, grace=180)
+
+    # A sustained outage (e.g. a 405 that reconnecting cannot fix) withholds it.
+    now[0] += 2
+    assert not _touch_heartbeat(heartbeat, state, grace=180)
+
+
+def test_repeated_disconnect_events_do_not_restart_the_outage_clock():
+    from bot import _ConnectionState
+
+    now = [0.0]
+    state = _ConnectionState(clock=lambda: now[0])
+    state.set_connected(True)
+    state.set_connected(False)
+    now[0] += 100
+    state.set_connected(False)
+    now[0] += 50
+    assert state.down_for() == 150
+
+
 def test_tool_registry_has_no_schema_or_policy_drift():
     assert validate_registry() == []
 

@@ -20,7 +20,16 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from neonize.client import NewClient
-from neonize.events import ConnectedEv, DisconnectedEv, MessageEv, PairStatusEv
+from neonize.events import (
+    ClientOutdatedEv,
+    ConnectedEv,
+    ConnectFailureEv,
+    DisconnectedEv,
+    LoggedOutEv,
+    MessageEv,
+    PairStatusEv,
+    TemporaryBanEv,
+)
 from sqlalchemy.exc import OperationalError
 
 from db.database import create_database
@@ -223,6 +232,69 @@ def _set_readiness(path: Path, ready: bool) -> None:
         log.exception("Could not update readiness marker %s", path)
 
 
+class _ConnectionState:
+    """Track WhatsApp connectivity for the schedulers and liveness heartbeat."""
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._connected = False
+        self._down_since = clock()
+
+    @property
+    def connected(self) -> bool:
+        with self._lock:
+            return self._connected
+
+    def set_connected(self, connected: bool) -> None:
+        with self._lock:
+            if connected == self._connected:
+                return
+            self._connected = connected
+            if not connected:
+                self._down_since = self._clock()
+
+    def down_for(self) -> float:
+        """Seconds since the connection was last lost (0 while connected)."""
+        with self._lock:
+            return 0.0 if self._connected else self._clock() - self._down_since
+
+
+def _touch_heartbeat(path: Path, state: _ConnectionState, grace: float) -> bool:
+    """Refresh the liveness heartbeat unless WhatsApp has been down past ``grace``.
+
+    Short reconnects are routine (WhatsApp drops the socket with a 503 and the
+    client recovers within seconds), so only a sustained outage stops the
+    heartbeat and lets the kubelet restart the container.
+    """
+    if state.down_for() >= grace:
+        return False
+    try:
+        path.touch()
+    except OSError:
+        log.exception("Could not update liveness heartbeat %s", path)
+    return True
+
+
+def _run_liveness_heartbeat(
+    path: Path,
+    state: _ConnectionState,
+    grace: float,
+    *,
+    interval: float = 15.0,
+    sleep=time.sleep,
+) -> None:
+    while True:
+        if not _touch_heartbeat(path, state, grace):
+            log.error(
+                "WhatsApp disconnected for %.0fs (grace %.0fs); withholding the "
+                "liveness heartbeat so the container is restarted",
+                state.down_for(),
+                grace,
+            )
+        sleep(interval)
+
+
 def _claim_dispatchable_message(
     session_factory, message, message_id: str, actor_jid, chat_jid: str,
 ) -> bool | None:
@@ -249,6 +321,20 @@ sys.excepthook = _excepthook
 
 def main() -> None:
     """Initialise all runtime dependencies and connect Neonize."""
+    # Started before anything can block (database retries, connect) so the
+    # container liveness probe also covers startup.
+    connection = _ConnectionState()
+    try:
+        reconnect_grace = float(os.getenv("PBBOT_RECONNECT_GRACE_SECONDS", "180"))
+    except ValueError:
+        reconnect_grace = 180.0
+    threading.Thread(
+        target=_run_liveness_heartbeat,
+        args=(Path("/tmp/pbbot-alive"), connection, reconnect_grace),
+        name="LivenessHeartbeat",
+        daemon=True,
+    ).start()
+
     database = create_database(config["database_url"])
     _initialize_database_with_retry(database, data_dir=Path.cwd())
     readiness_path = Path("/tmp/pbbot-ready")
@@ -309,6 +395,15 @@ def main() -> None:
 
             store = ReminderStore(session_factory)
             while True:
+                if not connection.connected:
+                    # Sending now would only record a failed delivery for
+                    # every eligible assignment; retry once reconnected.
+                    log.warning(
+                        "⏰ Skipping reminders check: WhatsApp disconnected for %.0fs",
+                        connection.down_for(),
+                    )
+                    time.sleep(60)
+                    continue
                 try:
                     system_user = current_user(session_factory, "system@s.whatsapp.net")
                     if system_user:
@@ -405,6 +500,7 @@ def main() -> None:
     @client.event(ConnectedEv)
     def on_connected(_client: NewClient, _event: ConnectedEv):
         log.info("✅ Bot connected to WhatsApp — all features active")
+        connection.set_connected(True)
         _set_readiness(readiness_path, True)
         try:
             from neonize.utils import Jid2String
@@ -417,8 +513,19 @@ def main() -> None:
 
     @client.event(DisconnectedEv)
     def on_disconnected(_client: NewClient, event: DisconnectedEv):
+        connection.set_connected(False)
         _set_readiness(readiness_path, False)
         log.warning("WhatsApp connection lost: %s", event)
+
+    def on_connection_failure(_client: NewClient, event):
+        # Reconnecting cannot fix these (outdated client version, logged-out
+        # or banned session); say so loudly instead of leaving a silent outage.
+        connection.set_connected(False)
+        _set_readiness(readiness_path, False)
+        log.error("WhatsApp connection failure (%s): %s", type(event).__name__, event)
+
+    for failure_event in (ClientOutdatedEv, ConnectFailureEv, LoggedOutEv, TemporaryBanEv):
+        client.event(failure_event)(on_connection_failure)
 
     def _reconcile_lid_assignments(client: NewClient, session_factory) -> None:
         """Resolve LID-based assignments to phone JIDs using the live client.

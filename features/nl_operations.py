@@ -682,7 +682,7 @@ def execute_whatsapp_message_primitive(client, message, intent: dict, factory) -
         selectable = int(arguments.get("selectable_count") or 1)
         if selectable < 1 or selectable > len(options):
             raise ValueError("selectable_count must fit the option list")
-        from neonize.utils import VoteType
+        from neonize.utils.enum import VoteType
         poll = client.build_poll_vote_creation(
             question,
             options,

@@ -1,4 +1,4 @@
-neonize
+neonize==0.10.0
 python-dotenv
 playwright
 httpx
