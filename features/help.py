@@ -229,6 +229,11 @@ MODULE_HELP = {
         "• `!audit`\n"
         "• `!audit update` _(filter by operation)_"
     ),
+    "registration": (
+        "*📊 Registration Stats*\n\n"
+        "`!registration-stats` — show total registrations, registrations from the last 24 hours, "
+        "and the breakdown by student year."
+    ),
         "sih": SIH_MODULE_HELP,
 }
 
@@ -256,6 +261,7 @@ GLOBAL_HELP = (
     "• `!help labels` — Group people and assign work by label\n"
     "• `!help schema` — Event field definitions and validation\n"
     "• `!help reports` — Progress tables and audit log\n"
+    "• `!help registration` — Recruitment registration statistics\n"
     "• `!help reminders` — Scheduled reminders\n"
     "• `!help incidents` — Incident alerts\n\n"
     "Type `!help <module>` for detailed commands."
@@ -304,6 +310,7 @@ def register(client: "NewClient", config: dict) -> callable:
                     "add-task": "work", "complete-task": "work", "update-task": "work", "delete-task": "work",
                     "update-edit": "work", "schema": "schema", "labels": "labels", "label": "labels",
                     "report": "reports", "reports": "reports", "audit": "reports",
+                    "registration-stats": "registration", "reg-stats": "registration",
                     "reminders": "reminders", "reminder-config": "reminders",
                     "reminder-run": "reminders", "reminder-history": "reminders",
                     "sih": "sih",
