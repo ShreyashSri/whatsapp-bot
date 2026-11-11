@@ -3,6 +3,7 @@ FROM python:3.12-slim-bookworm
 # System dependencies for Playwright's Chromium
 RUN apt-get update && apt-get install -y --no-install-recommends \
     dumb-init \
+    libatomic1 \
     fonts-liberation \
     fonts-noto-color-emoji \
     libmagic1 \
