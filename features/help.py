@@ -231,10 +231,11 @@ MODULE_HELP = {
     ),
     "registration": (
         "*📊 Registration Stats*\n\n"
-        "`!registration-stats` — show total registrations, registrations from the last 24 hours, "
-        "and the breakdown by student year."
+        "• `!registration-stats` _(alias: `!reg-stats`)_ — total registrations, registrations "
+        "from the last 24 hours, and the breakdown by student year\n\n"
+        "_Members only. Send it as a message in a group._"
     ),
-        "sih": SIH_MODULE_HELP,
+    "sih": SIH_MODULE_HELP,
 }
 
 # Work is the single documented workflow for event/task assignment and progress.
@@ -261,11 +262,11 @@ GLOBAL_HELP = (
     "• `!help labels` — Group people and assign work by label\n"
     "• `!help schema` — Event field definitions and validation\n"
     "• `!help reports` — Progress tables and audit log\n"
-    "• `!help registration` — Recruitment registration statistics\n"
+    "• `!help registration` — Recruitment registration stats (`!reg-stats`)\n"
     "• `!help reminders` — Scheduled reminders\n"
-    "• `!help incidents` — Incident alerts\n\n"
+    "• `!help incidents` — Incident alerts\n"
+    "• `!help sih` — SIH 2026 submission watcher\n\n"
     "Type `!help <module>` for detailed commands."
-    "• `!help sih` — SIH 2026 submission watcher\n"
 )
 
 def register(client: "NewClient", config: dict) -> callable:
